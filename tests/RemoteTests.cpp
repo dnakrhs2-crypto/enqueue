@@ -783,7 +783,14 @@ public:
         service.setEnabled (true);
         expect (service.isEnabled()); expect (service.getPort() > 0); noNetwork();
         const auto key = service.key(); const int port = service.getPort();
+        const auto& routerLabel = RemoteTestAccess::noNetwork (panel);
+        expectWithinAbsoluteError (routerLabel.getFont().getHeight(), 20.0f, 0.01f);
+        expect (routerLabel.getFont().isBold());
+        expect (juce::GlyphArrangement::getStringWidthInt (routerLabel.getFont(), routerLabel.getText())
+                <= routerLabel.getWidth() - routerLabel.getBorderSize().getLeftAndRight());
         reviewImage (panel, "portrait-no-router");
+        reviewImage (panel, "portrait-no-router-125", 1.25f);
+        reviewImage (panel, "portrait-no-router-150", 1.5f);
         candidates = { { "ethernet", ko ("이더넷").toStdString(), "192.168.0.12", true } };
         service.refreshNetworks();
         expect (! RemoteTestAccess::noNetwork (panel).isVisible());

@@ -54,6 +54,10 @@ public:
     juce::String getLastRunVersion() const;
     void setLastRunVersion (const juce::String& version);
 
+    /** The mobile remote introduction is shown once on this PC, independently of app updates. */
+    bool getMobileRemoteNoticeShown() const;
+    void setMobileRemoteNoticeShown (bool shown);
+
     /** Layout: the inspector's share of the height below the transport, the active-cues panel's share of the
         width, and whether each is folded away. */
     double getInspectorFraction() const;

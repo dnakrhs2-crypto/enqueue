@@ -1,6 +1,7 @@
 #include "app/AppSettings.h"
 #include "app/AppVersion.h"
 #include "app/ShortcutCatalog.h"
+#include "app/StartupAnnouncement.h"
 #include "app/UiScale.h"
 #include "app/Updater.h"
 #include "audio/AudioEngine.h"
@@ -86,17 +87,6 @@ public:
 
         commandManager->registerAllCommandsForTarget (this);
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *settings, *commandManager);
-        announceVersionChange();
-
-        if (deviceError.isNotEmpty())
-        {
-            juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                              .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                              .withTitle (ko ("오디오 장치를 열지 못했습니다"))
-                                              .withMessage (deviceError + "\n\n" + ko ("메뉴 [설정 > 오디오 출력 설정]에서 장치를 선택하세요."))
-                                              .withButton (ko ("확인")),
-                                          [] (int) {});
-        }
 
         const bool deviceFallback = savedOutputName.isNotEmpty() && savedOutputName != openedOutputName;
         mainWindow->getMainComponent().setAutoStartOnOpenAllowed (! safeMode && ! deviceFallback);   // a quiet launch: nothing starts by itself
@@ -119,13 +109,34 @@ public:
         mainWindow->getMainComponent().reopenLastProjectOnStartup (openedFromCommandLine, reopenedAfterUpdate, safeMode);
         mainWindow->getMainComponent().startRemoteOnStartup (safeMode);
 
-        if (safeMode)
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),
-                                                    ko ("Shift를 누른 채 실행해 안전 모드로 시작했습니다. 저장된 오디오 장치와 플러그인을 불러오지 않았습니다.\n메뉴 [설정 > 오디오 출력 설정]에서 장치를 고르세요."), ko ("확인"));
-        else if (deviceFallback)
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("저장된 오디오 장치를 열지 못했습니다"),
-                                                    ko ("저장된 출력 장치: ") + savedOutputName + "\n" + ko ("지금 열린 장치: ") + (openedOutputName.isNotEmpty() ? openedOutputName : ko ("없음"))
-                                                        + "\n\n" + ko ("공연 전에 [설정 > 오디오 출력 설정]에서 장치를 확인하세요."), ko ("확인"));
+        // Finish the existing device/safe-mode notices before the single version/feature notice.
+        const auto afterDeviceError = [isSafeMode = safeMode, deviceFallback, savedOutputName, openedOutputName] (int)
+        {
+            const auto announce = [] (int)
+            {
+                if (auto* app = dynamic_cast<GoCueApplication*> (juce::JUCEApplication::getInstance()))
+                    app->announceVersionChange();
+            };
+            if (isSafeMode)
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, ko ("안전 모드"),
+                    ko ("Shift를 누른 채 실행해 안전 모드로 시작했습니다. 저장된 오디오 장치와 플러그인을 불러오지 않았습니다.\n메뉴 [설정 > 오디오 출력 설정]에서 장치를 고르세요."), ko ("확인"),
+                    nullptr, juce::ModalCallbackFunction::create (announce));
+            else if (deviceFallback)
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("저장된 오디오 장치를 열지 못했습니다"),
+                    ko ("저장된 출력 장치: ") + savedOutputName + "\n" + ko ("지금 열린 장치: ") + (openedOutputName.isNotEmpty() ? openedOutputName : ko ("없음"))
+                        + "\n\n" + ko ("공연 전에 [설정 > 오디오 출력 설정]에서 장치를 확인하세요."), ko ("확인"),
+                    nullptr, juce::ModalCallbackFunction::create (announce));
+            else
+                announce (0);
+        };
+        if (deviceError.isNotEmpty())
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                .withIconType (juce::MessageBoxIconType::WarningIcon)
+                .withTitle (ko ("오디오 장치를 열지 못했습니다"))
+                .withMessage (deviceError + "\n\n" + ko ("메뉴 [설정 > 오디오 출력 설정]에서 장치를 선택하세요."))
+                .withButton (ko ("확인")), afterDeviceError);
+        else
+            afterDeviceError (0);
 
         Updater::Callbacks updaterCallbacks;
         updaterCallbacks.canShutdown = [this]
@@ -150,24 +161,19 @@ public:
         startTimer (30 * 1000);   // update checks at idle moments only (see timerCallback)
     }
 
-    /** First run of a new version: say so (the silent auto-update shows nothing else). A fresh install stays quiet. */
+    /** Combine the one-time mobile introduction with the existing update announcement. */
     void announceVersionChange()
     {
+        if (settings == nullptr) return;
         const auto previous = settings->getLastRunVersion();
         const auto current = getApplicationVersion();
-
-        if (previous == current)
-            return;
-
-        settings->setLastRunVersion (current);
-
-        if (previous.isEmpty())
-            return;
+        const auto notice = startupAnnouncement (previous, current, settings->getMobileRemoteNoticeShown());
+        if (previous != current) settings->setLastRunVersion (current);
+        if (! notice) return;
 
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
-                                                ko ("업데이트 완료"),
-                                                ko ("앤큐가 ") + previous + " → " + current + ko ("(으)로 업데이트되었습니다.\n바뀐 점은 도움말 > 사용 설명서와 GitHub 릴리스 노트에 있습니다."),
-                                                ko ("확인"));
+                                               notice->title, notice->message, ko ("확인"));
+        if (notice->includesMobileRemoteNotice) settings->setMobileRemoteNoticeShown (true);
     }
 
     void shutdown() override

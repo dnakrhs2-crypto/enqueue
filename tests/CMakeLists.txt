@@ -16,6 +16,8 @@ endif()
 target_sources(EnqueueTests PRIVATE
     TestMain.cpp
     AppVersionTests.cpp
+    StartupAnnouncementTests.cpp
+    ManualWindowTests.cpp
     AutoLevelTests.cpp
     AutoLevelRenderTests.cpp
     AutoLevelIntegrationTests.cpp

@@ -14,6 +14,7 @@ public:
     Content()
     {
         tabs.setTabBarDepth (Palette::tabBarHeight);
+        tabs.getTabbedButtonBar().setMinimumTabScaleFactor (1.0); // use the existing overflow menu instead of clipping tab names
         tabs.setOutline (0);
         tabs.setColour (juce::TabbedComponent::backgroundColourId, Palette::panel);
 
@@ -61,8 +62,8 @@ private:
 };
 
 //==============================================================================
-ManualWindow::ManualWindow()
-    : DocumentWindow (ko ("앤큐 사용 설명서"), Palette::background, DocumentWindow::allButtons)
+ManualWindow::ManualWindow (bool addToDesktop)
+    : DocumentWindow (ko ("앤큐 사용 설명서"), Palette::background, DocumentWindow::allButtons, addToDesktop)
 {
     ShortcutRouter::setWindowScope (*this, ShortcutKeyContext::Window::auxiliary);
     setUsingNativeTitleBar (true);
@@ -400,6 +401,17 @@ R"(유튜브 다운로드 (메뉴 유튜브다운 > 유튜브 다운로드...)
   · 도구(yt-dlp, QuickJS, LAME)는 앤큐와 함께 설치되고, 작업용 복사본은 사용자 폴더(AppData\Local\Enqueue\tools)에 둡니다. 유튜브 쪽이 바뀌어 다운로드가 안 되면 yt-dlp가 스스로 최신으로 갱신(한 시간에 한 번)하고 한 번 더 시도합니다. 그래도 안 되면 잠시 뒤 다시 해 보세요.
   · 백신이 yt-dlp.exe를 격리하면 다운로드가 되지 않습니다. 그때는 백신에서 복원(예외 등록)해 주세요.
   · 인터넷 연결이 필요합니다.)" },
+
+        { "모바일 연동",
+R"(모바일 연동
+
+  · 휴대폰·태블릿 브라우저로 앤큐를 조작합니다. 앱 설치는 필요 없습니다.
+  · 메뉴 [모바일 연동 > 웹리모트 켜기]로 켜고, [QR 코드·주소 보기]의 QR을 휴대폰 카메라로 찍으면 연결됩니다. 주소를 브라우저에 직접 입력해도 됩니다.
+  · PC와 휴대폰이 같은 공유기(와이파이)에 연결되어 있어야 합니다. 공유기가 없으면 사용할 수 없습니다. 손님용 와이파이처럼 기기끼리 연결을 막는 곳에서는 연결되지 않습니다.
+  · 처음 켤 때 Windows 방화벽 창이 뜨면 [허용]을 누르세요.
+  · 공유기나 네트워크가 바뀌면 주소가 바뀌니 QR을 다시 찍으세요. [QR 새로 만들기]를 누르면 연결된 기기가 모두 끊기고 예전 QR로는 들어올 수 없습니다.
+  · 휴대폰에서 할 수 있는 것: GO, 일시정지, 페이드아웃, 전체 페이드 정지(두 번 누르면 즉시 정지), 재생 중인 큐의 일시정지·정지, 탭 바꾸기, 카트 실행, 큐를 눌러 다음 큐로 지정, 편집 모드에서 손잡이를 끌어 큐 순서 바꾸기, 쇼 모드·편집 모드 전환.
+  · 휴대폰 화면이 꺼졌다 켜지면 연결을 확인하는 동안 잠깐 버튼이 잠깁니다. 공연 중에는 휴대폰 자동 잠금을 늘리거나 끄세요.)" },
 
         { "기본 단축키",
 R"(기본 단축키

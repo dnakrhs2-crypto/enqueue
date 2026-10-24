@@ -11,7 +11,7 @@ namespace gocue
 class ManualWindow : public juce::DocumentWindow
 {
 public:
-    ManualWindow();
+    explicit ManualWindow (bool addToDesktop = true);
     ~ManualWindow() override;
 
     /** Brings the window up (restores it if it was closed) and shows the tab at 'sectionIndex' (-1 keeps the current tab). */

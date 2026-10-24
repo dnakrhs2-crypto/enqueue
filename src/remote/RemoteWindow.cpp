@@ -17,7 +17,7 @@ Panel::Panel (Service& s, std::function<void()> newKey, std::function<void()> on
     };
     label (modeLabel, "웹리모트"); label (addressLabel, "주소"); label (networkLabel, "네트워크"); label (devicesLabel, "연결된 기기 0");
     noNetworkLabel.setText (ko ("공유기가 필요합니다"), juce::dontSendNotification);
-    noNetworkLabel.setFont (Palette::font());
+    noNetworkLabel.setFont (Palette::font (20.0f, true));
     noNetworkLabel.setColour (juce::Label::textColourId, Palette::background);
     noNetworkLabel.setJustificationType (juce::Justification::centred);
     addChildComponent (noNetworkLabel);

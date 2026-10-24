@@ -16,6 +16,7 @@ namespace Keys
     constexpr const char* windowState       = "windowState";
     constexpr const char* activeCuesWindowState = "activeCuesWindowState";
     constexpr const char* lastRunVersion    = "lastRunVersion";
+    constexpr const char* mobileRemoteNoticeShown = "mobileRemoteNoticeShown";
     constexpr const char* inspectorFraction = "inspectorFraction";
     constexpr const char* inspectorFolded   = "inspectorCollapsed";
     constexpr const char* activeCuesFraction = "activeCuesFraction";
@@ -293,6 +294,17 @@ juce::String AppSettings::getLastRunVersion() const
 void AppSettings::setLastRunVersion (const juce::String& version)
 {
     settings->setValue (Keys::lastRunVersion, version);
+}
+
+bool AppSettings::getMobileRemoteNoticeShown() const
+{
+    return settings->getBoolValue (Keys::mobileRemoteNoticeShown, false);
+}
+
+void AppSettings::setMobileRemoteNoticeShown (bool shown)
+{
+    settings->setValue (Keys::mobileRemoteNoticeShown, shown);
+    saveNow();
 }
 
 int AppSettings::getLufsAverageSeconds() const
