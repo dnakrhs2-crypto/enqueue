@@ -39,6 +39,8 @@
   let fingerScrollUntil = 0;
   let frameId = 0;
   let previousFrame = 0;
+  let clockSamples = [];
+  let clockOffset = null;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -71,11 +73,35 @@
     return socket?.readyState === WebSocket.OPEN && gotHello && gotState && !probe && !suspended && !terminal;
   }
 
+  function updateClockOffset(at) {
+    clockSamples = clockSamples.filter(sample => at - sample.at <= 20000);
+    if (clockSamples.length) clockOffset = Math.max(...clockSamples.map(sample => sample.offset));
+    // Keep the last estimate if no sample remains in the window.
+  }
+
+  function observeClock(serverNow, at) {
+    if (!Number.isFinite(serverNow)) return;
+    clockSamples.push({ at, offset: serverNow - at });
+    updateClockOffset(at);
+  }
+
+  function needsTimestamp(t, data) {
+    return t === "go" ? data.down === true
+      : t === "cmd" ? data.cmd === "pause" || data.cmd === "fade"
+      : ["cue", "wait", "fire", "stopcue", "tab", "playhead", "move", "mode"].includes(t);
+  }
+
   // Handshake, ping and GO release may pass the UI lock. No requests are queued or retried.
   function send(t, data = {}, throughLock = false) {
+    const at = performance.now(); // Called synchronously by the gesture that commits this operation.
     if (socket?.readyState !== WebSocket.OPEN || terminal || (!throughLock && !ready())) return null;
     const id = ++requestId;
-    socket.send(JSON.stringify({ t, id, ...data }));
+    const message = { t, id, ...data };
+    if (needsTimestamp(t, data)) {
+      updateClockOffset(at);
+      if (clockOffset !== null) message.st = Math.round(at + clockOffset);
+    }
+    socket.send(JSON.stringify(message));
     return id;
   }
 
@@ -152,6 +178,8 @@
     requestId = 0;
     gotHello = false;
     gotState = false;
+    clockSamples = [];
+    clockOffset = null;
     lastMessage = performance.now();
     const key = new URLSearchParams(location.hash.slice(1)).get("k") || "";
     const current = new WebSocket(`ws://${location.host}/ws?k=${encodeURIComponent(key)}`);
@@ -164,6 +192,7 @@
       try { message = JSON.parse(event.data); } catch { return; }
       switch (message.t) {
         case "hello":
+          observeClock(message.now, lastMessage);
           gotHello = true;
           setText($("pc-name"), message.pc);
           setText($("project-name"), message.project ? ` · ${message.project}` : "");
@@ -174,6 +203,7 @@
           receiveLists(message);
           break;
         case "state":
+          observeClock(message.now, lastMessage);
           state = message;
           stateAt = performance.now();
           gotState = true;
@@ -312,7 +342,9 @@
     if (index < 0 || (cues[index].parent ?? null) !== pending.parent) return false;
     let after = index + 1;
     while (after < cues.length && cues[after].depth > cues[index].depth) after++;
-    return (cues[after]?.id ?? null) === pending.before;
+    if (pending.before !== null) return cues[after]?.id === pending.before;
+    // At the parent's end, the next visible row is outside that parent's children.
+    return after === cues.length || cues[after].depth < cues[index].depth;
   }
 
   function receiveLists(message) {
@@ -666,32 +698,52 @@
     syncAnimation();
   }
 
+  function setDropTarget(target, groupNode = null, offset = 0) {
+    drag.target = target;
+    if (drag.groupNode !== groupNode) {
+      drag.groupNode?.classList.remove("drop-group");
+      drag.groupNode = groupNode;
+      groupNode?.classList.add("drop-group");
+    }
+    $("drop-line").hidden = !target || Boolean(groupNode);
+    if (target && !groupNode) $("drop-line").style.top = `${Math.max(0, offset - 1)}px`;
+  }
+
   function calculateDrop() {
     if (!drag) return;
     const bounds = listScroll.getBoundingClientRect();
-    drag.target = null;
-    $("drop-line").hidden = true;
-    if (drag.x < bounds.left || drag.x > bounds.right || drag.y < bounds.top - 24 || drag.y > bounds.bottom + 24) return;
+    if (drag.x < bounds.left || drag.x > bounds.right || drag.y < bounds.top - 24 || drag.y > bounds.bottom + 24) {
+      setDropTarget(null);
+      return;
+    }
     const cues = lists.cues[drag.tab];
     let below = null;
     for (const cue of cues) {
-      const rect = rowViews.get(cue.id).node.getBoundingClientRect();
+      const node = rowViews.get(cue.id).node;
+      const rect = node.getBoundingClientRect();
+      // PC CueTable::groupAtY: the middle half appends to the group, edges insert between rows.
+      if (cue.kind === "group" && drag.y >= rect.top + rect.height / 4 && drag.y < rect.bottom - rect.height / 4) {
+        if (drag.descendants.has(cue.id)) setDropTarget(null);
+        else setDropTarget({ before: null, parent: cue.id }, node);
+        return;
+      }
       if (drag.y < rect.top + rect.height / 2) { below = cue; break; }
     }
-    if (below && (drag.descendants.has(below.id) || drag.descendants.has(below.parent))) return;
-    drag.target = { before: below?.id ?? null, parent: below?.parent ?? null };
+    if (below && (drag.descendants.has(below.id) || drag.descendants.has(below.parent))) {
+      setDropTarget(null);
+      return;
+    }
     const offset = below ? rowViews.get(below.id).node.offsetTop : (cues.length ? rowViews.get(cues[cues.length - 1].id).node.offsetTop + 52 : 0);
-    $("drop-line").style.top = `${Math.max(0, offset - 1)}px`;
-    $("drop-line").hidden = false;
+    setDropTarget({ before: below?.id ?? null, parent: below?.parent ?? null }, null, offset);
   }
 
   function cancelDrag() {
     if (!drag) return;
+    setDropTarget(null);
     const previous = drag;
     drag = null;
     previous.ghost.remove();
     previous.node.classList.remove("drag-source");
-    $("drop-line").hidden = true;
     if (previous.handle.hasPointerCapture(previous.pointer)) previous.handle.releasePointerCapture(previous.pointer);
     syncAnimation();
   }

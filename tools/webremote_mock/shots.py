@@ -67,7 +67,7 @@ def row(page, cue_id):
     return page.locator(f'#cue-list .cue-row[data-cue="{cue_id}"]')
 
 
-def start_drag(page, cue_id="c2", before="c11"):
+def start_drag(page, cue_id="c2", before="c11", *, into_group=False):
     page.locator("#list-scroll").evaluate("el => { el.scrollTop = 0; }")
     handle = row(page, cue_id).locator(".drag-handle")
     handle.scroll_into_view_if_needed()
@@ -75,9 +75,13 @@ def start_drag(page, cue_id="c2", before="c11"):
     target = row(page, before).bounding_box()
     page.mouse.move(box["x"] + 24, box["y"] + 24)
     page.mouse.down()
-    page.mouse.move(box["x"] + 24, target["y"] + 8, steps=6)
+    page.mouse.move(box["x"] + 24, target["y"] + (target["height"] / 2 if into_group else 8), steps=6)
     try:
-        expect(page.locator("#drop-line")).to_be_visible()
+        if into_group:
+            expect(row(page, before)).to_have_class(re.compile("drop-group"))
+            expect(page.locator("#drop-line")).to_be_hidden()
+        else:
+            expect(page.locator("#drop-line")).to_be_visible()
     except AssertionError:
         (HERE / "shots").mkdir(exist_ok=True)
         page.screenshot(path=str(HERE / "shots" / "drag-failure.png"))
@@ -114,6 +118,10 @@ def capture(browser, base, output):
         shot("edit")
         start_drag(page)
         shot("dragging")
+        page.mouse.up()
+        expect(row(page, "c2")).not_to_have_class(re.compile("pending-move"))
+        start_drag(page, before="g1", into_group=True)
+        shot("dragging-group")
         page.mouse.up()
         expect(row(page, "c2")).not_to_have_class(re.compile("pending-move"))
         # Restore the reference order before the other screenshots.

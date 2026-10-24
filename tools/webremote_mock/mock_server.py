@@ -25,6 +25,19 @@ WEB_ROOT = Path(__file__).resolve().parents[2] / "src" / "remote" / "web"
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
+def now_ms():
+    return time.monotonic_ns() // 1_000_000
+
+
+def needs_timestamp(message):
+    kind = message.get("t")
+    if kind == "go":
+        return message.get("down") is True
+    if kind == "cmd":
+        return message.get("cmd") in ("pause", "fade")
+    return kind in ("cue", "wait", "fire", "stopcue", "tab", "playhead", "move", "mode")
+
+
 def cue(cue_id, no, name, length, *, kind="audio", depth=0, parent=None, slot=None):
     return dict(id=cue_id, no=no, name=name, kind=kind, depth=depth, parent=parent,
                 len=length, armed=True, color="", slot=slot)
@@ -135,7 +148,7 @@ class Model:
         self.seq += 1
         next_cue = self.find(self.playhead.get(self.active))
         fields = ("id", "no", "name", "remain", "elapsed", "dur", "progress", "st", "order")
-        return dict(t="state", seq=self.seq, mode=self.mode,
+        return dict(t="state", seq=self.seq, mode=self.mode, now=now_ms(),
                     next={key: next_cue[key] for key in ("id", "no", "name", "len")} if next_cue else None,
                     playing=[{key: item[key] for key in fields} for item in self.playing], waits=self.waits,
                     counts=dict(playing=len(self.playing),
@@ -194,6 +207,9 @@ class Model:
 
     def request(self, message, client):
         """Returns (error text or None, whether the structural snapshot changed)."""
+        stamp = message.get("st")
+        if needs_timestamp(message) and isinstance(stamp, (int, float)) and now_ms() - stamp > 1500:
+            return "늦게 도착해 취소됨", False
         kind = message.get("t")
         changed = False
         if kind == "hi":
@@ -496,7 +512,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self.server.clients.add(client)
                 if time.monotonic() >= self.server.silent_until:
-                    client.send(dict(t="hello", proto=1, server="mock-studio-a", pc=model.pc, project=model.project, app="mock"))
+                    client.send(dict(t="hello", proto=1, server="mock-studio-a", pc=model.pc, project=model.project, app="mock", now=now_ms()))
                     client.send(model.lists())
                     client.send(model.state())
             chunks = bytearray()
