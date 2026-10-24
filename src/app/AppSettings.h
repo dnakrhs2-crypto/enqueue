@@ -132,6 +132,7 @@ public:
     juce::File getLoudnessCacheFile() const;
 
 private:
+    void savePreference (const char* key, const juce::var& value);
     void protectShortcutXml();
     juce::File getFileValue (const char* key) const;
     void setFileValue (const char* key, const juce::File& file);

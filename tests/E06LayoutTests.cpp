@@ -83,13 +83,32 @@ public:
         if (audio != nullptr)
         {
             expect (dynamic_cast<juce::MenuBarComponent*> (audio->getParentComponent()) != nullptr);
-            rect (*audio, { 409, 3, 770, 26 });
-            expect (audio->getWidth() >= juce::GlyphArrangement::getStringWidthInt (audio->getFont(), audioText));
+            rect (*audio, { 494, 3, 685, 26 });
+            auto* bar = static_cast<juce::MenuBarComponent*> (audio->getParentComponent());
+            const auto menus = main.getMenuBarNames();
+            const int addedMenuWidth = bar->getLookAndFeel().getMenuBarItemWidth (*bar, menus.size() - 1, menus[menus.size() - 1]);
+            expectEquals (addedMenuWidth, 85);
+            const int textWidth = juce::GlyphArrangement::getStringWidthInt (audio->getFont(), audioText);
+            expect (audio->getWidth() < textWidth && textWidth <= audio->getWidth() + addedMenuWidth);
+            logMessage ("audio status: text=" + juce::String (textWidth) + " available=" + juce::String (audio->getWidth())
+                        + " single-line deficit=" + juce::String (textWidth - audio->getWidth()) + "px; full text retained in tooltip");
             expectEquals (audio->getTooltip(), juce::String ("audio detail"));
             expect (audio->findColour (juce::Label::textColourId) == Palette::stopButton);
             status->setAudioStatus (audioText);
             expectEquals (audio->getTooltip(), audioText);
             expect (audio->findColour (juce::Label::textColourId) == Palette::muted);
+            const auto reviewFolder = juce::SystemStats::getEnvironmentVariable ("ENQUEUE_REMOTE_REVIEW_DIR", {});
+            if (reviewFolder.isNotEmpty())
+            {
+                juce::File (reviewFolder).createDirectory();
+                auto output = juce::File (reviewFolder).getChildFile ("audio-status.png").createOutputStream();
+                if (output != nullptr)
+                {
+                    output->setPosition (0); output->truncate();
+                    juce::PNGImageFormat().writeImageToStream (main.createComponentSnapshot (
+                        { audio->getX(), 0, audio->getWidth(), Palette::menuBarHeight }, true, 2.0f), *output);
+                }
+            }
         }
         auto* count = label (*status, ko ("큐 10개"));
         auto* midi = label (*status, "MIDI 0");

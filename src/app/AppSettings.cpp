@@ -303,8 +303,7 @@ bool AppSettings::getMobileRemoteNoticeShown() const
 
 void AppSettings::setMobileRemoteNoticeShown (bool shown)
 {
-    settings->setValue (Keys::mobileRemoteNoticeShown, shown);
-    saveNow();
+    savePreference (Keys::mobileRemoteNoticeShown, shown);
 }
 
 int AppSettings::getLufsAverageSeconds() const
@@ -391,13 +390,28 @@ bool AppSettings::saveInputSettings (const InputSettingsTransaction& transaction
 }
 
 bool AppSettings::getRemoteEnabled() const { return settings->getBoolValue ("remoteEnabled", false); }
-void AppSettings::setRemoteEnabled (bool enabled) { settings->setValue ("remoteEnabled", enabled); saveNow(); }
+void AppSettings::setRemoteEnabled (bool enabled) { savePreference ("remoteEnabled", enabled); }
 juce::String AppSettings::getRemoteKey() const { return settings->getValue ("remoteKey"); }
-void AppSettings::setRemoteKey (const juce::String& key) { settings->setValue ("remoteKey", key); saveNow(); }
+void AppSettings::setRemoteKey (const juce::String& key) { savePreference ("remoteKey", key); }
 juce::String AppSettings::getRemoteInstallId() const { return settings->getValue ("remoteInstallId"); }
-void AppSettings::setRemoteInstallId (const juce::String& id) { settings->setValue ("remoteInstallId", id); saveNow(); }
+void AppSettings::setRemoteInstallId (const juce::String& id) { savePreference ("remoteInstallId", id); }
 juce::String AppSettings::getRemoteAdapter() const { return settings->getValue ("remoteAdapter"); }
-void AppSettings::setRemoteAdapter (const juce::String& id) { settings->setValue ("remoteAdapter", id); saveNow(); }
+void AppSettings::setRemoteAdapter (const juce::String& id) { savePreference ("remoteAdapter", id); }
+
+void AppSettings::savePreference (const char* key, const juce::var& value)
+{
+    const juce::ScopedLock lock (settings->getLock());
+    const auto previous = storedValue (*settings, key);
+    const bool wasDirty = settings->needsToBeSaved();
+    settings->setValue (key, value);
+    if (saveNow()) return;
+
+    // Match the existing preference transactions: a rejected save must not leave
+    // an unrelated write pending for the next project-open/save operation.
+    if (previous.has_value()) settings->setValue (key, *previous);
+    else settings->removeValue (key);
+    settings->setNeedsToBeSaved (wasDirty);
+}
 
 bool AppSettings::saveNow()
 {

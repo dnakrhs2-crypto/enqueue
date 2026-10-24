@@ -23,7 +23,8 @@ struct Request
 class Session
 {
 public:
-    juce::var dispatch (const Request&, const std::function<juce::Result (const Request&)>&);
+    juce::var dispatch (const Request&, const std::function<juce::Result (const Request&)>&,
+                        double nowMs = juce::Time::getMillisecondCounterHiRes());
 private:
     juce::int64 lastId = 0;
     juce::Result lastResult = juce::Result::ok();

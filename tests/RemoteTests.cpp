@@ -34,6 +34,12 @@ struct RemoteTestAccess
     static const juce::Label& noNetwork (const remote::Panel& p) { return p.noNetworkLabel; }
     static juce::Rectangle<int> qrBounds (const remote::Panel& p) { return p.qrBounds; }
     static juce::TextEditor& address (remote::Panel& p) { return p.addressField; }
+    static int addressScrollX (remote::Panel& p)
+    {
+        for (auto* child : p.addressField.getChildren())
+            if (auto* viewport = dynamic_cast<juce::Viewport*> (child)) return viewport->getViewPositionX();
+        return -1;
+    }
     static juce::TextButton& copy (remote::Panel& p) { return p.copy; }
     static juce::ComboBox& network (remote::Panel& p) { return p.network; }
     static juce::ListBox& devices (remote::Panel& p) { return p.deviceList; }
@@ -72,7 +78,7 @@ struct Fixture
     {
         if (! request.hasProperty ("id")) request.getDynamicObject()->setProperty ("id", ++ids[connection]);
         const auto parsed = remote::Request::parse (encode (request));
-        return sessions[connection].dispatch (parsed, [&] (const auto& r) { return RemoteTestAccess::execute (*main, connection, r, time); });
+        return sessions[connection].dispatch (parsed, [&] (const auto& r) { return RemoteTestAccess::execute (*main, connection, r, time); }, time);
     }
     juce::var go (bool down, int touch = 1, uint64_t connection = 1) { return send (object ({ { "t", "go" }, { "down", down }, { "touch", touch } }), connection); }
     void release (uint64_t connection) { RemoteTestAccess::release (*main, connection); sessions.erase (connection); }
@@ -185,6 +191,90 @@ public:
         expectEquals (encode (first), encode (session.dispatch (request, run)));
         expectEquals (executions, 1);
     }
+};
+
+class RemoteLateRequestTests : public juce::UnitTest
+{
+public:
+    RemoteLateRequestTests() : UnitTest ("Remote late requests", "Enqueue") {}
+    void runTest() override
+    {
+        beginTest ("all guarded operations reject after 1500ms, accept at the boundary, and accept legacy requests");
+        for (auto message : std::vector<juce::var> {
+            object ({ { "t", "go" }, { "down", true }, { "touch", 1 } }), command ("pause"), command ("fade"),
+            cueRequest (juce::Uuid(), "stop"), object ({ { "t", "wait" }, { "cue", "a" }, { "kind", "pre" }, { "startId", 1 } }),
+            object ({ { "t", "fire" }, { "cue", "a" } }), object ({ { "t", "stopcue" }, { "cue", "a" } }),
+            object ({ { "t", "tab" }, { "tab", "a" } }), object ({ { "t", "playhead" }, { "tab", "a" }, { "cue", "b" } }),
+            object ({ { "t", "move" }, { "tab", "a" }, { "cue", "b" }, { "before", {} }, { "parent", {} } }),
+            object ({ { "t", "mode" }, { "show", true } }) })
+        {
+            remote::Session session;
+            int executions = 0;
+            const auto run = [&] (const auto&) { ++executions; return juce::Result::ok(); };
+            message.getDynamicObject()->setProperty ("id", 1);
+            message.getDynamicObject()->setProperty ("st", 8500);
+            const auto expired = session.dispatch (remote::Request::parse (encode (message)), run, 10001);
+            expect (! ok (expired)); expectEquals (expired["msg"].toString(), ko ("늦게 도착해 취소됨"));
+            expectEquals (executions, 0);
+            expectEquals (encode (session.dispatch (remote::Request::parse (encode (message)), run, 10002)), encode (expired));
+            message.getDynamicObject()->setProperty ("id", 2);
+            expect (ok (session.dispatch (remote::Request::parse (encode (message)), run, 10000)));
+            message.getDynamicObject()->setProperty ("id", 3);
+            message.getDynamicObject()->removeProperty ("st");
+            expect (ok (session.dispatch (remote::Request::parse (encode (message)), run, 10000)));
+            expectEquals (executions, 2);
+        }
+        beginTest ("release, panic, ping and hi are exempt even if st is supplied");
+        for (auto message : { object ({ { "t", "go" }, { "down", false }, { "touch", 1 } }), command ("panic"),
+                              object ({ { "t", "ping" } }), object ({ { "t", "hi" }, { "device", "tablet" } }) })
+        {
+            remote::Session session;
+            bool executed = false;
+            message.getDynamicObject()->setProperty ("id", 1);
+            message.getDynamicObject()->setProperty ("st", 8000);
+            expect (ok (session.dispatch (remote::Request::parse (encode (message)), [&] (const auto&)
+                { executed = true; return juce::Result::ok(); }, 10000)));
+            expect (executed);
+        }
+        beginTest ("cancelled GO down and its up leave no hold; the next timely press executes and a late up releases it");
+        {
+            Fixture f; f.waits(); f.document().settings.requireKeyUp = true;
+            expect (! ok (f.send (stamped (object ({ { "t", "go" }, { "down", true }, { "touch", 1 } }), f.time - 1501))));
+            expectEquals (f.waiting(), 0); expect (! f.main->getShortcutService().activations().anyHeld());
+            expect (ok (f.send (stamped (object ({ { "t", "go" }, { "down", false }, { "touch", 1 } }), f.time - 2000))));
+            expectEquals (f.waiting(), 0); expect (! f.main->getShortcutService().activations().anyHeld());
+            expect (ok (f.send (stamped (object ({ { "t", "go" }, { "down", true }, { "touch", 2 } }), f.time - 1500))));
+            expectEquals (f.waiting(), 1); expect (f.main->getShortcutService().activations().anyHeld());
+            expect (ok (f.send (stamped (object ({ { "t", "go" }, { "down", false }, { "touch", 2 } }), f.time - 2000))));
+            expect (! f.main->getShortcutService().activations().anyHeld());
+            expect (ok (f.go (true, 3))); expectEquals (f.waiting(), 2);
+            expect (ok (f.go (false, 3)));
+        }
+        beginTest ("late fire does not play; timely fire plays; late panic still fades playback");
+        {
+            Fixture f; const auto id = f.sound();
+            const auto fire = [&] { return object ({ { "t", "fire" }, { "cue", id.toString() } }); };
+            expect (! ok (f.send (stamped (fire(), f.time - 1501)))); f.render(); expect (! f.engine.isPlaying (id));
+            expect (ok (f.send (stamped (fire(), f.time - 1500)))); f.render(); expect (f.engine.isPlaying (id));
+            f.document().settings.panicSeconds = 1;
+            expect (ok (f.send (stamped (command ("panic"), f.time - 2000)))); f.render();
+            expect (f.controller().isPanicLatched());
+            expect (! f.engine.getPlayingCues().empty() && f.engine.getPlayingCues().front().fadingOut);
+        }
+        beginTest ("late move preserves order and undo history; timely move uses the normal undoable path");
+        {
+            Fixture f; const auto first = f.addWait ("first"), second = f.addWait ("second");
+            const auto undo = f.document().getUndoName();
+            expect (! ok (f.send (stamped (moveRequest (f, second, first), f.time - 1501))));
+            expect (f.document().cues.get (0).id == first); expectEquals (f.document().getUndoName(), undo);
+            expect (ok (f.send (stamped (moveRequest (f, second, first), f.time - 1500))));
+            expect (f.document().cues.get (0).id == second);
+            expect (f.document().undo()); expect (f.document().cues.get (0).id == first);
+        }
+    }
+private:
+    static juce::var stamped (juce::var request, double time)
+    { request.getDynamicObject()->setProperty ("st", time); return request; }
 };
 
 class RemoteInputTests : public juce::UnitTest
@@ -522,13 +612,19 @@ public:
         { int status = 0; RemoteClient::http (f.service().getPort(), path, status); expectEquals (status, 404, path); }
         beginTest ("real CivetWeb websocket receives hello/lists/state, then executes GO once and updates device name");
         SocketClient first;
+        const auto beforeHello = static_cast<juce::int64> (juce::Time::getMillisecondCounterHiRes());
         expect (first.client.connect (f.service().getPort(), f.service().key().toStdString()), first.client.error);
         const auto hello = first.take (f, "hello");
         expectEquals (static_cast<int> (hello["proto"]), 1);
         expectEquals (hello["server"].toString(), f.service().installId());
         expect (hello["pc"].toString().isNotEmpty() && hello["app"].toString().isNotEmpty());
+        expect (hello["now"].isInt() || hello["now"].isInt64());
+        expect (static_cast<juce::int64> (hello["now"]) >= beforeHello);
+        expect (static_cast<double> (hello["now"]) <= juce::Time::getMillisecondCounterHiRes());
         const auto lists = first.take (f, "lists"); expectEquals (lists["tabs"].size(), 1); expectEquals (lists["cues"][juce::Identifier (f.tab())].size(), 6);
         const auto state = first.take (f, "state"); expect (state["seq"].isInt() || state["seq"].isInt64());
+        expect (state["now"].isInt() || state["now"].isInt64());
+        expect (static_cast<juce::int64> (state["now"]) >= static_cast<juce::int64> (hello["now"]));
         first.send (object ({ { "t", "hi" }, { "id", 1 }, { "device", ko ("iPad · 사파리") } }));
         expect (ok (first.take (f, "ack", 1))); expectEquals (static_cast<int> (f.service().devices().size()), 1);
         if (! f.service().devices().empty()) expectEquals (f.service().devices().begin()->second.name, ko ("iPad · 사파리"));
@@ -540,6 +636,23 @@ public:
         first.client.send ("not json"); expect (! ok (first.take (f, "ack")));
         first.send (object ({ { "t", "unknown" }, { "id", 4 } })); expect (! ok (first.take (f, "ack", 4)));
         first.send (object ({ { "t", "ping" }, { "id", 5 } })); expect (ok (first.take (f, "ack", 5)));
+
+        beginTest ("the live server rejects expired input and publishes monotonic timestamps on later states");
+        first.send (object ({ { "t", "go" }, { "id", 6 }, { "touch", 2 }, { "down", true },
+                             { "st", juce::Time::getMillisecondCounterHiRes() - 2000 } }));
+        const auto rejected = first.take (f, "ack", 6);
+        expect (! ok (rejected)); expectEquals (rejected["msg"].toString(), ko ("늦게 도착해 취소됨"));
+        expectEquals (f.waiting(), 1); expect (! f.main->getShortcutService().activations().anyHeld());
+        first.send (object ({ { "t", "go" }, { "id", 7 }, { "touch", 2 }, { "down", false } }));
+        expect (ok (first.take (f, "ack", 7))); expect (! f.main->getShortcutService().activations().anyHeld());
+        first.send (object ({ { "t", "go" }, { "id", 8 }, { "touch", 3 }, { "down", true },
+                             { "st", juce::Time::getMillisecondCounterHiRes() } }));
+        expect (ok (first.take (f, "ack", 8))); expectEquals (f.waiting(), 2);
+        first.send (object ({ { "t", "go" }, { "id", 9 }, { "touch", 3 }, { "down", false } }));
+        expect (ok (first.take (f, "ack", 9)));
+        const auto laterState = first.take (f, "state");
+        expect (laterState["now"].isInt() || laterState["now"].isInt64());
+        expect (static_cast<juce::int64> (laterState["now"]) >= static_cast<juce::int64> (state["now"]));
 
         beginTest ("wrong key gets bye key; rotation gets bye newkey, retains port/install id and refuses the old key");
         SocketClient wrong;
@@ -620,7 +733,8 @@ public:
             expect (! window.isOnDesktop());
             expectEquals (window.getWidth(), 470);
             window.setBoundsConstrained ({ 0, 0, 1, 1 });
-            auto* content = dynamic_cast<remote::Panel*> (window.getContentComponent());
+            auto* viewport = dynamic_cast<juce::Viewport*> (window.getContentComponent());
+            auto* content = viewport != nullptr ? dynamic_cast<remote::Panel*> (viewport->getViewedComponent()) : nullptr;
             expect (content != nullptr);
             if (content != nullptr)
             {
@@ -631,7 +745,7 @@ public:
         }
         f.main->setSize (860, 608);
         expect (RemoteTestAccess::menuFits (*f.main), "menu fits beside the mode toggle at the main window minimum width");
-        for (const auto& size : { juce::Point<int> (412, 598), juce::Point<int> (462, 700), juce::Point<int> (520, 850) })
+        for (const auto& size : { juce::Point<int> (412, 520), juce::Point<int> (412, 598), juce::Point<int> (462, 700), juce::Point<int> (520, 850) })
         {
             beginTest ("vertical panel order and non-overlap at minimum/default/large size: " + size.toString());
             panel.setSize (size.x, size.y);
@@ -650,9 +764,25 @@ public:
         for (bool enabled : { false, true })
         {
             f.service().setEnabled (enabled);
-            if (address != nullptr) expectEquals (address->getText(), f.service().address());
+            if (address != nullptr) expectEquals (address->getText(), f.service().link());
             if (enabled && f.service().getPort() > 0)
             {
+                beginTest ("the complete keyed address scrolls to either end and survives device refreshes");
+                if (address != nullptr)
+                {
+                    expect (address->getText().contains ("/#k="));
+                    address->moveCaretToEnd (false);
+                    expectEquals (address->getCaretPosition(), address->getText().length());
+                    expect (RemoteTestAccess::addressScrollX (panel) > 0);
+                    address->moveCaretToTop (false);
+                    expectEquals (RemoteTestAccess::addressScrollX (panel), 0);
+                }
+                const auto output = juce::SystemStats::getEnvironmentVariable ("ENQUEUE_REMOTE_REVIEW_DIR", {});
+                if (output.isNotEmpty())
+                {
+                    juce::File (output).createDirectory();
+                    expect (juce::File (output).getChildFile ("expected-link.txt").replaceWithText (f.service().link()));
+                }
                 beginTest ("an open panel follows hi/disconnect, scrolls long lists and keeps full long names in tooltips");
                 for (int i = 0; i < 6; ++i)
                 {
@@ -662,6 +792,7 @@ public:
                     const auto deviceName = i == 0 ? ko ("공연장 음향 조정실의 긴 기기 이름 iPad Pro · 사파리") : ko ("iPhone · 사파리 ") + juce::String (i);
                     client->send (object ({ { "t", "hi" }, { "id", 1 }, { "device", deviceName } }));
                     expect (ok (client->take (f, "ack", 1)));
+                    if (address != nullptr) expectEquals (RemoteTestAccess::addressScrollX (panel), 0);
                     devices.push_back (std::move (client));
                 }
                 if (deviceList != nullptr)
@@ -685,8 +816,9 @@ private:
     void checkLayout (remote::Panel& panel)
     {
         const auto qr = RemoteTestAccess::qrBounds (panel);
-        expectEquals (qr.getWidth(), remote::Panel::qrTileSize);
-        expectEquals (qr.getHeight(), remote::Panel::qrTileSize);
+        expect (qr.getWidth() >= remote::Panel::minimumQrTileSize && qr.getWidth() <= remote::Panel::qrTileSize);
+        expectEquals (qr.getHeight(), qr.getWidth());
+        expect (panel.getLocalBounds().contains (qr));
         expectEquals (qr.getCentreX(), panel.getWidth() / 2);
         const auto rows = RemoteTestAccess::verticalRows (panel);
         expect (qr.getBottom() <= rows.front()->getY());
@@ -708,43 +840,51 @@ private:
     {
         for (const int percent : { 100, 125, 150 })
         {
-            beginTest ("portrait window fits work areas at requested " + juce::String (percent) + "% (" + (enabled ? "on" : "off") + ")");
+            beginTest ("portrait window fits Windows work areas at app " + juce::String (percent) + "% (" + (enabled ? "on" : "off") + ")");
             remote::Window window (f.service(), [] {}, [] {});
             const auto preferred = window.getBounds().withPosition (1000, 800);
-            auto& content = *static_cast<remote::Panel*> (window.getContentComponent());
-            const auto initialRows = RemoteTestAccess::verticalRows (content);
-            std::vector<juce::Rectangle<int>> fixed;
-            for (auto* row : initialRows) fixed.push_back (row->getBounds());
-            const int initialListHeight = RemoteTestAccess::devices (content).getHeight();
-            for (bool compactDisplay : { false, true })
+            auto& viewport = *static_cast<juce::Viewport*> (window.getContentComponent());
+            auto& content = *static_cast<remote::Panel*> (viewport.getViewedComponent());
+            struct Display { int width, height, percent; const char* name; };
+            for (const auto display : { Display { 1920, 1032, 100, "desktop" }, Display { 1366, 720, 100, "small" },
+                                       Display { 1093, 582, 125, "win125" }, Display { 911, 480, 150, "win150" } })
             {
-                const juce::Rectangle<int> physicalArea (compactDisplay ? 1366 : 1920, compactDisplay ? 720 : 1032); // 48px taskbar
-                const int applied = UiScale::fitPercent (percent, physicalArea);
-                const float scale = static_cast<float> (applied) / 100.0f;
-                const juce::Rectangle<int> logicalArea (physicalArea.getWidth() * 100 / applied, physicalArea.getHeight() * 100 / applied);
+                // Windows DPI has already divided these work areas. Exercise the requested
+                // app scale too, even before UiScale::apply can lower it for a smaller monitor.
+                const float scale = static_cast<float> (percent * display.percent) / 10000.0f;
+                const juce::Rectangle<int> logicalArea (display.width * 100 / percent, display.height * 100 / percent);
                 window.setBounds (preferred);
                 UiScale::fitWindowIntoArea (window, logicalArea);
                 expect (! window.isOnDesktop());
                 expect (logicalArea.contains (window.getBounds()));
+                expect (window.getLocalBounds().contains (viewport.getBounds()));
                 checkLayout (content);
-                const auto fittedRows = RemoteTestAccess::verticalRows (content);
-                for (size_t i = 0; i < fittedRows.size(); ++i)
+                for (auto* child : content.getChildren())
                 {
-                    if (fittedRows[i] == &RemoteTestAccess::devices (content)) continue;
-                    expectEquals (fittedRows[i]->getWidth(), fixed[i].getWidth());
-                    expectEquals (fittedRows[i]->getHeight(), fixed[i].getHeight());
-                    if (i + 1 != fittedRows.size()) expect (fittedRows[i]->getBounds() == fixed[i]); // renew stays at bottom
+                    if (! child->isVisible()) continue;
+                    viewport.setViewPosition (0, child->getY());
+                    expect (viewport.getViewArea().contains (child->getBounds()), "reachable: " + child->getName());
                 }
-                expect (RemoteTestAccess::devices (content).getHeight() <= initialListHeight);
-                const auto suffix = juce::String (enabled ? "on-" : "off-") + juce::String (percent);
-                auto image = reviewImage (window, (compactDisplay ? "portrait-small-" : "portrait-") + suffix, scale);
+                expect (! viewport.getHorizontalScrollBar().isVisible());
+                const auto filename = juce::String ("portrait-") + display.name + (enabled ? "-on-" : "-off-") + juce::String (percent);
+                if (viewport.getVerticalScrollBar().isVisible())
+                {
+                    expect (&viewport.getVerticalScrollBar().getLookAndFeel() == &content.getLookAndFeel());
+                    expectEquals (viewport.getScrollBarThickness(), Palette::scrollBarWidth);
+                    reviewImage (window, filename + "-bottom", scale); // last row is the renew button
+                }
+                viewport.setViewPosition (0, 0);
+                expect (viewport.getViewArea().contains (RemoteTestAccess::qrBounds (content)));
+                auto image = reviewImage (window, filename, scale);
                 expect (image.isValid());
                 expectEquals (image.getWidth(), juce::roundToInt (window.getWidth() * scale));
-                expect (image.getWidth() <= physicalArea.getWidth() && image.getHeight() <= physicalArea.getHeight());
-                logMessage ("requested=" + juce::String (percent) + " applied=" + juce::String (applied)
-                    + " work=" + juce::String (physicalArea.getWidth()) + "x" + juce::String (physicalArea.getHeight())
+                expect (image.getWidth() <= juce::roundToInt (logicalArea.getWidth() * scale)
+                     && image.getHeight() <= juce::roundToInt (logicalArea.getHeight() * scale));
+                logMessage ("app=" + juce::String (percent) + " Windows=" + juce::String (display.percent)
+                    + " work=" + logicalArea.toString() + " window=" + window.getBounds().toString()
                     + " image=" + juce::String (image.getWidth()) + "x" + juce::String (image.getHeight())
-                    + " list=" + juce::String (RemoteTestAccess::devices (content).getHeight()));
+                    + " QR=" + juce::String (RemoteTestAccess::qrBounds (content).getWidth())
+                    + " scroll=" + juce::String (viewport.getVerticalScrollBar().isVisible() ? "yes" : "no"));
             }
         }
     }
@@ -797,7 +937,7 @@ public:
         expect (RemoteTestAccess::hasQr (panel));
         expect (RemoteTestAccess::copy (panel).isEnabled());
         expect (RemoteTestAccess::network (panel).isEnabled());
-        expectEquals (RemoteTestAccess::address (panel).getText(), "http://192.168.0.12:" + juce::String (port));
+        expectEquals (RemoteTestAccess::address (panel).getText(), "http://192.168.0.12:" + juce::String (port) + "/#k=" + key);
         expectEquals (service.key(), key); expectEquals (service.getPort(), port);
         reviewImage (panel, "portrait-router-restored");
         candidates.clear(); service.refreshNetworks(); noNetwork();
@@ -806,7 +946,45 @@ public:
     }
 };
 
+class RemoteSettingsTests : public juce::UnitTest
+{
+public:
+    RemoteSettingsTests() : UnitTest ("Remote settings save failure", "Enqueue") {}
+    void runTest() override
+    {
+        for (bool existing : { false, true })
+        {
+            beginTest (existing ? "failed preference saves retain saved values and unrelated pending settings"
+                               : "first-run remote settings failures leave no pending write for project reopening");
+            auto options = Fixture::options(); options.doNotSave = true;
+            juce::PropertiesFile storage (juce::File::getSpecialLocation (juce::File::tempDirectory)
+                .getNonexistentChildFile ("EnqueueRemoteSettings", ".settings"), options);
+            AppSettings settings (storage);
+            if (existing)
+            {
+                storage.setValue ("remoteKey", "previous key");
+                storage.setValue ("remoteInstallId", "previous installation");
+                storage.setValue ("remoteAdapter", "previous adapter");
+            }
+            storage.setNeedsToBeSaved (false);
+            if (existing) settings.setWindowState ("pending window state");
+            const auto before = storage.createXml ("settings")->toString();
+            int saved = 0; settings.onSaveSucceeded = [&] { ++saved; };
+            settings.setRemoteKey ("new key");
+            settings.setRemoteInstallId ("new installation");
+            settings.setRemoteAdapter ("new adapter");
+            settings.setRemoteEnabled (true);
+            settings.setMobileRemoteNoticeShown (true);
+            expectEquals (storage.createXml ("settings")->toString(), before);
+            expect (storage.needsToBeSaved() == existing);
+            expectEquals (saved, 0);
+        }
+    }
+};
+
+static RemoteSettingsTests remoteSettingsTests;
 static RemoteProtocolTests remoteProtocolTests;
+static RemoteLateRequestTests remoteLateRequestTests;
 static RemoteInputTests remoteInputTests;
 static RemoteMoveTests remoteMoveTests;
 static RemoteServerTests remoteServerTests;

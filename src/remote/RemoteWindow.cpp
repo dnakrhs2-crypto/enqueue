@@ -4,6 +4,31 @@
 
 namespace gocue::remote
 {
+namespace
+{
+class PanelViewport : public juce::Viewport
+{
+public:
+    PanelViewport (Service& service, std::function<void()> renew, std::function<void()> enabledChanged)
+    {
+        setScrollBarsShown (true, false);
+        setScrollBarThickness (Palette::scrollBarWidth);
+        setViewedComponent (new Panel (service, std::move (renew), std::move (enabledChanged)), true);
+        setSize (Panel::preferredWidth, Panel::preferredHeight);
+    }
+    void resized() override
+    {
+        juce::Viewport::resized();
+        if (auto* panel = getViewedComponent())
+        {
+            const bool scrolls = getHeight() < Panel::minimumHeight;
+            panel->setSize (getWidth() - (scrolls ? getScrollBarThickness() : 0),
+                            juce::jmax (Panel::minimumHeight, getHeight()));
+        }
+    }
+};
+}
+
 Panel::Panel (Service& s, std::function<void()> newKey, std::function<void()> onEnabled)
     : service (s), enabledChanged (std::move (onEnabled))
 {
@@ -64,7 +89,12 @@ void Panel::refresh()
     on.setToggleState (service.isEnabled(), juce::dontSendNotification);
     const bool hasNetwork = ! service.networks().empty();
     noNetworkLabel.setVisible (! hasNetwork);
-    addressField.setText (! hasNetwork ? juce::String() : service.failedToOpenPort() ? ko ("포트를 열 수 없습니다") : service.address(), false);
+    const auto displayedAddress = ! hasNetwork ? juce::String() : service.failedToOpenPort() ? ko ("포트를 열 수 없습니다") : service.link();
+    if (addressField.getText() != displayedAddress)
+    {
+        addressField.setText (displayedAddress, false);
+        addressField.moveCaretToTop (false);
+    }
     copy.setEnabled (service.link().isNotEmpty());
     network.clear (juce::dontSendNotification);
     int index = 1;
@@ -98,27 +128,33 @@ void Panel::refresh()
 }
 void Panel::resized()
 {
+    // Compress spacing and the QR first. Below this content's minimum height the
+    // surrounding viewport scrolls the whole panel, including the bottom button.
+    const int gap = juce::jlimit (6, 12, 6 + (getHeight() - minimumHeight) * 6 / (598 - minimumHeight));
+    constexpr int fixedRows = 4 * 20 + 40 + 42 + 38 + 42 + 40; // labels, controls, one device row
+    const int qrSize = juce::jlimit (minimumQrTileSize, qrTileSize, getHeight() - 32 - 5 * gap - fixedRows);
     auto area = getLocalBounds().reduced (16);
-    qrBounds = area.removeFromTop (qrTileSize).withSizeKeepingCentre (qrTileSize, qrTileSize);
+    qrBounds = area.removeFromTop (qrSize).withWidth (qrSize);
+    qrBounds.setCentre (getWidth() / 2, qrBounds.getCentreY());
     noNetworkLabel.setBounds (qrBounds.reduced (12));
-    area.removeFromTop (12);
+    area.removeFromTop (gap);
     modeLabel.setBounds (area.removeFromTop (20));
     segmentBounds = area.removeFromTop (40).withWidth (144);
     off.setBounds (segmentBounds.withWidth (72));
     on.setBounds (segmentBounds.withTrimmedLeft (72));
-    area.removeFromTop (12);
+    area.removeFromTop (gap);
     addressLabel.setBounds (area.removeFromTop (20));
     auto address = area.removeFromTop (42);
     copy.setBounds (address.removeFromRight (76));
     address.removeFromRight (8);
     addressField.setBounds (address);
-    area.removeFromTop (12);
+    area.removeFromTop (gap);
     networkLabel.setBounds (area.removeFromTop (20));
     network.setBounds (area.removeFromTop (38));
-    area.removeFromTop (12);
+    area.removeFromTop (gap);
     devicesLabel.setBounds (area.removeFromTop (20));
     renew.setBounds (area.removeFromBottom (42).removeFromRight (136));
-    area.removeFromBottom (12);
+    area.removeFromBottom (gap);
     deviceList.setBounds (area);
 }
 void Panel::paint (juce::Graphics& g)
@@ -170,10 +206,10 @@ Window::Window (Service& service, std::function<void()> renew, std::function<voi
     setLookAndFeel (&theme);
     setUsingNativeTitleBar (false);
     setTitleBarHeight (Palette::menuBarHeight);
-    setContentOwned (new Panel (service, std::move (renew), std::move (enabledChanged)), true);
+    setContentOwned (new PanelViewport (service, std::move (renew), std::move (enabledChanged)), true);
     setResizable (true, false);
     const auto border = getContentComponentBorder();
-    setResizeLimits (Panel::minimumWidth + border.getLeftAndRight(), Panel::minimumHeight + border.getTopAndBottom(),
+    setResizeLimits (Panel::minimumWidth + Palette::scrollBarWidth + border.getLeftAndRight(), 240 + border.getTopAndBottom(),
                      Palette::windowMaxSize, Palette::windowMaxSize);
     centreWithSize (Panel::preferredWidth + border.getLeftAndRight(), Panel::preferredHeight + border.getTopAndBottom());
 }

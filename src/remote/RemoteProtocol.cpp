@@ -57,11 +57,17 @@ Request Request::parse (const juce::String& json)
     return request;
 }
 
-juce::var Session::dispatch (const Request& request, const std::function<juce::Result (const Request&)>& execute)
+juce::var Session::dispatch (const Request& request, const std::function<juce::Result (const Request&)>& execute, double nowMs)
 {
     if (request.id > 0 && request.id <= lastId)
         return ack (request.id, request.id == lastId ? lastResult : juce::Result::ok());
-    const auto result = request.error.failed() ? request.error : execute (request);
+    const bool exempt = (request.type == "go" && ! static_cast<bool> (request["down"]))
+        || (request.type == "cmd" && request["cmd"].toString() == "panic")
+        || request.type == "ping" || request.type == "hi";
+    const bool late = ! exempt && request.data.hasProperty ("st") && nowMs - static_cast<double> (request["st"]) > 1500.0;
+    // Check on the message thread immediately before execution, including time spent in its queue.
+    const auto result = request.error.failed() ? request.error
+        : late ? juce::Result::fail (juce::String::fromUTF8 ("늦게 도착해 취소됨")) : execute (request);
     if (request.id > 0) { lastId = request.id; lastResult = result; }
     return ack (request.id, result);
 }

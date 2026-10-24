@@ -11,8 +11,8 @@ class Panel : public juce::Component, private juce::ChangeListener, private juce
 {
 public:
     static constexpr int preferredWidth = 462, preferredHeight = 700;
-    static constexpr int minimumWidth = 412, minimumHeight = 598;
-    static constexpr int qrTileSize = 224;
+    static constexpr int minimumWidth = 412, minimumHeight = 520;
+    static constexpr int qrTileSize = 224, minimumQrTileSize = 176;
     Panel (Service&, std::function<void()> renew, std::function<void()> enabledChanged);
     ~Panel() override;
     void paint (juce::Graphics&) override;

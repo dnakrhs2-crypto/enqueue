@@ -130,6 +130,7 @@ juce::var Service::stateMessage()
 {
     auto value = model.state (snapshot, callbacks.showMode());
     value.getDynamicObject()->setProperty ("seq", ++sequence);
+    value.getDynamicObject()->setProperty ("now", static_cast<juce::int64> (juce::Time::getMillisecondCounterHiRes()));
     return value;
 }
 void Service::handleAsyncUpdate()
@@ -142,6 +143,7 @@ void Service::handleAsyncUpdate()
         {
             connected.emplace (event.connection, Device { event.connection, {}, juce::Time::getCurrentTime(), {} });
             send (event.connection, object ({ { "t", "hello" }, { "proto", 1 }, { "server", serverId },
+                { "now", static_cast<juce::int64> (juce::Time::getMillisecondCounterHiRes()) },
                 { "pc", juce::SystemStats::getComputerName() }, { "project", document.getDisplayName() }, { "app", appVersionString() } }));
             send (event.connection, model.lists (callbacks.showMode()));
             send (event.connection, stateMessage());
@@ -187,6 +189,7 @@ void Service::publish (const PlaybackSnapshot& value)
         lastStateMs = now;
         lastState = json;
         state.getDynamicObject()->setProperty ("seq", ++sequence);
+        state.getDynamicObject()->setProperty ("now", static_cast<juce::int64> (now));
         broadcast (state);
     }
 }
