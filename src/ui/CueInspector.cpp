@@ -392,6 +392,8 @@ public:
                                                                  &fadeOutEditor, &gainSlider, &browseButton, &notesEditor })
             c->setEnabled (enabled);
 
+        gainUnitButton.setEnabled (editable);   // this PC's unit: show mode locks it (as on the 재생 tab), no cue is fine
+
         if (cue == nullptr)
         {
             for (auto* e : std::initializer_list<PendingEditor*> { &numberEditor, &nameEditor, &preEditor, &postEditor, &fadeOutEditor, &notesEditor })

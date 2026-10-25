@@ -58,6 +58,25 @@ namespace
 
         return digits > 0 && points <= 1;
     }
+
+    /** "1,200" or "-12,345.5": the commas only between groups of three digits (a thousands separator). */
+    bool isGroupedThousands (juce::String t)
+    {
+        if (t.startsWithChar ('-'))
+            t = t.substring (1);
+
+        juce::StringArray groups;
+        groups.addTokens (t.upToFirstOccurrenceOf (".", false, false), ",", "");
+
+        if (groups.size() < 2 || groups[0].isEmpty() || groups[0].length() > 3)
+            return false;
+
+        for (int i = 0; i < groups.size(); ++i)
+            if (! groups[i].containsOnly ("0123456789") || (i > 0 && groups[i].length() != 3))
+                return false;
+
+        return ! t.fromFirstOccurrenceOf (".", false, false).containsChar (',');
+    }
 }
 
 //==============================================================================
@@ -103,7 +122,7 @@ juce::String GainSlider::getTextFromValue (double value)
 
 double GainSlider::getValueFromText (const juce::String& text)
 {
-    auto t = text.trim().replaceCharacter (',', '.').removeCharacters (" ");
+    auto t = text.trim().removeCharacters (" ");
     bool percent = showsPercent();
     bool unitTyped = false;
 
@@ -119,16 +138,26 @@ double GainSlider::getValueFromText (const juce::String& text)
         t = t.dropLastCharacters (2);
     }
 
+    const bool signedNumber = t.startsWithChar ('+') || t.startsWithChar ('-');
+
     while (t.startsWithChar ('+'))
         t = t.substring (1);
+
+    if (t.containsChar (','))
+    {
+        if (! isGroupedThousands (t))
+            return getValue();   // "1,5": no thousands separator, a typo - the gain stays
+
+        t = t.removeCharacters (",");
+    }
 
     if (! isPlainNumber (t))
         return getValue();   // not a number: the gain stays (a typo must not jump to 0 dB, or to silence in %)
 
     const double number = t.getDoubleValue();
 
-    if (percent && ! unitTyped && number < 0.0)
-        percent = false;   // a share is never negative: "-6" typed in % means -6 dB
+    if (percent && ! unitTyped && signedNumber)
+        percent = false;   // a share has no sign: "+6" or "-6" typed in % is dB
 
     return percent ? GainUnits::fromPercent (number) : number;
 }

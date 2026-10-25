@@ -275,6 +275,71 @@ public:
             expectWithinAbsoluteError (gain(), std::round (gain() * 10.0) / 10.0, 1e-9, "on the 0.1 dB grid");
         }
 
+        beginTest ("typed in %: a signed number is dB, a thousands comma reads as one, any other comma keeps the gain");
+        {
+            Fixture f;
+            f.addSound ("a");
+            f.document().cues.setSelectedIndex (0);
+            dispatch();
+            auto basic = controlsOn (f, 0);
+            if (basic.button == nullptr || basic.slider == nullptr)
+                return;
+            auto& slider = *basic.slider;
+            const auto percent = [&] { return GainUnits::toPercent (f.document().cues.getSelected()->gainDb); };
+            press (*basic.button);
+
+            type (slider, "+6");
+            expectWithinAbsoluteError (percent(), 199.5, 1e-6, "+6 in % is +6 dB, like -6 is -6 dB");
+            type (slider, "-6");
+            expectWithinAbsoluteError (percent(), 50.1, 1e-6);
+            type (slider, "+6%");
+            expectWithinAbsoluteError (percent(), 6.0, 1e-6, "with the % typed it is 6 %");
+            type (slider, "1,200");
+            expectWithinAbsoluteError (percent(), 1200.0, 1e-6, "a thousands comma");
+            type (slider, "1,000 %");
+            expectWithinAbsoluteError (percent(), 1000.0, 1e-6);
+            type (slider, "1,5");
+            expectWithinAbsoluteError (percent(), 1000.0, 1e-6, "a comma that is no thousands separator keeps the gain");
+            type (slider, "12,50");
+            expectWithinAbsoluteError (percent(), 1000.0, 1e-6);
+            expectEquals (shown (slider), juce::String ("1000.0 %"));
+
+            press (*basic.button);   // dB
+            type (slider, "-6,5");
+            expectWithinAbsoluteError (f.document().cues.getSelected()->gainDb, 20.0, 1e-9, "dB: the same comma rule, the gain stays");
+            type (slider, "-3");
+            expectWithinAbsoluteError (f.document().cues.getSelected()->gainDb, -3.0, 1e-9);
+        }
+
+        beginTest ("show mode locks the unit on both tabs, as it locks this PC's other settings");
+        {
+            Fixture f;
+            f.addSound ("a");
+            f.document().cues.setSelectedIndex (0);
+            dispatch();
+            expect (f.command (CommandIDs::toggleShowMode));
+            dispatch();
+            for (const int tab : { 0, 1 })
+            {
+                auto c = controlsOn (f, tab);
+                if (c.button == nullptr)
+                    continue;
+                expect (! c.button->isEnabled(), "show mode: the unit stays");
+                press (*c.button);
+                expect (! f.settings.getGainInPercent(), "a press does nothing in show mode");
+                expectEquals (c.button->getButtonText(), ko ("게인 (dB)"));
+            }
+            expect (f.command (CommandIDs::toggleShowMode));
+            dispatch();
+            auto basic = controlsOn (f, 0);
+            if (basic.button != nullptr)
+            {
+                expect (basic.button->isEnabled(), "edit mode: it switches again");
+                press (*basic.button);
+                expect (f.settings.getGainInPercent());
+            }
+        }
+
         beginTest ("in dB nothing changes: 0.1 dB steps, a typed % still lands, a typo keeps the gain");
         {
             Fixture f;
