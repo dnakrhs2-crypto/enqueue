@@ -43,6 +43,7 @@ target_sources(EnqueueTests PRIVATE
     ../src/ui/CueInspector.cpp
     ../src/ui/WaveformView.cpp
     ../src/ui/TimeLoopsPanel.cpp
+    ../src/ui/GainControl.cpp
     ../src/ui/AudioSettingsDialog.cpp
     ../src/ui/WorkspaceSettingsDialog.cpp
     ../src/ui/FooterBar.cpp
@@ -128,6 +129,7 @@ target_sources(EnqueueTests PRIVATE
     SpaceBarPlayPauseTests.cpp
     WaveHeightTests.cpp
     PlayTabGainTests.cpp
+    GainUnitTests.cpp
     TabReorderTests.cpp
     ReopenLastProjectTests.cpp
     CueIconsTests.cpp

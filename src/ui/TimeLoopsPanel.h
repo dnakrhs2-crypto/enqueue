@@ -2,6 +2,7 @@
 
 #include "app/ProjectDocument.h"
 #include "audio/AudioEngine.h"
+#include "ui/GainControl.h"
 #include "ui/WaveformView.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -23,6 +24,8 @@ public:
     void refresh();
     /** Playback state of the standby cue (null when it is not playing). */
     void setPlayback (const AudioEngine::PlayingCue* playing);
+    /** The gain's unit (true = %), shared with the 기본 tab: either tab's gain button switches both. */
+    void bindGainUnit (juce::Value& percent);
 
     std::function<void()> onPreview;
     /** A click on the waveform: play the cue from that file position (a running one jumps there). */
@@ -60,13 +63,14 @@ private:
     AudioEngine& engine;
     WaveformView waveform;
 
-    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel, gainLabel;
+    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel;
     juce::TextEditor startEditor, endEditor, countEditor, rateEditor;
     juce::ToggleButton infiniteToggle, envelopeToggle, linearToggle, lockToggle, pitchToggle;
     juce::TextButton resetButton, zoomInButton, zoomOutButton, sizeUpButton, sizeDownButton;
     /** The cue's gain, the same value as the 기본 tab's slider: moving either moves the other, and this tab's wave
-        follows at once (WaveformView draws with the cue's level). */
-    juce::Slider gainSlider;
+        follows at once (WaveformView draws with the cue's level). In dB or % as the gain button says. */
+    GainUnitButton gainUnitButton;
+    GainSlider gainSlider;
     bool refreshing = false;
     juce::uint32 lastLiveEnvelopePush = 0;   // commitEnvelope throttle
     juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show (focus-lost commits go there)

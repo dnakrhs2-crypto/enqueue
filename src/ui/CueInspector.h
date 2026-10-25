@@ -8,6 +8,7 @@
 #include "audio/AudioEngine.h"
 #include "model/CueList.h"
 #include "ui/CurveEditor.h"
+#include "ui/GainControl.h"
 #include "ui/LevelMatrixComponent.h"
 #include "ui/PluginWindows.h"
 #include "ui/TimeLoopsPanel.h"
@@ -110,6 +111,8 @@ private:
     AudioEngine& engine;
     AppSettings& settings;
     juce::AudioThumbnailCache thumbnailCache { 64 };
+    ValueFollower gainUnitFollower;   // saves this PC's gain unit when either tab's gain button switches it
+    juce::Value gainInPercent;        // the 기본 / 재생 gain sliders' unit (true = %)
 
     juce::Label title, selectionDetails;
     /** juce::TabbedComponent brings the new panel to the front *with* focus, which lands on the panel's first text

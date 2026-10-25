@@ -177,7 +177,7 @@ public:
             auto& play = *page->getViewedComponent();
             checkLabel (play, ko ("시작"), { 12, 8, 64, 30 });
             checkLabel (play, ko ("페이드 엔벨로프"), { 675, 8, 77, 30 });   // its three toggles follow on the same row
-            checkLabel (play, ko ("게인 (dB)"), { 675, 46, 64, 30 });        // the 기본 tab's gain row, same column
+            checkButton (play, ko ("게인 (dB)"), { 675, 46, 64, 30 });       // the 기본 tab's gain row, same column (the unit button)
             if (auto* gain = child<juce::Slider> (play, [] (const juce::Slider& s) { return s.getTextValueSuffix() == " dB"; }))
                 rect (*gain, { 739, 46, 336, 30 });
             else

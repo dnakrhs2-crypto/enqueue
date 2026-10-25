@@ -87,6 +87,11 @@ public:
     bool getSpaceBarPlayPause() const;
     void setSpaceBarPlayPause (bool on);
 
+    /** The 기본 / 재생 tabs' gain shown in % instead of dB (the gain button switches it; off by default). Per PC, a view
+        setting: the cue's gain stays in dB in the project. */
+    bool getGainInPercent() const;
+    void setGainInPercent (bool percent);
+
     bool getRemoteEnabled() const;
     void setRemoteEnabled (bool);
     juce::String getRemoteKey() const;

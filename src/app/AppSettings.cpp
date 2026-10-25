@@ -24,6 +24,7 @@ namespace Keys
     constexpr const char* reopenAfterUpdate = "reopenProjectAfterUpdate";
     constexpr const char* youtubeAddToQueue = "youtubeAddToQueue";
     constexpr const char* spaceBarPlayPause = "spaceBarPlayPause";
+    constexpr const char* gainInPercent     = "gainInPercent";
     constexpr const char* disabledPlugins   = "disabledPlugins";
     constexpr const char* lufsAverageSeconds = "lufsAverageSeconds";
     constexpr const char* uiScalePercent    = "uiScalePercent";
@@ -241,6 +242,16 @@ bool AppSettings::getSpaceBarPlayPause() const
 void AppSettings::setSpaceBarPlayPause (bool on)
 {
     settings->setValue (Keys::spaceBarPlayPause, on);
+}
+
+bool AppSettings::getGainInPercent() const
+{
+    return settings->getBoolValue (Keys::gainInPercent, false);
+}
+
+void AppSettings::setGainInPercent (bool percent)
+{
+    settings->setValue (Keys::gainInPercent, percent);
 }
 
 juce::StringArray AppSettings::getDisabledPlugins() const

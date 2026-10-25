@@ -33,17 +33,11 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
     setupLabel (envelopeLabel, "페이드 엔벨로프");
     setupLabel (zoomLabel, "확대");
     setupLabel (sizeLabel, "크기");
-    setupLabel (gainLabel, "게인 (dB)");
 
-    // the 기본 tab's gain control, on the same value (Cue::gainDb): the range, the step, the box and the double-click reset match
-    gainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    gainSlider.setRange (Cue::minGainDb, Cue::maxGainDb, 0.1);
-    gainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 90, Palette::fieldHeight);
-    gainSlider.setTextValueSuffix (" dB");
-    gainSlider.setDoubleClickReturnValue (true, 0.0);
-    gainSlider.setWantsKeyboardFocus (false);
+    // the 기본 tab's gain control, on the same value (Cue::gainDb) and in the same unit (GainSlider / GainUnitButton)
     gainSlider.onValueChange = [this] { commitGain(); };
     addAndMakeVisible (gainSlider);
+    addAndMakeVisible (gainUnitButton);
 
     setupEditor (startEditor, "0123456789:.", 12);
     startEditor.onReturnKey = [this] { commitStart(); startEditor.giveAwayKeyboardFocus(); };
@@ -258,6 +252,12 @@ void TimeLoopsPanel::refresh()
         length << ko ("  · 전체 ") << formatTimeMs (effective);   // slices / play count / rate change the total
 
     lengthLabel.setText (length, juce::dontSendNotification);
+}
+
+void TimeLoopsPanel::bindGainUnit (juce::Value& percent)
+{
+    gainUnitButton.bindUnit (percent);
+    gainSlider.bindUnit (percent);
 }
 
 void TimeLoopsPanel::setPlayback (const AudioEngine::PlayingCue* playing)
@@ -608,7 +608,7 @@ void TimeLoopsPanel::resized()
     place (linearToggle, toggleWidth (linearToggle), 12);
     place (lockToggle, toggleWidth (lockToggle), 0);
     row = nextRow();
-    gainLabel.setBounds (row.removeFromLeft (64));
+    gainUnitButton.setBounds (row.removeFromLeft (64));
     gainSlider.setBounds (row);
 
     area = clusters.trigger;

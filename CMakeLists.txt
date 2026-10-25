@@ -202,6 +202,7 @@ target_sources(Enqueue PRIVATE
     src/ui/CueInspector.cpp
     src/ui/WaveformView.cpp
     src/ui/TimeLoopsPanel.cpp
+    src/ui/GainControl.cpp
     src/ui/AudioSettingsDialog.cpp
     src/ui/WorkspaceSettingsDialog.cpp
     src/ui/KeyCapture.cpp

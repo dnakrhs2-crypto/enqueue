@@ -14,6 +14,7 @@
 #include "model/CueColors.h"
 #include "ui/GroupModeLabels.h"
 #include "ui/PluginChainComponent.h"
+#include "ui/GainControl.h"
 #include "ui/UiUtils.h"
 #include "ui/InspectorLayout.h"
 
@@ -146,7 +147,7 @@ public:
         : document (doc), cues (doc.cues), engine (e), settings (s)
     {
         for (auto* l : { &numberLabel, &nameLabel, &colourLabel, &fileLabel, &preLabel, &postLabel, &continueLabel,
-                         &fadeOutLabel, &gainLabel, &notesLabel })
+                         &fadeOutLabel, &notesLabel })
             addAndMakeVisible (l);
 
         styleLabel (numberLabel, ko ("번호"));
@@ -157,7 +158,6 @@ public:
         styleLabel (postLabel, ko ("포스트웨이트"));
         styleLabel (continueLabel, ko ("진행"));
         styleLabel (fadeOutLabel, ko ("정지 페이드 (ms)"));
-        styleLabel (gainLabel, ko ("게인 (dB)"));
         styleLabel (notesLabel, ko ("메모"));
 
         auto textEditor = [this] (juce::TextEditor& editor, std::function<void()> commit)
@@ -295,14 +295,9 @@ public:
         armedToggle.setTooltip (ko ("켜면 이 큐는 재생되지 않고 GO와 시퀀스가 그냥 지나갑니다"));
         autoLoadToggle.setTooltip (ko ("플레이헤드가 이 큐에 오면 미리 로드해 GO 지연을 없앱니다"));
 
-        gainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-        gainSlider.setRange (Cue::minGainDb, Cue::maxGainDb, 0.1);
-        gainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 90, Palette::fieldHeight);
-        gainSlider.setTextValueSuffix (" dB");
-        gainSlider.setDoubleClickReturnValue (true, 0.0);
-        gainSlider.setWantsKeyboardFocus (false);
         gainSlider.onValueChange = [this] { commitGain(); };
         addAndMakeVisible (gainSlider);
+        addAndMakeVisible (gainUnitButton);
 
         notesEditor.setFont (Palette::font (Palette::fieldValueSize));
         notesEditor.setMultiLine (true, true);
@@ -351,6 +346,13 @@ public:
     {
         editable = shouldBeEditable;
         refresh();
+    }
+
+    /** The gain's unit (true = %), shared with the 재생 tab: either tab's gain button switches both. */
+    void bindGainUnit (juce::Value& percent)
+    {
+        gainUnitButton.bindUnit (percent);
+        gainSlider.bindUnit (percent);
     }
 
     void refresh()
@@ -462,7 +464,7 @@ public:
         for (auto* c : std::initializer_list<juce::Component*> { &fileLabel, &filePathLabel, &browseButton, &autoLoadToggle })
             c->setVisible (audio);
 
-        for (auto* c : std::initializer_list<juce::Component*> { &fadeOutLabel, &fadeOutEditor, &gainLabel, &gainSlider })
+        for (auto* c : std::initializer_list<juce::Component*> { &fadeOutLabel, &fadeOutEditor, &gainUnitButton, &gainSlider })
             c->setVisible (sound);
 
         if (cue->file == juce::File())
@@ -516,7 +518,7 @@ public:
         fadeOutEditor.setBounds (row.removeFromRight (90));
         fadeOutLabel.setBounds (row.removeFromRight (104));
         row = nextRow();
-        gainLabel.setBounds (row.removeFromLeft (64));
+        gainUnitButton.setBounds (row.removeFromLeft (64));
         gainSlider.setBounds (row);
 
         area = clusters.trigger;
@@ -904,7 +906,7 @@ private:
     AudioEngine& engine;
     AppSettings& settings;
 
-    juce::Label numberLabel, nameLabel, colourLabel, fileLabel, preLabel, postLabel, continueLabel, fadeOutLabel, gainLabel, notesLabel, filePathLabel;
+    juce::Label numberLabel, nameLabel, colourLabel, fileLabel, preLabel, postLabel, continueLabel, fadeOutLabel, notesLabel, filePathLabel;
     NumberEditor numberEditor;
     PendingEditor nameEditor, preEditor, postEditor, fadeOutEditor, notesEditor;
     struct DeferredNumber { juce::Uuid id; juce::String number; };
@@ -916,7 +918,8 @@ private:
     ShortcutService* shortcuts = nullptr;
     juce::Label hotkeyConflict;
     juce::TextButton clearHotkeyButton, browseButton;
-    juce::Slider gainSlider;
+    GainUnitButton gainUnitButton;   // "게인 (dB)" / "게인 (%)": switches the unit here and on the 재생 tab
+    GainSlider gainSlider;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> dropArea;
     juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show
@@ -3790,6 +3793,13 @@ CueInspector::CueInspector (ProjectDocument& doc, AudioEngine& e, AppSettings& s
     timeLoops->onSeekPlay = [this] (double fileSeconds) { if (onSeekPlay) onSeekPlay (fileSeconds); };
     timeLoops->onReset = [this] { if (onResetCue) onResetCue(); };
 
+    // the 기본 / 재생 gain in dB or % (gom 2026-10-25): one unit for both tabs, kept per PC like the other view settings
+    gainInPercent = settings.getGainInPercent();
+    gainUnitFollower.onChange = [this] { settings.setGainInPercent (static_cast<bool> (gainInPercent.getValue())); };
+    gainInPercent.addListener (&gainUnitFollower);
+    basics->bindGainUnit (gainInPercent);
+    timeLoops->bindGainUnit (gainInPercent);
+
     levelsPanel = std::make_unique<LevelsPanel> (document, engine);
     levels = levelsPanel.get();
     trimPanel = std::make_unique<TrimPanel> (document, engine);
@@ -3857,6 +3867,7 @@ void CueInspector::detachShortcutService()
 
 CueInspector::~CueInspector()
 {
+    gainInPercent.removeListener (&gainUnitFollower);
     detachShortcutService();
     cancelPendingUpdate();
     engine.getDeviceManager().removeChangeListener (this);
