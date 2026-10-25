@@ -1,4 +1,4 @@
-From 05e58bf0bd209862c216ba26917a991cc30b7b7b Mon Sep 17 00:00:00 2001
+From 99ea41e73bf4e0f73da23454998d4b34659796d3 Mon Sep 17 00:00:00 2001
 From: gom <sound@letsplax.com>
 Date: Sun, 25 Oct 2026 15:58:35 +0900
 Subject: [PATCH] Enqueue patch: MP3 frames that can't reach their bit
@@ -12,21 +12,23 @@ decoder now tracks how many of the bytes in front are real main data; a frame th
 still go in front, so the next frame finds the real ones), and a frame that can't be decoded still fills its place in
 time instead of producing no samples, which shifted everything after it by a frame.
 
-MP3Reader's seek starts 10 frames early (the reservoir and the filter banks settle before the asked position), counts
-the Xing / Info tag frame as no audio, treats a skip that ends exactly on a frame as that frame used (at 48 kHz every
-multiple of 1.2 s is a frame start: it played the frame before), and counts 576 samples per MPEG-2 / 2.5 layer III
-frame (24 kHz and below; 1152 gave such files twice their length and earlier audio again past their end).
+MP3Reader's seek starts early enough for the reservoir to fill again even from the stream's smallest frames (VBR stores
+silence in 8 / 32 kbps frames: 3 bytes of main data a frame at 24 kHz stereo) plus two frames for the filter banks - 10
+frames at 44.1 / 48 kHz, up to 87 at 24 kHz. It counts the Xing / Info tag frame as no audio, treats a skip that ends
+exactly on a frame as that frame used (at 48 kHz every multiple of 1.2 s is a frame start: it played the frame before),
+and counts 576 samples per MPEG-2 / 2.5 layer III frame (24 kHz and below; 1152 gave such files twice their length and
+earlier audio again past their end).
 
 Files whose frames all reach their reservoir decode bit-identically to before.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GC9pPHhomoy5bCkfqPG5vn
 ---
- .../codecs/juce_MP3AudioFormat.cpp            | 57 +++++++++++++++++--
- 1 file changed, 51 insertions(+), 6 deletions(-)
+ .../codecs/juce_MP3AudioFormat.cpp            | 75 +++++++++++++++++--
+ 1 file changed, 69 insertions(+), 6 deletions(-)
 
 diff --git a/modules/juce_audio_formats/codecs/juce_MP3AudioFormat.cpp b/modules/juce_audio_formats/codecs/juce_MP3AudioFormat.cpp
-index 79644b061c..7da357108a 100644
+index 79644b061c..56658f93e4 100644
 --- a/modules/juce_audio_formats/codecs/juce_MP3AudioFormat.cpp
 +++ b/modules/juce_audio_formats/codecs/juce_MP3AudioFormat.cpp
 @@ -1422,6 +1422,7 @@ struct MP3Stream
@@ -135,9 +137,9 @@ index 79644b061c..7da357108a 100644
          if (currentPosition != startSampleInFile)
          {
 -            if (! stream.seek ((int) (startSampleInFile / 1152 - 1)))
-+            // decode from 10 frames early: the first frames after a seek can't reach their bit reservoir yet (they
-+            // come out silent) and the filter banks need a frame to settle - 10 covers a 32 kbps stream's 511 bytes
-+            if (! stream.seek ((int) (startSampleInFile / samplesPerFrame()) + stream.firstAudioFrame - 10))
++            // decode from a few frames early: the first frames after a seek can't reach their bit reservoir yet (they
++            // come out silent) and the filter banks need a frame to settle
++            if (! stream.seek ((int) (startSampleInFile / samplesPerFrame()) + stream.firstAudioFrame - framesToPreRoll()))
              {
                  currentPosition = -1;
                  createEmptyDecodedData();
@@ -161,7 +163,7 @@ index 79644b061c..7da357108a 100644
                      {
                          decodedStart += toSkip;
                          break;
-@@ -3072,6 +3110,13 @@ private:
+@@ -3072,6 +3110,31 @@ private:
          decodedEnd = decodedDataSize;
      }
  
@@ -172,10 +174,28 @@ index 79644b061c..7da357108a 100644
 +        return stream.frame.layer == 1 ? 384 : ((stream.frame.layer == 3 && stream.frame.lsf != 0) ? 576 : 1152);
 +    }
 +
++    // Frames to decode before a seek target: enough for the bit reservoir to fill again even from a stream's smallest
++    // frames (8 / 32 kbps, as VBR stores silence: 3 bytes of main data a frame at 24 kHz stereo), and two for the filter
++    // banks - 10 at 44.1 / 48 kHz, up to 87 at 24 kHz, where a fixed 10 left the first frame of sound after a pause silent
++    int framesToPreRoll() const noexcept
++    {
++        const auto& f = stream.frame;
++
++        if (f.layer != 3)
++            return 2;
++
++        const int smallestFrame = (f.lsf != 0 ? 72000 * 8 : 144000 * 32) / f.getFrequency();
++        const int sideInfo = (f.lsf != 0 ? (f.numChannels == 1 ? 9 : 17) : (f.numChannels == 1 ? 17 : 32))
++                               + (f.crc16FollowsHeader ? 2 : 0);
++        const int mainData = jmax (1, smallestFrame - 4 - sideInfo);
++        const int reservoir = f.lsf != 0 ? 255 : 511;
++        return (reservoir + mainData - 1) / mainData + 2;
++    }
++
      bool readNextBlock()
      {
          for (int attempts = 10; --attempts >= 0;)
-@@ -3141,7 +3186,7 @@ private:
+@@ -3141,7 +3204,7 @@ private:
              }
          }
  

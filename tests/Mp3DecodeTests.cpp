@@ -315,6 +315,54 @@ public:
                 expectEquals (wrong, 0);
             }
         }
+
+        // tests/assets/lsf24k_vbr.mp3: 5 s stereo 24 kHz, LAME VBR (-q:a 4) via ffmpeg: silence, a tremolo chord from 2 s to
+        // 3.2 s, silence, a tone from 3.7 s to 4.6 s. LAME stores the silence in 8 kbps frames with 3 bytes of main data
+        // each, so the first frame of sound reaches about 240 bytes back: a fixed 10-frame pre-roll left it silent
+        // after a jump to just before the sound (a trim start set at the end of a pause).
+        beginTest ("a 24 kHz VBR file: a jump to just before the sound after a pause starts with the sound");
+        {
+            juce::MemoryBlock vbrData;
+            expect (asset.getSiblingFile ("lsf24k_vbr.mp3").loadFileAsData (vbrData), "tests/assets/lsf24k_vbr.mp3 not found");
+            auto inOrderReader = open (vbrData);
+            auto jumpReader = open (vbrData);
+            expect (inOrderReader != nullptr && jumpReader != nullptr);
+
+            if (inOrderReader != nullptr && jumpReader != nullptr)
+            {
+                const auto inOrder = decodeInOrder (*inOrderReader, 5 * 24000);
+                juce::Array<int> onsets;
+
+                // where the sound starts after each pause (encoder delay included; the pause decodes to below -60 dB)
+                for (int i = 24000; i < inOrder.getNumSamples() && onsets.size() < 2; ++i)
+                {
+                    if (std::abs (inOrder.getSample (0, i)) > 0.01f && peak (inOrder, i - 4800, 4000) < 1.0e-3f)
+                    {
+                        onsets.add (i);
+                        i += 24000;   // past this sound
+                    }
+                }
+
+                expectEquals (onsets.size(), 2);
+                juce::StringArray wrong;
+
+                for (const auto onset : onsets)
+                {
+                    for (const int before : { 300, 1200, 2400, 4800, 9000 })
+                    {
+                        juce::AudioBuffer<float> got (inOrder.getNumChannels(), 4000);
+                        got.clear();
+                        jumpReader->read (&got, 0, 4000, onset - before, true, true);
+                        const float diff = maxDiff (got, 0, inOrder, onset - before, 4000);
+
+                        if (diff > 1.0e-4f)
+                            wrong.add (juce::String (before) + " before " + juce::String (onset) + ": max diff " + juce::String (diff, 4));
+                    }
+                }
+
+                expect (wrong.isEmpty(), wrong.joinIntoString ("; "));
+            }
+        }
     }
 };
 
