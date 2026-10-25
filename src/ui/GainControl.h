@@ -44,12 +44,17 @@ public:
         negative), and text that is not a number keeps the gain. */
     double getValueFromText (const juce::String& text) override;
     double snapValue (double attemptedValue, DragMode) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
 private:
     void applyUnit();
+    /** 'db' on the shown unit's step: 0.1 dB, or 0.1 % in %. */
+    double onGrid (double db) const;
 
     juce::Value unit;
     ValueFollower follower;
+    bool wheeling = false;    // inside a wheel notch: snapValue moves at least one step from wheelFrom
+    double wheelFrom = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GainSlider)
 };

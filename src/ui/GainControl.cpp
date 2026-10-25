@@ -133,15 +133,40 @@ double GainSlider::getValueFromText (const juce::String& text)
     return percent ? GainUnits::fromPercent (number) : number;
 }
 
-double GainSlider::snapValue (double attemptedValue, DragMode)
+double GainSlider::onGrid (double db) const
 {
-    const double db = juce::jlimit (Cue::minGainDb, Cue::maxGainDb, attemptedValue);
+    db = juce::jlimit (Cue::minGainDb, Cue::maxGainDb, db);
 
     if (showsPercent())
         return GainUnits::fromPercent (std::round (GainUnits::toPercent (db) * 10.0) / 10.0);
 
     // the 0.1 dB interval the slider had, by the same rule JUCE snapped it with
     return juce::jlimit (Cue::minGainDb, Cue::maxGainDb, Cue::minGainDb + 0.1 * std::floor ((db - Cue::minGainDb) / 0.1 + 0.5));
+}
+
+double GainSlider::snapValue (double attemptedValue, DragMode)
+{
+    const double snapped = onGrid (attemptedValue);
+
+    if (! wheeling || juce::approximatelyEqual (attemptedValue, wheelFrom) || ! juce::approximatelyEqual (snapped, onGrid (wheelFrom)))
+        return snapped;
+
+    // JUCE moves a wheel notch by a share of the range (about 5 dB); near silence in %, or with a touchpad's small
+    // steps in dB, that lands back on the step it started from and the wheel would do nothing: one step on instead
+    const double direction = attemptedValue > wheelFrom ? 1.0 : -1.0;
+
+    if (showsPercent())
+        return GainUnits::fromPercent (juce::jlimit (0.0, GainUnits::maxPercent(),
+                                                     std::round (GainUnits::toPercent (wheelFrom) * 10.0) / 10.0 + 0.1 * direction));
+
+    return onGrid (onGrid (wheelFrom) + 0.1 * direction);
+}
+
+void GainSlider::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    const juce::ScopedValueSetter<bool> notch (wheeling, true);
+    wheelFrom = getValue();
+    juce::Slider::mouseWheelMove (e, wheel);
 }
 
 //==============================================================================

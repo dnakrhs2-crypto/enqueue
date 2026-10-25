@@ -222,6 +222,59 @@ public:
             expectEquals (shown (*basic.slider), juce::String ("100.0 %"), "undo shows in %");
         }
 
+        beginTest ("a wheel notch always moves the gain a step: up off silence and down to it in %, a touchpad's small step in dB");
+        {
+            Fixture f;
+            f.addSound ("a");
+            f.document().cues.setSelectedIndex (0);
+            dispatch();
+            auto basic = controlsOn (f, 0);
+            if (basic.button == nullptr || basic.slider == nullptr)
+                return;
+            auto& slider = *basic.slider;
+            juce::int64 ms = 1000000;
+            const auto wheel = [&] (float deltaY)
+            {
+                ms += 100;   // a new event time each notch (JUCE drops a repeat with the same time)
+                const auto at = slider.getLocalBounds().getCentre().toFloat();
+                const juce::Time time (ms);
+                const juce::MouseEvent event (juce::Desktop::getInstance().getMainMouseSource(), at, {}, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                              &slider, &slider, time, at, time, 1, false);
+                juce::MouseWheelDetails details {};
+                details.deltaY = deltaY;
+                slider.mouseWheelMove (event, details);
+            };
+            const float notch = 60.0f / 256.0f;   // one notch of a mouse wheel on Windows (juce_Windowing_windows.cpp)
+            const auto gain = [&] { return f.document().cues.getSelected()->gainDb; };
+
+            press (*basic.button);
+            type (slider, "0");
+            expectEquals (gain(), Cue::minGainDb);
+            wheel (notch);
+            expectWithinAbsoluteError (GainUnits::toPercent (gain()), 0.1, 1e-6, "one notch up from silence");
+            expectEquals (shown (slider), juce::String ("0.1 %"));
+            wheel (notch);
+            expectGreaterThan (GainUnits::toPercent (gain()), 0.1 + 1e-6, "and on up");
+            type (slider, "0.1");
+            wheel (-notch);
+            expectEquals (gain(), Cue::minGainDb, "one notch down from 0.1 % is silence");
+            expectEquals (shown (slider), juce::String ("0.0 %"));
+            for (int i = 0; i < 40; ++i)
+                wheel (notch);
+            expectGreaterThan (GainUnits::toPercent (gain()), 100.0, "the wheel goes past 100 %");
+
+            press (*basic.button);   // back to dB
+            type (slider, "-6");
+            wheel (0.001f);   // a touchpad's small step: 0.02 dB, under half a 0.1 dB step
+            expectWithinAbsoluteError (gain(), -5.9, 1e-9, "still one 0.1 dB step up, as the 0.1 dB interval gave");
+            wheel (-0.001f);
+            wheel (-0.001f);
+            expectWithinAbsoluteError (gain(), -6.1, 1e-9, "and down");
+            wheel (notch);
+            expectGreaterThan (gain(), -5.0, "a mouse notch is the usual bigger step");
+            expectWithinAbsoluteError (gain(), std::round (gain() * 10.0) / 10.0, 1e-9, "on the 0.1 dB grid");
+        }
+
         beginTest ("in dB nothing changes: 0.1 dB steps, a typed % still lands, a typo keeps the gain");
         {
             Fixture f;
