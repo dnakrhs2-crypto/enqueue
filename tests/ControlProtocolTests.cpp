@@ -128,7 +128,7 @@ public:
             expectEquals ((int) decoder.bufferedBytes(), 0);
         }
 
-        beginTest ("all nine commands, hello negotiation, ping and session-free requestState have typed values");
+        beginTest ("all eleven commands, hello negotiation, ping and session-free requestState have typed values");
         {
             const std::string channel = "\"channelId\":\"11111111111141118111111111111111\"";
             const std::string fx = "\"fxId\":\"22222222222242228222222222222222\"";
@@ -138,7 +138,8 @@ public:
                 { "setMuteGroup", "{\"group\":\"fx\",\"muted\":false}" },
                 { "setPluginGroupOff", "{" + channel + ",\"index\":2,\"off\":true}" },
                 { "setPluginGroupOffEverywhere", "{\"index\":2,\"off\":true}" },
-                { "setSend", "{" + channel + "," + fx + ",\"amount\":0.38,\"pre\":false}" }, { "requestState", "{}" }
+                { "setSend", "{" + channel + "," + fx + ",\"amount\":0.38,\"pre\":false}" },
+                { "toggleFx", "{" + fx + "}" }, { "setFxOn", "{" + fx + ",\"on\":false}" }, { "requestState", "{}" }
             };
             for (size_t i = 0; i < std::size (commands); ++i)
             {
@@ -155,6 +156,13 @@ public:
                         if (const auto* a = std::get_if<P::SetPluginGroupOffEverywhere> (&c->args))
                         {
                             expectEquals (a->index, 2); expect (a->off);
+                        }
+                        if (const auto* a = std::get_if<P::ToggleFx> (&c->args))
+                            expectEquals (a->fxId.toString(), juce::String ("22222222222242228222222222222222"));
+                        if (const auto* a = std::get_if<P::SetFxOn> (&c->args))
+                        {
+                            expectEquals (a->fxId.toString(), juce::String ("22222222222242228222222222222222"));
+                            expect (! a->on);
                         }
                     }
                 }
@@ -202,6 +210,50 @@ public:
             const auto ping = P::validate (decode ("{\"v\":1,\"type\":\"ping\",\"id\":\"3\",\"instanceId\":\"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa\"}\n"));
             expect (std::holds_alternative<P::ClientMessage> (ping));
             if (const auto* m = std::get_if<P::ClientMessage> (&ping)) expect (std::holds_alternative<P::Ping> (*m));
+        }
+
+        beginTest ("FX commands require a wire FX id, a boolean switch and the edit-command envelope");
+        {
+            const std::string fx = "\"fxId\":\"22222222222242228222222222222222\"";
+            for (const auto* commandName : { "toggleFx", "setFxOn" })
+            {
+                const auto args = "{" + fx + ",\"on\":true}";
+                auto request = juce::JSON::parse (command (commandName, args).c_str());
+                request.getDynamicObject()->setProperty ("ifRevision", (juce::int64) 7);
+                const auto validated = P::validate (request);
+                const auto* message = std::get_if<P::ClientMessage> (&validated);
+                expect (message != nullptr);
+                if (message != nullptr)
+                {
+                    const auto* c = std::get_if<P::Command> (message);
+                    expect (c != nullptr);
+                    if (c != nullptr)
+                    {
+                        expect (c->ifRevision == 7);
+                        if (const auto* a = std::get_if<P::SetFxOn> (&c->args)) expect (a->on);
+                    }
+                }
+                for (const auto* field : { "fxId", "instanceId", "sessionId" })
+                {
+                    auto bad = request.clone();
+                    auto object = juce::String (field) == "fxId" ? bad["args"] : bad;
+                    object.getDynamicObject()->removeProperty (field);
+                    invalid (bad);
+                }
+                for (const auto* value : { "null", "1", "\"not-a-uuid\"", "\"00000000000000000000000000000000\"",
+                                          "\"22222222-2222-4222-8222-222222222222\"" })
+                    invalid (juce::JSON::parse (command (commandName, "{\"fxId\":" + std::string (value) + ",\"on\":true}").c_str()));
+            }
+            invalid (juce::JSON::parse (command ("setFxOn", "{" + fx + "}").c_str()));
+            for (const auto* value : { "null", "0", "1", "\"true\"" })
+                invalid (juce::JSON::parse (command ("setFxOn", "{" + fx + ",\"on\":" + value + "}").c_str()));
+            const P::CommandArgs invalidArgs[] { P::ToggleFx { juce::Uuid::null() }, P::SetFxOn { juce::Uuid::null(), true } };
+            for (const auto& args : invalidArgs)
+            {
+                const auto error = P::validateCommand ({ "2", juce::Uuid(), juce::Uuid(), {}, args });
+                expect (error.has_value());
+                if (error) expect (error->code == P::ErrorCode::invalidArgument);
+            }
         }
 
         beginTest ("strict ids, enums, required fields, bools, indexes, numeric ranges and unknown direction/command");
@@ -258,6 +310,36 @@ public:
             }
         }
 
+        beginTest ("FX projections include both switch values and changes write on only when present");
+        {
+            P::Projection projection;
+            P::Fx first, second;
+            expect (first.on && second.on);
+            second.on = false;
+            projection.fx = { first, second };
+            const auto state = P::toVar (projection);
+            expectEquals (state["fx"].size(), 2);
+            expect (state["fx"][0]["on"].isBool() && (bool) state["fx"][0]["on"]);
+            expect (state["fx"][1]["on"].isBool() && ! (bool) state["fx"][1]["on"]);
+            P::FxChanges change;
+            change.id = first.id;
+            expect (change.empty());
+            change.name = "Renamed FX";
+            P::Changes changes;
+            changes.fx.push_back (change);
+            expect (! P::toVar (changes)["fx"][0].hasProperty ("on"));
+            changes.fx[0].name.reset();
+            for (const bool on : { false, true })
+            {
+                changes.fx[0].on = on;
+                expect (! changes.fx[0].empty());
+                const auto value = P::toVar (changes)["fx"][0];
+                expectEquals (value.getDynamicObject()->getProperties().size(), 2);   // id + on only
+                expectEquals (value["id"].toString(), first.id.toString());
+                expect (value["on"].isBool() && (bool) value["on"] == on);
+            }
+        }
+
         beginTest ("every server message and ack result encodes required fields, errors are stable and states are bounded");
         {
             const P::Context context { juce::Uuid(), juce::Uuid(), P::maxSafeInteger };
@@ -265,9 +347,10 @@ public:
             expectEquals (hello["type"].toString(), juce::String ("helloAck"));
             expectEquals (hello["server"]["version"].toString(), juce::String ("0.5.3"));
             expectEquals ((int) hello["v"], 1);
-            expectEquals (hello["capabilities"].size(), 6);
+            expectEquals (hello["capabilities"].size(), 7);
             expectEquals (hello["capabilities"][4].toString(), juce::String ("sends"));
             expectEquals (hello["capabilities"][5].toString(), juce::String ("pluginGroupsEverywhere"));
+            expectEquals (hello["capabilities"][6].toString(), juce::String ("fxOn"));
             expectEquals ((int) hello["eventIntervalMs"], 100); expectEquals ((int) hello["heartbeatIntervalMs"], 5000);
             P::Projection projection;
             projection.session.name = juce::String::fromUTF8 ("곰 \"방송\"\n");
@@ -284,7 +367,7 @@ public:
             expect (delta["changes"].isObject());
             expectEquals (delta["changes"].getDynamicObject()->getProperties().size(), 0);
             expectEquals ((juce::int64) delta["baseRevision"], context.revision - 2);
-            const P::CommandResult results[] { P::OnResult { true }, P::AllChannelsResult { false, 2 }, P::MuteGroupResult { P::MuteGroup::fx, true },
+            const P::CommandResult results[] { P::OnResult { true }, P::OnResult { false }, P::AllChannelsResult { false, 2 }, P::MuteGroupResult { P::MuteGroup::fx, true },
                                               P::PluginGroupResult { 2, true }, P::PluginGroupEverywhereResult { 2, true, 3 },
                                               P::SendResult { 0.38, false }, P::RequestStateResult { context.revision } };
             for (const auto& result : results)
@@ -294,6 +377,12 @@ public:
                 for (const auto* field : { "id", "instanceId", "sessionId", "revision", "changed", "result" }) expect (ack.hasProperty (field));
                 expect (ack["changed"].isBool() && ! (bool) ack["changed"]);
                 expect (ack["result"].isObject());
+                if (const auto* r = std::get_if<P::OnResult> (&result))
+                {
+                    const auto& value = ack["result"];
+                    expectEquals (value.getDynamicObject()->getProperties().size(), 1);
+                    expect (value["on"].isBool() && (bool) value["on"] == r->on);
+                }
                 if (const auto* r = std::get_if<P::PluginGroupEverywhereResult> (&result))
                 {
                     const auto& value = ack["result"];

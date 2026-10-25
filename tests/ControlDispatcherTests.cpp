@@ -116,6 +116,89 @@ public:
             expect (f.callbacksOnMessageThread); expect (! f.state.getCurrent().projection.audioRunning);
         }
 
+        beginTest ("FX toggle/set changes only its model and engine return, with one value announcement and revision");
+        {
+            Fixture f;
+            const auto second = f.document.addFx();
+            f.document.setSend (f.channel(), f.fx(), 0.5, true);
+            f.document.setSend (f.channel(), second, 0.25, false);
+            f.clean();
+            const auto before = f.state.getCurrent();
+            expect (f.document.getSession().fx[0].on && f.document.getSession().fx[1].on);
+            expectWithinAbsoluteError (f.render(), 0.875f, 1.0e-6f);   // dry 0.5 + FX 1 0.25 + FX 2 0.125
+            const auto off = ack (f, P::ToggleFx { f.fx() });
+            expect (off.changed && ! result<P::OnResult> (off).on);
+            expect (! f.document.getSession().fx[0].on && f.document.getSession().fx[1].on);
+            expect (f.document.isDirty()); expectEquals (f.valueCalls, 1);
+            expectEquals (f.groupCalls, 0); expectEquals (f.structureCalls, 0);
+            expectEquals (off.context.revision, before.revision + 1);
+            expectEquals (f.state.getCurrent().structureRevision, before.structureRevision);
+            expect (f.state.getCurrent().projection.fx[1] == before.projection.fx[1]);
+            expectWithinAbsoluteError (f.render(), 0.625f, 1.0e-6f);   // FX 2 keeps returning while FX 1 is OFF
+            expect (f.state.getCurrent().projection.channels[0].sends == before.projection.channels[0].sends);
+            expectWithinAbsoluteError (f.document.getSession().fx[0].returnAmount, 1.0, 1.0e-12);
+
+            const auto repeated = ack (f, P::SetFxOn { f.fx(), false });
+            expect (! repeated.changed && ! result<P::OnResult> (repeated).on);
+            expectEquals (repeated.context.revision, off.context.revision); expectEquals (f.valueCalls, 1);
+            f.clean();
+            const auto cleanRevision = f.state.getCurrent().revision;
+            const auto unchanged = ack (f, P::SetFxOn { f.fx(), false });
+            expect (! unchanged.changed && ! f.document.isDirty()); expectEquals (f.valueCalls, 0);
+            expectEquals (unchanged.context.revision, cleanRevision);
+
+            const auto on = ack (f, P::SetFxOn { f.fx(), true });
+            expect (on.changed && result<P::OnResult> (on).on);
+            expect (f.document.getSession().fx[0].on && f.document.getSession().fx[1].on);
+            expectEquals (on.context.revision, cleanRevision + 1); expectEquals (f.valueCalls, 1);
+            expectWithinAbsoluteError (f.render(), 0.875f, 1.0e-6f);
+            expectEquals (f.groupCalls, 0); expectEquals (f.structureCalls, 0);
+            expect (f.callbacksOnMessageThread);
+        }
+
+        beginTest ("missing FX and stale FX revisions never invoke the setter or announce a value change");
+        {
+            Fixture f;
+            f.document.addFx(); f.clean();
+            const auto revision = f.state.getCurrent().revision;
+            error (f, f.command (P::ToggleFx { juce::Uuid() }), P::ErrorCode::fxNotFound);
+            error (f, f.command (P::SetFxOn { juce::Uuid(), false }), P::ErrorCode::fxNotFound);
+            for (const auto& args : { P::CommandArgs { P::ToggleFx { f.fx() } }, P::CommandArgs { P::SetFxOn { f.fx(), false } } })
+            {
+                auto stale = f.command (args); stale.ifRevision = revision - 1;
+                error (f, stale, P::ErrorCode::revisionConflict);
+            }
+            expect (f.document.getSession().fx[0].on && f.document.getSession().fx[1].on);
+            expectEquals (f.state.getCurrent().revision, revision); expect (! f.document.isDirty());
+            expectEquals (f.valueCalls, 0); expectEquals (f.groupCalls, 0); expectEquals (f.structureCalls, 0);
+        }
+
+        beginTest ("the FX switch and FX mute group stay independent, and releasing the group keeps an OFF FX silent");
+        {
+            Fixture f;
+            const auto second = f.document.addFx();
+            f.document.setSend (f.channel(), f.fx(), 0.5, true);
+            f.document.setSend (f.channel(), second, 0.25, false);
+            f.document.setFxMuteGroup (f.fx(), true);
+            f.clean();
+            expect (ack (f, P::ToggleMuteGroup { P::MuteGroup::fx }).changed);
+            expect (f.groups.isMuted (MuteGroups::Group::fx));
+            expect (f.document.getSession().fx[0].on && f.document.getSession().fx[1].on);
+            expectWithinAbsoluteError (f.render(), 0.625f, 1.0e-6f);
+            expect (ack (f, P::ToggleFx { f.fx() }).changed);
+            expect (f.groups.isMuted (MuteGroups::Group::fx));
+            expect (! f.document.getSession().fx[0].on && f.document.getSession().fx[1].on);
+            expect (ack (f, P::ToggleMuteGroup { P::MuteGroup::fx }).changed);
+            expect (! f.groups.isMuted (MuteGroups::Group::fx));
+            expect (! f.document.getSession().fx[0].on && f.document.getSession().fx[1].on);
+            expectWithinAbsoluteError (f.render(), 0.625f, 1.0e-6f);
+            expect (ack (f, P::ToggleFx { f.fx() }).changed);
+            expect (! f.groups.isMuted (MuteGroups::Group::fx));
+            expect (f.document.getSession().fx[0].muteGroup && ! f.document.getSession().fx[1].muteGroup);
+            expectWithinAbsoluteError (f.render(), 0.875f, 1.0e-6f);
+            expectEquals (f.valueCalls, 2); expectEquals (f.groupCalls, 2); expectEquals (f.structureCalls, 0);
+        }
+
         beginTest ("two clients toggle at dispatch time and competing conditional sets apply exactly once");
         {
             Fixture f;
@@ -330,7 +413,7 @@ public:
                 P::SetMuteGroup { P::MuteGroup::mic, false }, P::SetMuteGroup { P::MuteGroup::fx, false },
                 P::SetPluginGroupOff { f.channel(), 1, false }, P::SetPluginGroupOffEverywhere { 1, false },
                 P::SetSend { f.channel(), f.fx(), 0.0, {} },
-                P::SetSend { f.channel(), f.fx(), {}, false }, P::RequestState {} };
+                P::SetSend { f.channel(), f.fx(), {}, false }, P::SetFxOn { f.fx(), true }, P::RequestState {} };
             for (const auto& command : commands)
             {
                 const auto response = ack (f, command);
@@ -361,6 +444,8 @@ public:
             error (f, f.command (P::SetSend { f.channel(), f.fx(), 1.1, {} }), P::ErrorCode::invalidArgument);
             error (f, f.command (P::SetSend { f.channel(), f.fx(), {}, {} }), P::ErrorCode::invalidArgument);
             error (f, f.command (P::ToggleChannel { juce::Uuid::null() }), P::ErrorCode::invalidArgument);
+            error (f, f.command (P::ToggleFx { juce::Uuid::null() }), P::ErrorCode::invalidArgument);
+            error (f, f.command (P::SetFxOn { juce::Uuid::null(), false }), P::ErrorCode::invalidArgument);
             error (f, f.command (P::SetMuteGroup { (P::MuteGroup) 99, true }), P::ErrorCode::invalidArgument);
             auto c = f.command (P::ToggleChannel { f.channel() }); c.instanceId = juce::Uuid();
             error (f, c, P::ErrorCode::instanceChanged);

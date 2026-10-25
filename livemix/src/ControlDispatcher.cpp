@@ -86,6 +86,18 @@ ControlDispatcher::Result ControlDispatcher::dispatch (const ControlProtocol::Co
                 }
                 return P::CommandResult { P::MuteGroupResult { a.group, groups.isMuted (group) } };
             }
+            else if constexpr (std::is_same_v<T, P::ToggleFx> || std::is_same_v<T, P::SetFxOn>)
+            {
+                const auto* fx = session.findFx (a.fxId);
+                if (fx == nullptr) return Code::fxNotFound;
+                bool on;
+                if constexpr (std::is_same_v<T, P::SetFxOn>) on = a.on;
+                else on = ! fx->on;
+                changed = fx->on != on;
+                if (! canAdvance()) return Code::internalError;
+                if (changed) document.setFxOn (a.fxId, on);
+                return P::CommandResult { P::OnResult { on } };
+            }
             else
             {
                 const auto* channel = session.findChannel (a.channelId);

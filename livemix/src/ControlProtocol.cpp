@@ -365,6 +365,17 @@ ControlProtocol::ValidationResult ControlProtocol::validate (const juce::var& v)
             c.args = s;
         }
     }
+    else if (name == "toggleFx" || name == "setFxOn")
+    {
+        if (! uuid (a["fxId"])) return fail (Code::invalidArgument);
+        const juce::Uuid fxId (a["fxId"].toString());
+        if (name == "toggleFx") c.args = ToggleFx { fxId };
+        else
+        {
+            if (! a["on"].isBool()) return fail (Code::invalidArgument);
+            c.args = SetFxOn { fxId, (bool) a["on"] };
+        }
+    }
     else if (name == "setAllChannelsOn")
     {
         if (! a["on"].isBool()) return fail (Code::invalidArgument);
@@ -400,6 +411,7 @@ std::optional<ControlProtocol::Error> ControlProtocol::validateCommand (const Co
     {
         using T = std::decay_t<decltype (a)>;
         if constexpr (std::is_same_v<T, SetChannelOn> || std::is_same_v<T, ToggleChannel>) return ! a.channelId.isNull();
+        else if constexpr (std::is_same_v<T, ToggleFx> || std::is_same_v<T, SetFxOn>) return ! a.fxId.isNull();
         else if constexpr (std::is_same_v<T, SetPluginGroupOff>) return ! a.channelId.isNull() && a.index >= 1 && a.index <= 5;
         else if constexpr (std::is_same_v<T, SetPluginGroupOffEverywhere>) return a.index >= 1 && a.index <= 5;
         else if constexpr (std::is_same_v<T, SetSend>) return ! a.channelId.isNull() && ! a.fxId.isNull()
@@ -452,7 +464,7 @@ std::optional<ControlProtocol::Error> ControlProtocol::Decoder::finish()
 
 void ControlProtocol::Decoder::reset() { pending.clear(); failed = false; }
 bool ControlProtocol::ChannelChanges::empty() const { return ! name && ! on && ! muteGroup && ! pluginGroups && ! sends && ! pan; }
-bool ControlProtocol::FxChanges::empty() const { return ! name && ! muteGroup && ! returnAmount; }
+bool ControlProtocol::FxChanges::empty() const { return ! name && ! muteGroup && ! returnAmount && ! on; }
 bool ControlProtocol::Changes::empty() const
 {
     return ! sessionName && ! sessionDirty && ! audioRunning && ! micMuted && ! fxMuted && channels.empty() && fx.empty();
@@ -477,6 +489,7 @@ juce::var ControlProtocol::toVar (const Projection& p)
     {
         auto item = object();
         put (item, "id", f.id.toString()); put (item, "name", f.name); put (item, "muteGroup", f.muteGroup); put (item, "return", f.returnAmount);
+        put (item, "on", f.on);
         fx.add (item);
     }
     put (v, "channels", channels); put (v, "fx", fx);
@@ -516,6 +529,7 @@ juce::var ControlProtocol::toVar (const Changes& p)
         {
             auto item = object(); put (item, "id", f.id.toString());
             putOptional (item, "name", f.name); putOptional (item, "muteGroup", f.muteGroup); putOptional (item, "return", f.returnAmount);
+            putOptional (item, "on", f.on);
             values.add (item);
         }
         put (v, "fx", values);
@@ -535,7 +549,7 @@ ControlProtocol::EncodeResult ControlProtocol::encode (const ServerMessage& mess
             put (v, "type", "helloAck"); put (v, "id", m.id); put (v, "instanceId", m.instanceId.toString());
             auto server = object(); put (server, "name", "LiveMix"); put (server, "version", m.serverVersion); put (v, "server", server);
             juce::Array<juce::var> capabilities;
-            for (const auto* name : { "stateDelta", "mic", "muteGroups", "pluginGroups", "sends", "pluginGroupsEverywhere" }) capabilities.add (name);
+            for (const auto* name : { "stateDelta", "mic", "muteGroups", "pluginGroups", "sends", "pluginGroupsEverywhere", "fxOn" }) capabilities.add (name);
             put (v, "capabilities", capabilities); put (v, "eventIntervalMs", 100); put (v, "heartbeatIntervalMs", 5000);
         }
         else if constexpr (std::is_same_v<T, State>)

@@ -50,9 +50,11 @@ public:
     struct SetPluginGroupOff { juce::Uuid channelId; int index = 1; bool off = false; };
     struct SetPluginGroupOffEverywhere { int index = 1; bool off = false; };
     struct SetSend { juce::Uuid channelId, fxId; std::optional<double> amount; std::optional<bool> pre; };
+    struct ToggleFx { juce::Uuid fxId; };
+    struct SetFxOn { juce::Uuid fxId; bool on = false; };
     struct RequestState {};
     using CommandArgs = std::variant<SetChannelOn, ToggleChannel, SetAllChannelsOn, ToggleMuteGroup,
-                                     SetMuteGroup, SetPluginGroupOff, SetPluginGroupOffEverywhere, SetSend, RequestState>;
+                                     SetMuteGroup, SetPluginGroupOff, SetPluginGroupOffEverywhere, SetSend, ToggleFx, SetFxOn, RequestState>;
     struct Command
     {
         juce::String id;
@@ -131,9 +133,10 @@ public:
         juce::String name;
         bool muteGroup = false;
         double returnAmount = 1.0;
+        bool on = true;   // additive v1 field: older clients may ignore it; absent on older servers means on
         bool operator== (const Fx& o) const
         {
-            return std::tie (id, name, muteGroup, returnAmount) == std::tie (o.id, o.name, o.muteGroup, o.returnAmount);
+            return std::tie (id, name, muteGroup, returnAmount, on) == std::tie (o.id, o.name, o.muteGroup, o.returnAmount, o.on);
         }
     };
     struct Projection
@@ -165,6 +168,7 @@ public:
         std::optional<juce::String> name;
         std::optional<bool> muteGroup;
         std::optional<double> returnAmount;
+        std::optional<bool> on;
         bool empty() const;
     };
     struct Changes

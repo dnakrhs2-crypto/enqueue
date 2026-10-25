@@ -80,6 +80,7 @@ public:
             f.document.setPluginGroupOff (f.channel(), 1, true);
             f.document.setSend (f.channel(), f.fx(), 0.35, true); f.document.setSend (f.channel(), secondFx, 0.7, false);
             f.document.setFxMuteGroup (f.fx(), true); f.document.setFxReturn (f.fx(), 0.8);
+            f.document.setFxOn (f.fx(), false);
             f.groups.set (MuteGroups::Group::mic, true); f.groups.set (MuteGroups::Group::fx, true);
             const auto snapshot = f.capture (true);
             const auto& p = snapshot.projection;
@@ -96,6 +97,7 @@ public:
             expectWithinAbsoluteError (p.channels[0].sends[0].amount, 0.35, 1.0e-12); expect (p.channels[0].sends[0].pre);
             expect (p.fx[0].id == f.fx() && p.fx[0].muteGroup); expectEquals (p.fx[0].name, juce::String ("Reverb"));
             expectWithinAbsoluteError (p.fx[0].returnAmount, 0.8, 1.0e-12);
+            expect (! p.fx[0].on && p.fx[1].on);
             const auto json = P::toVar (p);
             expectEquals (json.getDynamicObject()->getProperties().size(), 5);
             expectEquals (json["channels"][0].getDynamicObject()->getProperties().size(), 7);
@@ -103,7 +105,7 @@ public:
             expectWithinAbsoluteError ((double) json["channels"][0]["pan"], -0.3, 1e-12);
             expectWithinAbsoluteError (p.channels[0].pan, -0.3, 1e-12);
             expectWithinAbsoluteError (p.channels[1].pan, 0.0, 1e-12);
-            expectEquals (json["fx"][0].getDynamicObject()->getProperties().size(), 4);
+            expectEquals (json["fx"][0].getDynamicObject()->getProperties().size(), 5);
             expect (! json.hasProperty ("file") && ! json.hasProperty ("device") && ! json.hasProperty ("master"));
             expect (! json["channels"][0].hasProperty ("chain"));
             f.document.renameChannel (f.channel(), "Later"); f.document.removeFx (secondFx);
@@ -180,6 +182,39 @@ public:
                 f.document.setChannelPan (f.channel(), pan);
                 expect (state.update (f.capture()));
                 expect (ControlState::diff (same, state.getCurrent()).kind == ControlState::ChangeKind::none);
+            }
+        }
+
+        beginTest ("FX on alone advances the value revision and merges only that switch without a structure revision");
+        {
+            Fixture f;
+            f.document.addFx();   // already dirty, so the delta isolates the switch
+            ControlState state (f.capture());
+            for (const bool on : { false, true })
+            {
+                const auto published = state.getCurrent();
+                f.document.setFxOn (f.fx(), on);
+                expect (state.update (f.capture()));
+                expect (state.getCurrent().projection.fx[0].on == on && state.getCurrent().projection.fx[1].on);
+                const auto delta = ControlState::diff (published, state.getCurrent());
+                expect (delta.kind == ControlState::ChangeKind::values && ! delta.needsFullState());
+                expectEquals (delta.baseRevision, published.revision);
+                expectEquals (delta.revision, published.revision + 1);
+                expectEquals (state.getCurrent().structureRevision, published.structureRevision);
+                expectEquals ((int) delta.changes.fx.size(), 1);
+                if (! delta.changes.fx.empty()) expect (delta.changes.fx[0].on == std::optional<bool> (on));
+                const auto changes = P::toVar (delta.changes);
+                expectEquals (changes.getDynamicObject()->getProperties().size(), 1);   // fx only
+                expectEquals (changes["fx"].size(), 1);
+                const auto value = changes["fx"][0];
+                expect (value.getDynamicObject() != nullptr);
+                if (value.getDynamicObject() != nullptr)
+                    expectEquals (value.getDynamicObject()->getProperties().size(), 2);   // id + on only
+                expectEquals (value["id"].toString(), f.fx().toString());
+                expect (value["on"].isBool() && (bool) value["on"] == on);
+                auto client = P::toVar (published.projection);
+                merge (client, changes);
+                expectEquals (juce::JSON::toString (client, true), juce::JSON::toString (P::toVar (state.getCurrent().projection), true));
             }
         }
 

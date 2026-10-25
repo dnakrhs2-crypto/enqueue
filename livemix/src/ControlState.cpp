@@ -35,7 +35,7 @@ ControlState::Snapshot ControlState::capture (const MixDocument& document, const
         p.channels.push_back (std::move (channel));
     }
     for (const auto& f : session.fx)
-        p.fx.push_back ({ f.id, f.name, f.muteGroup, f.returnAmount });
+        p.fx.push_back ({ f.id, f.name, f.muteGroup, f.returnAmount, f.on });
     return result;
 }
 
@@ -124,6 +124,7 @@ ControlState::Difference ControlState::diff (const Snapshot& published, const Sn
         if (x.name != y.name) f.name = y.name;
         if (x.muteGroup != y.muteGroup) f.muteGroup = y.muteGroup;
         if (x.returnAmount != y.returnAmount) f.returnAmount = y.returnAmount;
+        if (x.on != y.on) f.on = y.on;
         if (! f.empty()) changes.fx.push_back (std::move (f));
     }
     return result;

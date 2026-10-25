@@ -302,6 +302,7 @@ public:
         appVersions();
         handshake();
         orderingAndState();
+        fxOnOff();
         duplicates();
         clientLimits();
         queueLimits();
@@ -456,6 +457,33 @@ public:
         expect (session["sessionId"].toString() != oldSession);
         expect (! (bool) session["state"]["muteGroups"]["mic"]);
         expect (f.allOnMessageThread);
+    }
+
+    void fxOnOff()
+    {
+        beginTest ("toggleFx over loopback returns its switch in the ack and publishes an FX value delta");
+        Fixture f;
+        if (! start (f)) return;
+        Client c;
+        if (! authenticate (f, c)) return;
+        const auto fxId = f.document.getSession().fx[0].id;
+        const auto revision = (juce::int64) c.initial["revision"];
+        expect (c.initial["state"]["fx"][0]["on"].isBool() && (bool) c.initial["state"]["fx"][0]["on"]);
+        auto args = object(); put (args, "fxId", fxId.toString());
+        expect (c.send (c.command (2, "toggleFx", args)));
+        const auto ack = c.take ("ack", "2");
+        expect ((bool) ack["changed"]);
+        expect (ack["result"]["on"].isBool() && ! (bool) ack["result"]["on"]);
+        expectEquals ((juce::int64) ack["revision"], revision + 1);
+        const auto delta = c.take ("stateDelta");
+        expectEquals ((juce::int64) delta["baseRevision"], revision);
+        expectEquals ((juce::int64) delta["revision"], (juce::int64) ack["revision"]);
+        expectEquals (delta["changes"]["fx"].size(), 1);
+        expectEquals (delta["changes"]["fx"][0]["id"].toString(), fxId.toString());
+        expect (delta["changes"]["fx"][0]["on"].isBool() && ! (bool) delta["changes"]["fx"][0]["on"]);
+        expect (! f.document.getSession().fx[0].on);
+        expectEquals (f.values, 1); expectEquals (f.structures, 0); expectEquals (f.groupChanges, 0);
+        expect (f.allOnMessageThread && ! c.malformed);
     }
 
     void duplicates();
