@@ -1,0 +1,189 @@
+From 05e58bf0bd209862c216ba26917a991cc30b7b7b Mon Sep 17 00:00:00 2001
+From: gom <sound@letsplax.com>
+Date: Sun, 25 Oct 2026 15:58:35 +0900
+Subject: [PATCH] Enqueue patch: MP3 frames that can't reach their bit
+ reservoir come out silent in their place; seeks and MPEG-2 lengths count real
+ frames
+
+A layer III frame's data can start up to 511 bytes back in the frames before it. Just after a seek, or at the start of a
+file cut out of a longer one (ffmpeg -c copy), those frames were never read: the rollback copied whatever sat in their
+place (side info, zeros) and decoded it as audio - a burst of noise up to +11 dBFS at the start of such files. The
+decoder now tracks how many of the bytes in front are real main data; a frame that needs more is silent (the bytes
+still go in front, so the next frame finds the real ones), and a frame that can't be decoded still fills its place in
+time instead of producing no samples, which shifted everything after it by a frame.
+
+MP3Reader's seek starts 10 frames early (the reservoir and the filter banks settle before the asked position), counts
+the Xing / Info tag frame as no audio, treats a skip that ends exactly on a frame as that frame used (at 48 kHz every
+multiple of 1.2 s is a frame start: it played the frame before), and counts 576 samples per MPEG-2 / 2.5 layer III
+frame (24 kHz and below; 1152 gave such files twice their length and earlier audio again past their end).
+
+Files whose frames all reach their reservoir decode bit-identically to before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GC9pPHhomoy5bCkfqPG5vn
+---
+ .../codecs/juce_MP3AudioFormat.cpp            | 57 +++++++++++++++++--
+ 1 file changed, 51 insertions(+), 6 deletions(-)
+
+diff --git a/modules/juce_audio_formats/codecs/juce_MP3AudioFormat.cpp b/modules/juce_audio_formats/codecs/juce_MP3AudioFormat.cpp
+index 79644b061c..7da357108a 100644
+--- a/modules/juce_audio_formats/codecs/juce_MP3AudioFormat.cpp
++++ b/modules/juce_audio_formats/codecs/juce_MP3AudioFormat.cpp
+@@ -1422,6 +1422,7 @@ struct MP3Stream
+             {
+                 wasFreeFormat = false;
+                 needToSyncBitStream = true;
++                reservoirBytes = 0;   // these bytes go after the last frame's data, where the next rollback copies from
+                 auto size = (int) (bufferPointer - (bufferSpace[bufferSpaceIndex] + 512));
+ 
+                 if (size > 2880)
+@@ -1459,6 +1460,7 @@ struct MP3Stream
+             bufferSpaceIndex = 1 - bufferSpaceIndex;
+             bufferPointer = bufferSpace[bufferSpaceIndex] + 512;
+             bitIndex = 0;
++            frameReservoirBytes = 0;
+ 
+             if (lastFrameSize < 0)
+                 return 1;
+@@ -1556,6 +1558,9 @@ struct MP3Stream
+             bufferPointer += bytes;
+         }
+ 
++        // the main data at the end of this frame's buffer: what the rollback put in front of it (as far as that was
++        // real) and the frame's own bytes after its side info
++        reservoirBytes = frame.layer == 3 ? frameReservoirBytes + jmax (0, frameSize - sideInfoSize) : 0;
+         lastFrameSize = frameSize;
+         wasFreeFormat = isFreeFormat;
+         frameSize = 0;
+@@ -1592,6 +1597,7 @@ struct MP3Stream
+     VBRTagData vbrTagData;
+     BufferedInputStream stream;
+     int numFrames = 0, currentFrameIndex = 0;
++    int firstAudioFrame = 0;   // 1 when frame 0 is a Xing / Info tag, which holds no audio
+     bool vbrHeaderFound = false;
+ 
+ private:
+@@ -1599,6 +1605,8 @@ private:
+     bool isFreeFormat, wasFreeFormat;
+     int sideInfoSize, dataSize;
+     int frameSize, lastFrameSize, lastFrameSizeNoPadding;
++    int reservoirBytes;        // how many of the last bytes of the previous frame's buffer are real main data
++    int frameReservoirBytes;   // how many of the bytes the rollback put in front of this frame's data are
+     int bufferSpaceIndex;
+     Layer3SideInfo sideinfo;
+     uint8 bufferSpace[2][2880 + 1024];
+@@ -1616,7 +1624,7 @@ private:
+         lastFrameSize = -1;
+         needToSyncBitStream = true;
+         frameSize = sideInfoSize = dataSize = bitIndex = 0;
+-        lastFrameSizeNoPadding = bufferSpaceIndex = 0;
++        lastFrameSizeNoPadding = bufferSpaceIndex = reservoirBytes = frameReservoirBytes = 0;
+         bufferPointer = bufferSpace[bufferSpaceIndex] + 512;
+         synthBo = 1;
+ 
+@@ -1666,7 +1674,12 @@ private:
+             memcpy (bufferPointer, oldBuffer + lastFrameSize - backstep, (size_t) backstep);
+ 
+         bitIndex = 0;
+-        return true;
++
++        // Just after a seek, or at the start of a file cut out of a longer one, a frame can reach back into frames that
++        // were never read: what sits in their place (side info, zeros) would decode as a burst of noise. The bytes still
++        // go in front, so the next frame finds the real ones it needs.
++        frameReservoirBytes = jmin (backstep, reservoirBytes);
++        return backstep <= reservoirBytes;
+     }
+ 
+     uint32 getBits (int numBits) noexcept
+@@ -1762,6 +1775,9 @@ private:
+         {
+             numFrames = (int) vbrTagData.frames;
+             oldPos += jmax (vbrTagData.headersize, 1);
++
++            if (currentFrameIndex == 1)   // the stream's first frame (scanning it counted it)
++                firstAudioFrame = 1;
+         }
+ 
+         stream.setPosition (oldPos);
+@@ -1823,6 +1839,24 @@ private:
+     }
+ 
+     void decodeLayer3Frame (float* pcm0, float* pcm1, int& samplesDone) noexcept
++    {
++        const auto frameEnd = samplesDone + (frame.lsf ? 576 : 1152);
++        decodeLayer3Granules (pcm0, pcm1, samplesDone);
++
++        // a frame that can't be decoded (its bit reservoir isn't there, or its data is broken) still fills its place
++        // in time, as silence: the frames after it stay where MP3Reader's seek expects them
++        if (samplesDone < frameEnd)
++        {
++            zeromem (pcm0 + samplesDone, sizeof (float) * (size_t) (frameEnd - samplesDone));
++
++            if (pcm1 != nullptr)
++                zeromem (pcm1 + samplesDone, sizeof (float) * (size_t) (frameEnd - samplesDone));
++
++            samplesDone = frameEnd;
++        }
++    }
++
++    void decodeLayer3Granules (float* pcm0, float* pcm1, int& samplesDone) noexcept
+     {
+         if (! rollBackBufferPointer ((int) sideinfo.mainDataStart))
+             return;
+@@ -2995,7 +3029,9 @@ public:
+ 
+         if (currentPosition != startSampleInFile)
+         {
+-            if (! stream.seek ((int) (startSampleInFile / 1152 - 1)))
++            // decode from 10 frames early: the first frames after a seek can't reach their bit reservoir yet (they
++            // come out silent) and the filter banks need a frame to settle - 10 covers a 32 kbps stream's 511 bytes
++            if (! stream.seek ((int) (startSampleInFile / samplesPerFrame()) + stream.firstAudioFrame - 10))
+             {
+                 currentPosition = -1;
+                 createEmptyDecodedData();
+@@ -3003,7 +3039,7 @@ public:
+             else
+             {
+                 decodedStart = decodedEnd = 0;
+-                const int64 streamPos = stream.currentFrameIndex * 1152;
++                const int64 streamPos = jmax (0, stream.currentFrameIndex - stream.firstAudioFrame) * (int64) samplesPerFrame();
+                 int toSkip = (int) (startSampleInFile - streamPos);
+                 jassert (toSkip >= 0);
+ 
+@@ -3017,7 +3053,9 @@ public:
+ 
+                     const int numReady = decodedEnd - decodedStart;
+ 
+-                    if (numReady > toSkip)
++                    // '>=': a jump onto a frame start (at 48 kHz every multiple of 1.2 s) skips whole frames - the last
++                    // one skipped must count as used, or it plays again instead of the frame asked for
++                    if (numReady >= toSkip)
+                     {
+                         decodedStart += toSkip;
+                         break;
+@@ -3072,6 +3110,13 @@ private:
+         decodedEnd = decodedDataSize;
+     }
+ 
++    // MPEG-2 / 2.5 layer III frames (24 kHz and below) hold 576 samples, layer I frames 384, the others 1152 - counting
++    // 1152 for all gave such files twice their length, earlier audio again past the real end and seeks to half the place
++    int samplesPerFrame() const noexcept
++    {
++        return stream.frame.layer == 1 ? 384 : ((stream.frame.layer == 3 && stream.frame.lsf != 0) ? 576 : 1152);
++    }
++
+     bool readNextBlock()
+     {
+         for (int attempts = 10; --attempts >= 0;)
+@@ -3141,7 +3186,7 @@ private:
+             }
+         }
+ 
+-        return numFrames * 1152;
++        return numFrames * samplesPerFrame();
+     }
+ 
+     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MP3Reader)
+-- 
+2.53.0.windows.1
+

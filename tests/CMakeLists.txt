@@ -144,6 +144,7 @@ target_sources(EnqueueTests PRIVATE
     LevelMatrixTests.cpp
     AudioPatchTests.cpp
     MediaFoundationTests.cpp
+    Mp3DecodeTests.cpp
     FadeCurveTests.cpp
     FadeRunnerTests.cpp
     VolumeCueTests.cpp

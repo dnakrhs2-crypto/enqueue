@@ -165,7 +165,7 @@ ctest --preset vs2022-release        :: 단위 테스트, load 제외 (VST3 설�
 | WinSparkle 0.9.4 | https://github.com/vslavik/winsparkle/releases | `WINSPARKLE_DIR` (`include/winsparkle.h`, `x64/Release/WinSparkle.dll`) | 자동 업데이트 없이 빌드 |
 | 로컬 JUCE 체크아웃(선택) | https://github.com/juce-framework/JUCE (태그 8.0.15) | `FETCHCONTENT_SOURCE_DIR_JUCE` | GitHub에서 자동 다운로드 |
 
-JUCE에는 Enqueue 패치가 있다: `tools/juce-patches/0001-wasapi-exclusive-channel-masks.patch` (WASAPI exclusive 모드에서 표준 스피커 마스크로 다채널을 찾음), `tools/juce-patches/0003-kiosk-mode-survives-app-switch.patch` (전체 화면(키오스크) 창이 다른 앱으로 전환해도 풀리지 않음 — 없으면 Alt+Tab 때 전체 화면이 풀리고 `FullScreen windows` 테스트가 실패한다). 로컬 체크아웃에 `git apply --ignore-whitespace`로 적용해 빌드한다(자동 다운로드 JUCE로 빌드하면 exclusive 모드가 스테레오로 제한된다).
+JUCE에는 Enqueue 패치가 있다: `tools/juce-patches/0001-wasapi-exclusive-channel-masks.patch` (WASAPI exclusive 모드에서 표준 스피커 마스크로 다채널을 찾음), `tools/juce-patches/0003-kiosk-mode-survives-app-switch.patch` (전체 화면(키오스크) 창이 다른 앱으로 전환해도 풀리지 않음 — 없으면 Alt+Tab 때 전체 화면이 풀리고 `FullScreen windows` 테스트가 실패한다), `tools/juce-patches/0004-mp3-reservoir-seek-frame-length.patch` (MP3 디코더: 비트 저장소가 없는 프레임은 잡음 대신 제자리 무음, 위치 이동이 정확한 프레임에, MPEG-2(24 kHz 이하) 프레임은 576샘플 — 없으면 `MP3 decoder` 테스트가 실패한다). 로컬 체크아웃에 `git apply --ignore-whitespace`로 적용해 빌드한다(자동 다운로드 JUCE로 빌드하면 exclusive 모드가 스테레오로 제한된다).
 
 `CMakeUserPresets.json`(git 무시됨)에 `local` 프리셋으로 적어 두면 `cmake --preset local` 한 번으로 끝난다:
 
