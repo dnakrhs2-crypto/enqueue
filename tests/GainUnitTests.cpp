@@ -412,6 +412,14 @@ public:
                 expectEquals (shown (*c.slider), juce::String ("199.5 %"));
                 expectEquals (c.slider->getTextValueSuffix(), juce::String (" %"));
             }
+            if (auto* transport = child<TransportBar> (*f.main))
+            {
+                auto* meta = child<juce::Label> (*transport, [] (const juce::Label& l) { return l.getText().contains (ko ("정지 페이드")); });
+                expect (meta != nullptr && meta->getText().contains (ko ("게인 199.5 %")),
+                        "the next cue box starts in the saved unit too: " + (meta != nullptr ? meta->getText() : juce::String()));
+            }
+            else
+                expect (false, "no transport");
         }
 
         beginTest ("the next cue box above (다음 큐) shows the gain in the unit the gain button picks, audio and mic cues");

@@ -396,7 +396,11 @@ void TransportBar::updateStandbyCue (int index, const Cue* cue)
 
 void TransportBar::bindGainUnit (juce::Value& percent)
 {
+    // quietly: the owner binds while it is still building itself (its standby update needs parts made later);
+    // the next standby update shows the bound unit, and later switches call onGainUnitChanged
+    gainUnit.removeListener (&gainUnitFollower);
     gainUnit.referTo (percent);
+    gainUnit.addListener (&gainUnitFollower);
 }
 
 void TransportBar::setContextText (const juce::String& text)
