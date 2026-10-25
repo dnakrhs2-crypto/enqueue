@@ -193,6 +193,9 @@ double GainSlider::onGrid (double db) const
 
 double GainSlider::snapValue (double attemptedValue, DragMode)
 {
+    if (! wheeling && juce::approximatelyEqual (attemptedValue, getValue()))
+        return attemptedValue;   // nothing changed (a typo keeps the gain): a value set in the other unit is not rounded
+
     const double snapped = onGrid (attemptedValue);
 
     if (! wheeling || juce::approximatelyEqual (attemptedValue, wheelFrom) || ! juce::approximatelyEqual (snapped, onGrid (wheelFrom)))
