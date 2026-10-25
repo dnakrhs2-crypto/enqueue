@@ -1,3 +1,112 @@
+# 1.3.0 validation - 2026-10-25
+
+Implemented the individual FX switch in `C:\Users\claude\gocue-sdfx\streamdeck`
+for `livemix-sd-fxon`. Package/hello version **1.3.0**, manifest **1.3.0.0**.
+Reused Node **24.13.0**, SDK **2.1.2**, CLI **1.9.0** and the installed dependencies.
+No npm install/ci or git command was run. C++ sources, CMake, `build/`, installer,
+site and Marketplace PNG/HTML media were not edited. `dist/` was written only by
+the requested pack command.
+
+| Exact command (from `streamdeck/`) | Actual result |
+|---|---|
+| `npm.cmd run typecheck` | Final exit 0; source and test TypeScript checks passed. An initial run exited 1 on the new test's union-typed missing-FX command; explicit command variants fixed it. Both subsequent typecheck runs passed. |
+| `npm.cmd run build` | Exit 0 on both invocations; generated icons/strings and Rollup bundle. First Rollup build **3.3 s**, final standalone build **3.0 s**. |
+| `npm.cmd test` (first full run) | Exit 1; **169 tests, 167 passed, 2 failed**, 0 cancelled/skipped/todo, **242019.5209 ms**. Details below. |
+| `npm.cmd test` (full rerun) | Exit 0; **169 tests, 169 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo**, **236990.1671 ms**. Rebuilt the plugin (Rollup **3.2 s**) and compiled tests before the serial run. |
+| `npm.cmd run validate -- --no-update-check` | Exit 0; **31 manifest image references / 62 files** in both sizes; **170 packaged images** match design sources; ko/en complete; **Validation successful**. |
+| `npm.cmd run pack -- -f` | Exit 0; **Successfully packaged plugin**, version **1.3.0.0**, **180 files**, **312.9 KiB** unpacked. Remote manifest/layout schema fetches warned that they were unavailable; offline validation above passed. |
+
+The first suite's new FX wire test sent its second missing-target command while
+the existing connection was resynchronizing after `FX_NOT_FOUND`. It now waits
+for readiness between those independent requests. The focused diagnostic command
+`node --test --test-name-pattern="FX wire" .test-build/tests/connection.test.js`
+reproduced the same failure (**1 test, 0 passed, 1 failed**) before this correction.
+
+The new explicit-mode test hit `Deadline waiting for command` in the first suite.
+The focused diagnostic command
+`node --test --test-name-pattern="explicit ON/OFF" .test-build/tests/fx.test.js`
+passed (**1 test, 1 passed, 0 failed**). The test now preserves the plugin's saved,
+migrated settings when editing Mode, matching the PI rather than repeatedly
+supplying incomplete settings. No timeout or assertion was relaxed, and no
+production queue, lifecycle or connection behavior was changed to address these
+test failures. CPU load was not established as the cause. The full rerun passed.
+
+## Package
+
+- Path: `C:\Users\claude\gocue-sdfx\streamdeck\dist\com.gomtwigim.livemix.streamDeckPlugin`
+- Size from `Get-Item`: **192300 bytes**.
+- SHA-256 from `Get-FileHash -Algorithm SHA256`:
+  `2A1EB74F2324ECBDCE899A5A717C29559DA112FB65F28AFDFDB523CCE0F90E8A`
+
+## Behavior and evidence
+
+`com.gomtwigim.livemix.fx` is registered immediately after the mic action and
+uses `LiveMixAction` with capability `fxOn`. Key down queues on `fx/<fxId>`:
+Toggle sends `toggleFx { fxId }`; ON/OFF sends `setFxOn { fxId, on: true/false }`.
+The usual v1 command envelope supplies request ID and current instance/session.
+These commands have no `ifRevision`, computed flag or retries. Key release sends
+nothing. Dispatch rechecks that the FX still exists. ACK results validate `on`
+as a boolean and never patch the cache; snapshot/delta state redraws the key.
+
+The blue ON and gray OFF lamps have state 1 and 0 (an ON FX lamp uses the accent
+blue `#4C8DFF` instead of the microphone's green: gom chose candidate 2 on
+2026-10-25). An FX mute-group member shows a red lamp, slash and mute badge with
+Originally ON/OFF (원래 ON/OFF), retaining the individual switch's state.
+Nonmembers keep their normal lamp. Stopped audio adds the existing pause badge.
+Besides the ON colour, the only lamp change is the FX glyph; the microphone
+key's placement, circle, colors and text remain identical.
+
+PI rows are FX channel, Mode (Toggle / ON / OFF), same-name fallback and Display
+name. Microphone, group, step, target, press and display-type rows are hidden.
+No new note is added; Multi Actions show the existing note and execute Mode with
+no key state/image/title output. UUID-first binding, rename persistence, unique
+same-name fallback across sessions and offline selections use existing helpers.
+Missing/duplicate FX and missing capability show their existing messages and
+alert once on input without sending a command. Legacy FX projections omit `on`:
+the parser supplies true, while present non-booleans fail in snapshots/deltas.
+
+The suite adds **16 tests** and extends existing checks: real SDK/fake host flows,
+independent mic/FX deltas, mute-group independence, bindings, compatibility,
+wire validation/no-op ACKs, silent Multi Actions, ko/en PI and static/runtime SVG
+agreement at both sizes. Existing rolling 10-calls/key/second assertions remain.
+The real-app checker was exercised against isolated fake discovery for original
+ON/OFF and muted FX, restoration, absent FX and absent capability. It prints
+`FX_ON_OK` after two verified toggles, or `FX_ON_SKIPPED (<reason>)` without FX
+commands when unsupported or no FX exists.
+
+## Artwork preservation and file inventory
+
+Before editing, SHA-256 hashes were recorded without git. After the final build,
+all **323 pre-existing files** under `design/` and packaged `imgs/` matched those
+hashes. All **10 Marketplace PNG/HTML files** and `package-lock.json` also matched.
+There are **24 new FX SVG files**: icon, off, on, muted-on, muted-off and
+disconnected at 1x/2x in each of the design and package directories.
+
+The first generation changed only CRLF to LF in 316 existing text assets.
+Their original bytes were restored after verifying the CRLF-normalized hashes.
+The generator now preserves each existing text file's line endings, keeping
+subsequent builds byte-identical for the old artwork. No glyph placement tuning
+or existing action artwork change was made.
+
+| Area | Changed/new files (relative to `streamdeck/` unless stated otherwise) |
+|---|---|
+| Action/runtime | New `src/actions/fx.ts`; `src/plugin.ts`; `src/livemix/bindings.ts`, `protocol.ts`, `connection.ts`; `src/ui/artwork.ts`, `key-renderer.ts`; `package.json` |
+| Generation | `tools/actions.mjs`, `locales.mjs`, `generate-assets.mjs`; generated `src/ui/strings.ts` |
+| Package UI/resources | `com.gomtwigim.livemix.sdPlugin/ui/inspector.js`; generated `ui/strings.js`, `manifest.json`, `en.json`, `ko.json`; new `imgs/actions/fx/*.svg` and matching `design/actions/fx/*.svg` |
+| Tests/fixtures | New `tests/fx.test.ts`; `tests/action-helpers.ts`, `actions.test.ts`, `connection.test.ts`, `fake-host.mjs`, `fake-livemix-server.mjs`, `inspector.test.ts`, `multi-action.test.ts`, `real-check.test.ts`, `rendering.test.ts`; `tests/fixtures/control/README.md`, `hello-ack.json`, `initial-state.json` |
+| Real-app checker | `tools/real_livemix_check.mjs` |
+| Plugin docs | `README.md`, `CHANGELOG.md`, `VALIDATION.md` |
+| Shared spec | `../docs/superpowers/specs/2026-09-08-livemix-streamdeck-design.md` |
+| Marketplace copy | `../docs/marketplace/livemix-streamdeck/listing-en.md`, `listing-ko.md`, `release-notes-en.md` |
+| Generated build/package outputs | Plugin `bin/plugin.js`, `bin/package.json`; `.test-build/`; `dist/com.gomtwigim.livemix.streamDeckPlugin` |
+
+No functional scope deviation. Existing action UUIDs, behavior and artwork are
+preserved. Real LiveMix 0.16.0, audio, physical Stream Deck/Mobile and installation
+checks remain for Claude as requested. Optional headless local preview attempts
+failed on browser GPU startup/access and a browser deadline in this managed
+environment; no bitmap/physical readability claim is made. SVG geometry and
+localization were checked by the passing renderer/PI tests.
+
 # 1.2.0 validation — 2026-09-30
 
 Enabled Multi Actions on `livemix-sd-multiaction` in

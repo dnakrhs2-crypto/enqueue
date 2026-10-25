@@ -9,7 +9,7 @@ export const palette = {
   lampOn: "#35D07F", lampOff: "#3A3F47", brand: "#E5302D", danger: "#FF5A5F",
   warning: "#FFB454", white: "#FFFFFF"
 } as const;
-export type IconKind = "mic" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
+export type IconKind = "mic" | "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
 export type Lamp = "on" | "off" | "muted-on" | "muted-off" | "disconnected" | "disabled" | "checking" | "version" | "missing" | "duplicate";
 export type ActionLamp = "all-on" | "all-off" | "mixed" | "group-muted" | "group-clear" | "plugin-on" | "plugin-off" | "plugin-all-on" | "plugin-all-off" | "plugin-all-mixed" | "status-on" | "status-off";
 export type Labels = { [key: string]: string };
@@ -34,6 +34,7 @@ export function glyph(kind: IconKind, color: string = palette.white, index = 1):
   let body: string;
   switch (kind) {
     case "mic": body = mic; break;
+    case "fx": body = fx; break;
     case "all-mics": body = [4, 12, 20].map(x => '<rect x="' + (x - 2) + '" y="4" width="4" height="9" rx="2"/><path d="M' + (x - 3) + ' 11v2a3 3 0 0 0 6 0v-2M' + x + ' 16v4M' + (x - 2) + ' 20h4"/>').join(""); break;
     case "mic-mute-group": body = brackets + '<g transform="translate(4 3) scale(.667 .75)">' + mic + '</g>'; break;
     case "fx-mute-group": body = brackets + '<g transform="translate(2 2) scale(.833)">' + fx + '</g>'; break;
@@ -53,12 +54,13 @@ const key = (body: string, size: number): string => svgDocument(size,
   rect(0, 0, 144, 144, 12, palette.background) + '<g text-anchor="middle" font-family="Segoe UI,Malgun Gothic,sans-serif" font-weight="600">' + body + '</g>');
 const bounded = (value: number, max: number): number => Number.isFinite(value) ? Math.max(0, Math.min(max, Math.trunc(value))) : 0;
 
-export function micSvg(lamp: Lamp, labels: Labels, stopped = false, unknownValue = false, size = 144): string {
+export function micSvg(lamp: Lamp, labels: Labels, stopped = false, unknownValue = false, size = 144, lampGlyph: "mic" | "fx" = "mic"): string {
   const on = lamp === "on" || lamp === "muted-on", muted = lamp.startsWith("muted-");
   let body: string, label = unknownValue ? "—" : "";
   if (["on", "off", "muted-on", "muted-off"].includes(lamp)) {
-    const color = muted ? palette.danger : on ? palette.lampOn : palette.lampOff;
-    body = '<circle cx="72" cy="39" r="30" fill="' + color + '"/>' + placed(glyph("mic"), 51, 16, 42);
+    // An ON FX lamp is the accent blue so an FX key never reads as a mic key (gom 2026-10-25: candidate 2).
+    const color = muted ? palette.danger : on ? lampGlyph === "fx" ? palette.accent : palette.lampOn : palette.lampOff;
+    body = '<circle cx="72" cy="39" r="30" fill="' + color + '"/>' + placed(glyph(lampGlyph), 51, 16, 42);
     if (muted) body += stroke('<path d="M49 18l46 43"/>', palette.white, 3);
     label = muted ? labels[on ? "originalOn" : "originalOff"]! : on ? labels.on! : labels.off!;
     if (muted) body += rect(22, 72, 100, 17, 5, palette.danger) + text(labels.muted!, 85, 12, palette.background);

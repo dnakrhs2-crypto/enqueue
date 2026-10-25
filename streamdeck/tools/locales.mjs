@@ -2,6 +2,7 @@
 export const locales = {
   en: {
     action: "Microphone On/Off", tooltip: "Toggle a LiveMix microphone or explicitly set it on or off.",
+    fxAction: "FX On/Off", fxActionTooltip: "Toggle one LiveMix FX channel or explicitly set it on or off (LiveMix 0.16.0+).",
     connected: "Connected", disconnected: "LiveMix offline", disabled: "Control disabled", checking: "Checking connection",
     version: "Update required", missing: "Channel missing", duplicate: "Duplicate name — select again", audioStopped: "Audio stopped",
     muted: "Mute group", originalOn: "Originally ON", originalOff: "Originally OFF", microphone: "Microphone", mode: "Mode", toggle: "Toggle",
@@ -36,6 +37,7 @@ export const locales = {
   },
   ko: {
     action: "마이크 ON/OFF", tooltip: "LiveMix 마이크를 토글하거나 ON/OFF로 설정합니다.",
+    fxAction: "FX ON/OFF", fxActionTooltip: "LiveMix FX 채널 하나를 토글하거나 ON/OFF로 설정합니다 (LiveMix 0.16.0 이상).",
     connected: "연결됨", disconnected: "LiveMix 미연결", disabled: "제어 꺼짐", checking: "연결 확인 중",
     version: "업데이트 필요", missing: "채널 없음", duplicate: "이름 중복 — 다시 선택", audioStopped: "오디오 멈춤",
     muted: "뮤트그룹", originalOn: "원래 ON", originalOff: "원래 OFF", microphone: "마이크", mode: "동작", toggle: "토글",

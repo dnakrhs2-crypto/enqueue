@@ -1,5 +1,6 @@
 import streamDeck from "@elgato/streamdeck";
 import { MicrophoneAction } from "./actions/mic.js";
+import { FxAction } from "./actions/fx.js";
 import { AllMicrophonesAction } from "./actions/all-mics.js";
 import { MicrophoneMuteGroupAction } from "./actions/mic-mute-group.js";
 import { FxMuteGroupAction } from "./actions/fx-mute-group.js";
@@ -16,7 +17,7 @@ streamDeck.logger.setLevel("info");
 const connection = new LiveMixConnection();
 const queue = new CommandQueue(connection);
 const language = languageOf(streamDeck.info.application.language);
-for (const Action of [MicrophoneAction, AllMicrophonesAction, MicrophoneMuteGroupAction, FxMuteGroupAction, PluginGroupAction, PluginGroupEverywhereAction, FxSendAction, FxSendStepAction, StatusAction]) {
+for (const Action of [MicrophoneAction, FxAction, AllMicrophonesAction, MicrophoneMuteGroupAction, FxMuteGroupAction, PluginGroupAction, PluginGroupEverywhereAction, FxSendAction, FxSendStepAction, StatusAction]) {
   streamDeck.actions.registerAction(new Action(connection, queue, language));
 }
 let lastFailure = -Infinity;

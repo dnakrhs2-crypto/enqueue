@@ -25,13 +25,13 @@ class Socket {
   close(): void { this.onclose(); }
   receive(value: unknown): void { this.onmessage({ data: JSON.stringify(value) }); }
 }
-test("multi-action PI appends the exact ko/en note for all eight keys and preserves existing notes across updates/offline", async () => {
+test("multi-action PI appends the exact ko/en note for all nine keys and preserves existing notes across updates/offline", async () => {
   const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
   const notes = {
     ko: "다중 동작에서는 키 그림과 상태 표시가 없습니다. 위 ‘동작’ 설정이 그대로 실행됩니다.",
     en: "In a multi-action there is no key artwork or state. The Mode above is what runs."
   };
-  for (const language of ["ko", "en"] as const) for (const kind of ["mic", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send-step", "status"]) {
+  for (const language of ["ko", "en"] as const) for (const kind of ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send-step", "status"]) {
     const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
     const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
     const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
@@ -98,9 +98,9 @@ test("shipped PI script: text-only names, offline preservation, auto-save, stale
   }
 });
 
-test("all nine shipped PI views expose only relevant fields, localized modes/notes and instant offline-safe settings", async () => {
+test("all ten shipped PI views expose only relevant fields, localized modes/notes and instant offline-safe settings", async () => {
   const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
-  for (const language of ["ko", "en"]) for (const kind of ["mic", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"]) {
+  for (const language of ["ko", "en"]) for (const kind of ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"]) {
     const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
     const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
     const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
@@ -110,7 +110,7 @@ test("all nine shipped PI views expose only relevant fields, localized modes/not
     window.connectElgatoStreamDeckSocket(1234, "pi", "registerPropertyInspector", JSON.stringify({ application: { language } }), JSON.stringify({ context: "key", action: `com.gomtwigim.livemix.${kind}`, payload: { settings } }));
     const socket = Socket.current; socket.onopen(); const locale = window.LiveMixStrings[language];
     const expected: Record<string, string[]> = {
-      mic: ["channel", "mode", "fallback", "title"], "all-mics": ["mode", "title"],
+      mic: ["channel", "mode", "fallback", "title"], fx: ["fx", "mode", "fallback", "title"], "all-mics": ["mode", "title"],
       "mic-mute-group": ["mode", "title"], "fx-mute-group": ["mode", "title"],
       "plugin-group": ["channel", "group", "mode", "fallback", "title"],
       "plugin-group-all": ["group", "mode", "title"],
@@ -119,7 +119,8 @@ test("all nine shipped PI views expose only relevant fields, localized modes/not
     assert.deepEqual(fields.filter(id => !elements[`${id}-row`]!.hidden), expected[kind], kind);
     for (const id of fields) assert.ok(elements[`${id}-label`]!.textContent);
     if (kind === "all-mics") assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.setAllOn, locale.setAllOff]);
-    if (kind === "plugin-group-all") assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.on, locale.off]);
+    if (["mic", "fx", "plugin-group-all"].includes(kind)) assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.on, locale.off]);
+    if (kind === "fx") { assert.equal(elements.note!.hidden, true); assert.equal(elements.fx!.value, settings.fxId); }
     if (kind.endsWith("mute-group")) assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.mute, locale.unmute]);
     if (kind === "fx-send") assert.deepEqual(elements.step!.children.map(c => c.value), ["1", "5"]);
     if (kind === "fx-send-step") {

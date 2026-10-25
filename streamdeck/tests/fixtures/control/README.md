@@ -17,6 +17,14 @@ substituted; this is not a captured user session.
 - `errors.json`: `handshake()` error cases and
   `ControlProtocol.cpp::encode(ErrorResponse/ServerStatus)`.
 
+LiveMix 0.16.0 adds the boolean `fx[].on` field (initially `true`) and the
+`fxOn` helloAck capability after `pluginGroupsEverywhere`. These two fixtures
+include them. Older projections omit `on`; the plugin defaults it to `true`
+but rejects a present non-boolean value. Deltas omit unchanged fields.
+
 The fake server loads these files, substitutes the live port/instance/token and
-current document values, and sends the same envelopes. It implements only hello,
-ping, requestState and the two mic commands needed for Round 2A.
+current document values, and sends the same envelopes. It implements hello,
+ping, requestState and the mic, FX, mute-group, plugin-group and send commands.
+`fxOn:false` omits that capability; `legacyFx:true` also omits FX `on` fields
+and defaults `fxOn` to false, serving a LiveMix 0.15.5-shaped snapshot.
+`pluginGroupsEverywhere:false` independently omits that capability.

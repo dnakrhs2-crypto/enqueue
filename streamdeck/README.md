@@ -1,10 +1,11 @@
-# LiveMix Stream Deck 1.2.0
+# LiveMix Stream Deck 1.3.0
 
-Windows release `com.gomtwigim.livemix`, manifest version `1.2.0.0`
-(npm package `1.2.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64;
-the **Plugin Group (All Mics)** key requires **LiveMix 0.10.0+**.
+Windows release `com.gomtwigim.livemix`, manifest version `1.3.0.0`
+(npm package `1.3.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64;
+the **Plugin Group (All Mics)** key requires **LiveMix 0.10.0+**, and
+the **FX On/Off** key requires **LiveMix 0.16.0+**.
 The other eight actions still work with LiveMix 0.6.0+.
-This package implements nine actions, a shared LiveMix connection and a
+This package implements ten actions, a shared LiveMix connection and a
 hardware-free test harness. Node 24 and Stream Deck 7.1+ are the runtime baseline.
 It does not install, launch or change LiveMix or Stream Deck profiles.
 
@@ -23,7 +24,7 @@ npm.cmd run pack -- -f
 The dependencies in this worktree are already installed; retain them and the
 existing lockfile. Do not run npm install or rewrite package-lock.json for
 this release. Its preview package metadata is intentionally retained under that
-constraint; package.json, manifest and runtime hello advertise 1.2.0.
+constraint; package.json, manifest and runtime hello advertise 1.3.0.
 All direct dependencies use exact versions.
 The test script builds the actual distributable first, compiles the TypeScript
 tests with `tsconfig.test.json`, then runs `node:test` serially. No physical Stream
@@ -61,8 +62,10 @@ the new artwork and physical Stream Deck + remain separate visual/device checks.
 | Action | Input and display |
 |---|---|
 | Microphone On/Off | Toggle / ON / OFF; original switch state with mute-group and stopped-audio badges. |
+| FX On/Off / FX ON/OFF | LiveMix 0.16.0+. Toggle / ON / OFF for one FX channel. Blue ON (state 1), gray OFF (state 0), red group-muted lamp with Originally ON/OFF while preserving the switch state; stopped-audio badge. Send amounts and the FX mute group stay independent. |
 | All Microphones | Toggle turns everything OFF if any microphone is ON, otherwise ON. Explicit all ON/OFF modes. Shows all/some/none ON and the count; no command with zero microphones. |
-| Microphone / FX Mute Group | Toggle / Mute / Unmute the LiveMix latch. Shows membership count; a zero-member group remains operable. Membership is edited in LiveMix. |
+| Microphone Mute Group | Toggle / Mute / Unmute the LiveMix microphone latch. Shows membership count; a zero-member group remains operable. Membership is edited in LiveMix. |
+| FX Mute Group | Toggle / Mute / Unmute the LiveMix FX latch. Shows membership count; a zero-member group remains operable. Membership is edited in LiveMix. |
 | Plugin Group | Toggle / ON / OFF an existing numbered slot. Deleted slots show Group missing. Deleting earlier groups shifts later numbers. |
 | Plugin Group (All Mics) / 플러그인 그룹 (전체 마이크) | LiveMix 0.10.0+. Switch slot 1–5 across every microphone that has it. Toggle: any ON → all OFF; all OFF → all ON. ON/OFF modes set every matching group explicitly. Accent All ON (state 1), red All OFF or warning Some ON (state 0), group digit and ON/total count; stopped-audio badge remains visible. No matching group → Group missing and no command. |
 | FX Send Amount (Encoder only) | Rotate adjusts amount by 1% (default) or 5% per tick, clamped to 0–100%. Down only records the press; release within 600 ms without rotation toggles pre/post when enabled. Rotating while pressed changes amount only. Long press, tap and long touch issue no command. |
@@ -73,14 +76,21 @@ All keypad releases are inert. The PI saves changes immediately and preserves
 selected channel/FX/slot values while offline. Offline send keys and encoders show
 `—`; encoders also disable the bar. Amount and pre/post commands update only their respective fields.
 
-All eight Keypad actions are available in Stream Deck Multi Actions. FX Send
+All nine Keypad actions are available in Stream Deck Multi Actions. FX Send
 Amount remains excluded because Multi Actions accept keys, not Encoder actions.
 Within a Multi Action, each step executes its existing PI Mode setting and
 sends no key state, image or title; failures still call `showAlert` on the host.
 The host's `userDesiredState` is ignored: toggle, mute and amount modes do not map
 one-to-one to the two key states. The Korean/English PI explains this alongside
 the existing notes. Ordinary keys keep their normal artwork and state display.
-Key Logic support remains disabled for all nine actions.
+Key Logic support remains disabled for all ten actions.
+
+FX On/Off exposes only FX channel, Mode (Toggle / ON / OFF), same-name fallback
+and Display name in its PI. The saved FX selection persists offline. UUID binding,
+unique exact-name fallback across sessions and rename persistence use the same
+rules as FX send keys. Without `fxOn`, the key shows the existing update-LiveMix
+message and alerts on input without sending a command. LiveMix 0.6.0-0.15.5
+snapshots without `fx[].on` still parse; their omitted switch defaults to ON.
 
 Plugin Group (All Mics) exposes only group, mode and display name in its PI.
 Group choices combine the slots on all microphones and show the number of
@@ -90,7 +100,7 @@ the key displays the existing update-LiveMix message and never sends this comman
 
 ## Package structure
 
-- `src/plugin.ts`: registers nine actions and makes one SDK connection; owns one
+- `src/plugin.ts`: registers ten actions and makes one SDK connection; owns one
   LiveMix TCP connection and one command queue for every visible key/device/PI.
 - `src/livemix/`: bounded discovery reads, lease validation, loopback NDJSON,
   handshake/heartbeat/reconnect, strict wire validation, state reducer, bindings
@@ -98,8 +108,10 @@ the key displays the existing update-LiveMix message and never sends this comman
 - `src/actions/mic.ts`: microphone toggle/ON/OFF, context lifecycle, settings
   migration and PI bridge using the SDK 2.x `ui.action` and
   `ui.sendToPropertyInspector` APIs. Key release sends no command.
-- `src/actions/base.ts`: the mic lifecycle/PI/binding pattern shared by the eight
+- `src/actions/base.ts`: the mic lifecycle/PI/binding pattern shared by the nine
   additional actions. `mute-group.ts` shares the microphone/FX latch behavior.
+- `src/actions/fx.ts`: the individual FX switch, gated by `fxOn`, using the shared
+  lifecycle and the microphone lamp template with the FX glyph.
 - `src/ui/`: finite SVG templates, safe display text, bundled ko/en strings and a
   shared rolling call history per key/encoder. The 10/s budget includes `showAlert`.
 - `com.gomtwigim.livemix.sdPlugin/`: manifest, local PI, local translations and
@@ -170,11 +182,20 @@ The all-mics group key queues by `plugin-group-all/<index>` and sends
 `{ index, off, count }`; only the normal `channels[].pluginGroups` state update
 changes the displayed values.
 
+FX On/Off queues by `fx/<fxId>`. Key down sends `toggleFx { fxId }` in Toggle
+mode or `setFxOn { fxId, on: true/false }` in ON/OFF mode, with the current
+instance/session and no `ifRevision` or retry. The server toggles atomically.
+ACK result `{ on }` never patches the cache; normal `fx[].on` deltas redraw keys.
+
 With the built plugin and real LiveMix running, `node tools/real_livemix_check.mjs`
 checks the first mic, then toggles group 1 twice and verifies the observer and key.
 It prints `GROUP_ALL_OK`, or `GROUP_ALL_SKIPPED (no group 1 in the current session)`.
 If group 1 starts mixed, the checker restores the original per-channel flags after
 the two toggles because two global toggles alone cannot restore a mixed state.
+After the group check, a server advertising `fxOn` with at least one FX is checked
+with an FX key: toggle, verify observer/state/image, toggle back and verify again.
+The script prints `FX_ON_OK`, or `FX_ON_SKIPPED (<reason>)` if the capability or FX
+is absent. The original FX switch is restored even if the check fails.
 
 The [Marketplace package](../docs/marketplace/livemix-streamdeck/README.md)
 contains copy, reviewer instructions, media and the client's submission checklist.

@@ -1,5 +1,23 @@
 # LiveMix Stream Deck changelog
 
+## 1.3.0 — 2026-10-25
+
+### 한국어
+
+- FX ON/OFF 키를 추가했습니다. 선택한 FX 채널 하나를 토글하거나 ON/OFF로 설정하며, 키를 뗄 때는 명령을 보내지 않습니다. 보내는 양과 FX 뮤트그룹은 그대로 유지합니다.
+- 마이크 키와 같은 램프에 FX 글자를 표시합니다. ON은 파랑(마이크 키의 초록과 구분), OFF는 회색이며, 뮤트그룹 적용 중에는 빨간 램프와 원래 ON/OFF를 표시합니다. 키 상태는 개별 스위치를 따르고 오디오 멈춤 배지도 유지합니다.
+- 설정에는 FX 채널, 동작, 같은 이름 연결, 표시 이름을 제공합니다. UUID 우선 연결, 이름 변경 저장, 새 세션의 유일한 같은 이름 연결과 오프라인 선택 보존을 지원합니다. 다중 동작에서는 설정한 동작을 실행하고 키 그림·상태·제목을 보내지 않습니다.
+- 새 키에는 LiveMix 0.16.0+의 `fxOn` 기능이 필요합니다. 이전 버전에서는 업데이트 안내와 입력 실패 알림만 표시합니다. `on`이 없는 이전 FX 상태도 읽으며 기존 아홉 액션의 요구 버전은 유지합니다.
+- 실제 SDK를 실행하는 가짜 호스트·LiveMix 테스트와 ko/en PI·렌더링·프로토콜 검증을 추가했습니다. 실제 LiveMix 검사 도구는 FX를 두 번 토글해 원상 복구하며, 미지원 버전이나 FX가 없는 세션은 건너뜁니다.
+
+### English
+
+- Added FX On/Off: toggle one selected FX channel or explicitly set it ON/OFF. Key release sends nothing. Send amounts and the FX mute group remain independent.
+- Reuses the microphone lamp with an FX glyph: blue ON (so it never reads as a green microphone key), gray OFF, or red group-muted with Originally ON/OFF. Key state follows the individual switch, with the existing stopped-audio badge.
+- Setup offers FX channel, Mode, same-name fallback and Display name. UUID binding, rename persistence, unique matching names across sessions and offline selections follow the existing FX binding rules. Multi Actions execute the configured Mode without key artwork, state or title.
+- Requires LiveMix 0.16.0+ and its `fxOn` capability for this key. Older versions show the update message and alert on input without a command. Legacy FX snapshots without `on` still parse; requirements for the existing nine actions are unchanged.
+- Added real-SDK fake-host/LiveMix tests and ko/en PI, rendering and protocol checks. The real-app checker toggles an FX twice and restores its switch, or skips when unsupported or no FX exists.
+
 ## 1.2.0 — 2026-09-30
 
 ### 한국어

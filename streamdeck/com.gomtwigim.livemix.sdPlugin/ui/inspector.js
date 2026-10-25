@@ -82,9 +82,9 @@
     document.documentElement.lang = info.application.language === "ko" ? "ko" : "en";
     for (const [id, key] of [["channel", "microphone"], ["fx", "fxChannel"], ["group", "group"], ["mode", "mode"], ["step", "step"], ["target", "targetValue"], ["press", "press"], ["display", "display"], ["fallback", "fallback"], ["title", "shortTitle"]]) byId(id + "-label").textContent = t[key];
     const bound = ["mic", "plugin-group", "fx-send", "fx-send-step"].includes(kind);
-    for (const [id, visible] of [["channel", bound], ["fx", kind === "fx-send" || isSendStep()], ["group", kind === "plugin-group" || isGroupAll()],
+    for (const [id, visible] of [["channel", bound], ["fx", kind === "fx" || kind === "fx-send" || isSendStep()], ["group", kind === "plugin-group" || isGroupAll()],
       ["mode", !["fx-send", "status"].includes(kind)], ["step", kind === "fx-send"], ["press", kind === "fx-send"],
-      ["display", kind === "status"], ["fallback", bound], ["title", !["fx-send", "fx-send-step", "status"].includes(kind)]]) byId(id + "-row").hidden = !visible;
+      ["display", kind === "status"], ["fallback", bound || kind === "fx"], ["title", !["fx-send", "fx-send-step", "status"].includes(kind)]]) byId(id + "-row").hidden = !visible;
     choices("mode", isSendStep() ? [["up", t.increase], ["down", t.decrease], ["set", t.setValue]]
       : [["toggle", t.toggle], ...(isMute() ? [["mute", t.mute], ["unmute", t.unmute]] : [["on", kind === "all-mics" ? t.setAllOn : t.on], ["off", kind === "all-mics" ? t.setAllOff : t.off]])]);
     choices("step", (isSendStep() ? [1, 5, 10] : [1, 5]).map(value => [value, value + "%"]));

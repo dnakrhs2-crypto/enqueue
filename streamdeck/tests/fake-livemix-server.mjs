@@ -20,16 +20,20 @@ export class FakeLiveMix extends EventEmitter {
   discoveryState = "ready";
   token = randomBytes(32).toString("base64url");
   behavior = { omitState: false, omitDelta: false, omitAck: false, omitPong: false, holdCommands: false, holdHello: false, split: false, version: 1, rejectAuth: false, helloInstance: "" };
-  constructor({ pluginGroupsEverywhere = true } = {}) { super(); this.pluginGroupsEverywhere = pluginGroupsEverywhere; }
+  constructor({ pluginGroupsEverywhere = true, legacyFx = false, fxOn = !legacyFx } = {}) {
+    super(); this.pluginGroupsEverywhere = pluginGroupsEverywhere; this.fxOn = fxOn; this.legacyFx = legacyFx;
+  }
   async start() {
     this.appdata = await mkdtemp(join(tmpdir(), "livemix-sd-"));
     this.directory = join(this.appdata, "LiveMix", "control");
     this.discoveryPath = join(this.directory, "discovery.json");
     await mkdir(this.directory, { recursive: true });
     this.snapshot = await fixture("initial-state"); this.helloFixture = await fixture("hello-ack");
-    this.helloFixture.capabilities = this.helloFixture.capabilities.filter(c => c !== "pluginGroupsEverywhere");
+    if (this.legacyFx) for (const fx of this.snapshot.state.fx) delete fx.on;
+    this.helloFixture.capabilities = this.helloFixture.capabilities.filter(c => !["pluginGroupsEverywhere", "fxOn"].includes(c));
     if (this.pluginGroupsEverywhere) this.helloFixture.capabilities.push("pluginGroupsEverywhere");
-    this.helloFixture.server.version = this.pluginGroupsEverywhere ? "0.10.0" : "0.9.0";
+    if (this.fxOn) this.helloFixture.capabilities.push("fxOn");
+    this.helloFixture.server.version = this.fxOn ? "0.16.0" : this.pluginGroupsEverywhere ? "0.15.5" : "0.9.0";
     this.ordering = await fixture("ordering"); this.errorsFixture = await fixture("errors"); this.clientHello = await fixture("hello");
     await this.listen(); await this.publishDiscovery();
     this.heartbeatTimer = setInterval(() => { void this.publishDiscovery().catch(error => this.errors.push(error)); }, 5000);
@@ -82,10 +86,18 @@ export class FakeLiveMix extends EventEmitter {
     }
     if (m.sessionId !== this.snapshot.sessionId) { this.error(client, m.id, "SESSION_CHANGED"); return; }
     if (m.ifRevision !== undefined && m.ifRevision !== this.snapshot.revision) { this.error(client, m.id, "REVISION_CONFLICT"); return; }
-    const state = this.snapshot.state, channel = state.channels.find(c => c.id === m.args.channelId), a = m.args;
+    const state = this.snapshot.state, a = m.args, channel = state.channels.find(c => c.id === a?.channelId);
     const before = JSON.stringify(state);
     let result;
-    if (m.command === "setAllChannelsOn") {
+    if (m.command === "toggleFx" || m.command === "setFxOn") {
+      if (!this.fxOn) { this.error(client, m.id, "UNKNOWN_COMMAND"); return; }
+      if (!a || typeof a !== "object" || Array.isArray(a) || typeof a.fxId !== "string" || !/^[0-9a-f]{32}$/.test(a.fxId) || !/[1-9a-f]/.test(a.fxId)
+        || (m.command === "setFxOn" && typeof a.on !== "boolean")) { this.error(client, m.id, "INVALID_ARGUMENT"); return; }
+      const fx = state.fx.find(f => f.id === a.fxId);
+      if (!fx) { this.error(client, m.id, "FX_NOT_FOUND"); return; }
+      fx.on = m.command === "toggleFx" ? !fx.on : a.on;
+      result = { on: fx.on };
+    } else if (m.command === "setAllChannelsOn") {
       assert.equal(typeof a.on, "boolean");
       for (const c of state.channels) c.on = a.on;
       result = { on: a.on, count: state.channels.length };

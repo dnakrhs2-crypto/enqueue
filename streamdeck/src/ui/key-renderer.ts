@@ -29,10 +29,10 @@ export function statusTitle(title: string): string {
 }
 const images = new Map<string, string>();
 const dataUrl = (svg: string): string => "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
-export function keyImage(lamp: Lamp, language: Language, audioStopped = false, unknownValue = false): string {
-  const key = [lamp, language, audioStopped, unknownValue].join("/");
+export function keyImage(lamp: Lamp, language: Language, audioStopped = false, unknownValue = false, lampGlyph: "mic" | "fx" = "mic"): string {
+  const key = [lamp, language, audioStopped, unknownValue, lampGlyph].join("/");
   const cached = images.get(key); if (cached) return cached;
-  const image = dataUrl(micSvg(lamp, strings[language], audioStopped, unknownValue));
+  const image = dataUrl(micSvg(lamp, strings[language], audioStopped, unknownValue, 144, lampGlyph));
   images.set(key, image); return image;
 }
 

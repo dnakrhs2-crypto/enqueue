@@ -1,3 +1,9 @@
+# LiveMix 1.3.0
+
+- Added FX On/Off to toggle one FX channel or explicitly set it ON/OFF, including in Multi Actions. Send amounts and the FX mute group remain independent.
+- The FX lamp shows ON/OFF, original switch state during group mute and stopped audio. Setup offers FX channel, Mode, same-name fallback and Display name, with saved selections preserved offline.
+- This key requires LiveMix 0.16.0+ with External Control enabled. Older versions show an update message and send no FX switch command. Plugin Group (All Mics) still requires 0.10.0+; the other eight actions still support 0.6.0+.
+
 # LiveMix 1.1.0
 
 - Added Plugin Group (All Mics), a key that switches a numbered plugin group (1–5) across every microphone that has it. Toggle turns all OFF if any are ON, otherwise all ON; explicit ON and OFF modes are also available.

@@ -87,9 +87,9 @@ test("release images have localized labels, distinct group shapes and independen
   }
 });
 
-test("nine manifest actions have required controllers/states, translated triggers and all assets", async () => {
+test("ten manifest actions have required controllers/states, translated triggers and all assets", async () => {
   const manifest = JSON.parse(await readFile(resolve(pluginRoot, "manifest.json"), "utf8"));
-  assert.equal(manifest.Version, "1.2.0.0");
+  assert.equal(manifest.Version, "1.3.0.0");
   // The actual static previews and runtime rendering share the same geometry.
   const samples = [
     ["mic/on", micSvg("on", strings.en)],
@@ -98,6 +98,18 @@ test("nine manifest actions have required controllers/states, translated trigger
     ["fx-send-step/increase", sendSvg(35, "+5", strings.en)]
   ];
   for (const [path, expected] of samples) assert.equal((await readFile(resolve(pluginRoot, "imgs/actions/" + path + "@2x.svg"), "utf8")).trim(), expected);
+  for (const lamp of ["off", "on", "muted-on", "muted-off"] as const) for (const [suffix, size] of [["", 72], ["@2x", 144]] as const) {
+    const expected = micSvg(lamp, strings.en, false, false, size, "fx");
+    assert.equal((await readFile(resolve(pluginRoot, `imgs/actions/fx/${lamp}${suffix}.svg`), "utf8")).trim(), expected);
+    if (size === 144) {
+      assert.equal(Buffer.from(keyImage(lamp, "en", false, false, "fx").split(",")[1]!, "base64").toString("utf8"), expected);
+      assert.notEqual(keyImage(lamp, "en", false, false, "fx"), keyImage(lamp, "en"), "Glyph is part of the cache key");
+      // gom 2026-10-25 (candidate 2): an ON FX lamp is the accent blue; otherwise only the glyph differs from the mic key.
+      const asMic = expected.replace(glyph("fx"), glyph("mic"));
+      assert.equal(lamp === "on" ? asMic.replace('fill="#4C8DFF"', 'fill="#35D07F"') : asMic, micSvg(lamp, strings.en), "Only the glyph and the ON colour differ");
+      assert.equal(expected.includes('fill="#4C8DFF"'), lamp === "on", "Only an ON FX lamp is blue");
+    }
+  }
   for (const [name, lamp, count] of [["off", "plugin-all-off", 0], ["on", "plugin-all-on", 3], ["mixed", "plugin-all-mixed", 2]] as const) {
     for (const [suffix, size] of [["", 72], ["@2x", 144]] as const) for (const index of [1, 2, 3, 4, 5]) {
       const expected = actionSvg(lamp, strings.en, count, 3, false, "mic", size, index);
@@ -107,7 +119,7 @@ test("nine manifest actions have required controllers/states, translated trigger
     }
   }
   assert.notEqual(glyph("plugin-group-all"), glyph("plugin-group"), "Distinct white menu glyph");
-  assert.equal(manifest.Actions.length, 9); assert.equal(new Set(manifest.Actions.map((a: any) => a.UUID)).size, 9);
+  assert.deepEqual(manifest.Actions.map((a: any) => a.UUID), ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"].map(id => `com.gomtwigim.livemix.${id}`));
   const ko = JSON.parse(await readFile(resolve(pluginRoot, "ko.json"), "utf8")), en = JSON.parse(await readFile(resolve(pluginRoot, "en.json"), "utf8"));
   assert.deepEqual(Object.keys(ko.Localization).sort(), Object.keys(en.Localization).sort());
   for (const a of manifest.Actions) {
@@ -115,6 +127,10 @@ test("nine manifest actions have required controllers/states, translated trigger
     assert.deepEqual(a.Controllers, [dial ? "Encoder" : "Keypad"]);
     assert.equal(a.States.length, dial || sendStep ? 1 : 2);
     if (sendStep) { assert.equal(a.Name, "FX Send ±"); assert.equal(ko[a.UUID].Name, "FX 보내는 양 ±"); }
+    if (a.UUID.endsWith(".fx")) {
+      assert.equal(a.Name, "FX On/Off"); assert.equal(ko[a.UUID].Name, "FX ON/OFF");
+      assert.deepEqual(a.States.map((s: any) => s.Name), ["OFF", "ON"]);
+    }
     if (a.UUID.endsWith(".plugin-group-all")) {
       assert.equal(a.Name, "Plugin Group (All Mics)"); assert.equal(ko[a.UUID].Name, "플러그인 그룹 (전체 마이크)");
       assert.deepEqual(a.States.map((s: any) => s.Name), ["All OFF", "All ON"]);

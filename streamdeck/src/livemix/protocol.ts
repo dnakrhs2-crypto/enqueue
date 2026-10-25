@@ -29,7 +29,7 @@ function list<T>(v: unknown, max: number, read: (v: unknown) => T, key: (v: T) =
 export type PluginGroup = { index: number; off: boolean };
 export type Send = { fxId: string; amount: number; pre: boolean };
 export type Channel = { id: string; name: string; on: boolean; muteGroup: boolean; pluginGroups: PluginGroup[]; sends: Send[] };
-export type Fx = { id: string; name: string; muteGroup: boolean; return: number };
+export type Fx = { id: string; name: string; on: boolean; muteGroup: boolean; return: number };
 export type Projection = {
   session: { name: string; dirty: boolean };
   audio: { running: boolean };
@@ -57,6 +57,8 @@ export type ServerMessage = Snapshot | Delta | Ack | WireError | HelloAck
 export type MicCommand = { command: "toggleChannel"; args: { channelId: string } }
   | { command: "setChannelOn"; args: { channelId: string; on: boolean } };
 export type EditCommand = MicCommand
+  | { command: "toggleFx"; args: { fxId: string } }
+  | { command: "setFxOn"; args: { fxId: string; on: boolean } }
   | { command: "setAllChannelsOn"; args: { on: boolean } }
   | { command: "toggleMuteGroup"; args: { group: "mic" | "fx" } }
   | { command: "setMuteGroup"; args: { group: "mic" | "fx"; muted: boolean } }
@@ -70,7 +72,7 @@ export function validAck(command: Command, ack: Ack): boolean {
   const r = ack.result;
   switch (command.command) {
     case "requestState": return isRevision(r.snapshotRevision) && r.snapshotRevision === ack.revision && !ack.changed;
-    case "toggleChannel": case "setChannelOn": return typeof r.on === "boolean";
+    case "toggleChannel": case "setChannelOn": case "toggleFx": case "setFxOn": return typeof r.on === "boolean";
     case "setAllChannelsOn": return typeof r.on === "boolean" && isRevision(r.count) && r.count <= 8;
     case "toggleMuteGroup": case "setMuteGroup": return r.group === command.args.group && typeof r.muted === "boolean";
     case "setPluginGroupOff": return r.index === command.args.index && typeof r.off === "boolean";
@@ -100,7 +102,7 @@ function channel(value: unknown): Channel {
   return { id: uuid(o.id), name: str(o.name), on: bool(o.on), muteGroup: bool(o.muteGroup), pluginGroups: groups(o.pluginGroups), sends: sends(o.sends) };
 }
 function fx(value: unknown): Fx {
-  const o = object(value); return { id: uuid(o.id), name: str(o.name), muteGroup: bool(o.muteGroup), return: fraction(o.return) };
+  const o = object(value); return { id: uuid(o.id), name: str(o.name), on: "on" in o ? bool(o.on) : true, muteGroup: bool(o.muteGroup), return: fraction(o.return) };
 }
 export function validateProjection(value: unknown): Projection {
   const o = object(value), session = object(o.session), audio = object(o.audio), mute = object(o.muteGroups);
@@ -136,6 +138,7 @@ function changes(value: unknown): Changes {
   if (o.fx !== undefined) result.fx = list(o.fx, 4, value => {
     const f = object(value), patch: Partial<Fx> & { id: string } = { id: uuid(f.id) };
     if (f.name !== undefined) patch.name = str(f.name);
+    if ("on" in f) patch.on = bool(f.on);
     if (f.muteGroup !== undefined) patch.muteGroup = bool(f.muteGroup);
     if (f.return !== undefined) patch.return = fraction(f.return);
     return patch;

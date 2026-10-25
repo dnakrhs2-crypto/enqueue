@@ -82,7 +82,7 @@ export class FxBinding {
   }
 }
 
-export type ActionKind = "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
+export type ActionKind = "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
 export type ActionSettings = Omit<MicSettings, "mode"> & {
   mode: "toggle" | "on" | "off" | "mute" | "unmute" | "up" | "down" | "set";
   fxId: string; fxName: string; groupIndex: number;

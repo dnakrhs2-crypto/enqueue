@@ -12,6 +12,18 @@
       }
     ]
   },
+  "com.gomtwigim.livemix.fx": {
+    "Name": "FX On/Off",
+    "Tooltip": "Toggle one LiveMix FX channel or explicitly set it on or off (LiveMix 0.16.0+).",
+    "States": [
+      {
+        "Name": "OFF"
+      },
+      {
+        "Name": "ON"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.all-mics": {
     "Name": "All Microphones",
     "Tooltip": "Toggle all microphone switches, or turn them all on or off.",
@@ -113,6 +125,8 @@
   "Localization": {
     "action": "Microphone On/Off",
     "tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
+    "fxAction": "FX On/Off",
+    "fxActionTooltip": "Toggle one LiveMix FX channel or explicitly set it on or off (LiveMix 0.16.0+).",
     "connected": "Connected",
     "disconnected": "LiveMix offline",
     "disabled": "Control disabled",

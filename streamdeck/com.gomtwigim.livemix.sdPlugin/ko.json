@@ -12,6 +12,18 @@
       }
     ]
   },
+  "com.gomtwigim.livemix.fx": {
+    "Name": "FX ON/OFF",
+    "Tooltip": "LiveMix FX 채널 하나를 토글하거나 ON/OFF로 설정합니다 (LiveMix 0.16.0 이상).",
+    "States": [
+      {
+        "Name": "OFF"
+      },
+      {
+        "Name": "ON"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.all-mics": {
     "Name": "전체 마이크",
     "Tooltip": "모든 마이크 스위치를 토글하거나 전부 ON/OFF로 설정합니다.",
@@ -113,6 +125,8 @@
   "Localization": {
     "action": "마이크 ON/OFF",
     "tooltip": "LiveMix 마이크를 토글하거나 ON/OFF로 설정합니다.",
+    "fxAction": "FX ON/OFF",
+    "fxActionTooltip": "LiveMix FX 채널 하나를 토글하거나 ON/OFF로 설정합니다 (LiveMix 0.16.0 이상).",
     "connected": "연결됨",
     "disconnected": "LiveMix 미연결",
     "disabled": "제어 꺼짐",

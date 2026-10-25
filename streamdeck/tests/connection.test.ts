@@ -22,7 +22,8 @@ test("hello token, v1, instance and complete snapshot gate readiness", async t =
   assert.equal(connection.ready, false);
   await assert.rejects(connection.command(mic(server.snapshot.state.channels[0].id)), /DISCONNECTED/);
   assert.equal(server.received[0].token, server.token); assert.deepEqual(server.received[0].supportedVersions, [1]);
-  assert.equal(server.received[0].client.version, "1.2.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
+  assert.equal(server.received[0].client.version, "1.3.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
+  assert.equal(connection.capabilities.at(-1), "fxOn");
   server.broadcastState("initial"); await ready();
   assert.equal(connection.store.snapshot?.instanceId, server.snapshot.instanceId);
 });
@@ -31,6 +32,8 @@ test("ACK validation follows each command result and rejects malformed group/sen
   const snapshot = await fixture("initial-state");
   const ack: Ack = { v: 1, type: "ack", id: "2", instanceId: snapshot.instanceId, sessionId: snapshot.sessionId, revision: 2, changed: true, result: {} };
   const cases: { command: Command; result: Record<string, unknown>; bad: Record<string, unknown> }[] = [
+    { command: { command: "toggleFx", args: { fxId: snapshot.state.fx[0].id } }, result: { on: false }, bad: { on: "false" } },
+    { command: { command: "setFxOn", args: { fxId: snapshot.state.fx[0].id, on: true } }, result: { on: true }, bad: { on: 1 } },
     { command: { command: "setAllChannelsOn", args: { on: true } }, result: { on: true, count: 3 }, bad: { on: true, count: -1 } },
     { command: { command: "toggleMuteGroup", args: { group: "mic" } }, result: { group: "mic", muted: true }, bad: { group: "fx", muted: true } },
     { command: { command: "setPluginGroupOff", args: { channelId: snapshot.state.channels[0].id, index: 2, off: false } }, result: { index: 2, off: false }, bad: { index: 1, off: false } },
@@ -66,6 +69,57 @@ test("plugin group everywhere wire: count, no-op ACK, canonical delta, validatio
   await assert.rejects(connection.command({ command: "setPluginGroupOffEverywhere", args: { index: 3, off: false } }), /PLUGIN_GROUP_NOT_FOUND/);
   assert.equal(server.snapshot.revision, ack.revision);
 });
+test("FX wire: toggle/set results, no-op ACK, canonical delta and argument/missing-target errors", async t => {
+  const { server, connection, ready } = await setup(t); await ready();
+  const fxId = server.snapshot.state.fx[0].id, revision = server.snapshot.revision;
+  server.behavior.omitDelta = true;
+  const ack = await connection.command({ command: "toggleFx", args: { fxId } });
+  assert.deepEqual(ack.result, { on: false }); assert.equal(ack.changed, true); assert.equal(ack.revision, revision + 1);
+  assert.equal(connection.store.snapshot?.revision, revision);
+  assert.equal(connection.store.snapshot?.state.fx[0]!.on, true, "ACK never patches the cache");
+  server.behavior.omitDelta = false; server.publishDelta();
+  await until(connection.store, "change", () => connection.store.snapshot?.revision === ack.revision);
+  assert.equal(connection.store.snapshot?.state.fx[0]!.on, false);
+  const same = await connection.command({ command: "setFxOn", args: { fxId, on: false } });
+  assert.equal(same.changed, false); assert.equal(same.revision, ack.revision); assert.deepEqual(same.result, { on: false });
+  const restored = await connection.command({ command: "setFxOn", args: { fxId, on: true } });
+  assert.equal(restored.changed, true); assert.deepEqual(restored.result, { on: true });
+  await until(connection.store, "change", () => connection.store.snapshot?.revision === restored.revision);
+  assert.equal(connection.store.snapshot?.state.fx[0]!.on, true);
+  for (const args of [{ on: true }, { fxId: "bad", on: true }, { fxId }, { fxId, on: "true" }, { fxId, on: null }]) {
+    await assert.rejects(connection.command({ command: "setFxOn", args } as Command), /INVALID_ARGUMENT/);
+  }
+  await assert.rejects(connection.command({ command: "toggleFx", args: { fxId: "bad" } }), /INVALID_ARGUMENT/);
+  const missing = "cccccccccccc4ccc8ccccccccccccccc";
+  for (const command of [{ command: "toggleFx", args: { fxId: missing } }, { command: "setFxOn", args: { fxId: missing, on: true } }] as const) {
+    await assert.rejects(connection.command(command), /FX_NOT_FOUND/);
+    await ready(); // Missing-target errors request canonical state before the next command.
+  }
+  assert.equal(server.snapshot.revision, restored.revision);
+});
+
+test("FX on is optional in snapshots and deltas, with strict boolean validation when present", async () => {
+  const source = await fixture("initial-state"), fxId = source.state.fx[0].id;
+  for (const on of [false, true]) {
+    source.state.fx[0].on = on;
+    assert.equal((validateServerMessage(source) as Snapshot).state.fx[0]!.on, on);
+  }
+  delete source.state.fx[0].on;
+  const snapshot = validateServerMessage(source) as Snapshot, store = new StateStore();
+  assert.equal(snapshot.state.fx[0]!.on, true); store.accept(snapshot);
+  const delta = { v: 1, type: "stateDelta", instanceId: snapshot.instanceId, sessionId: snapshot.sessionId,
+    baseRevision: snapshot.revision, revision: snapshot.revision + 1, changes: { fx: [{ id: fxId, on: false }] } };
+  assert.equal(store.accept(validateServerMessage(delta) as Delta), true); assert.equal(store.snapshot?.state.fx[0]!.on, false);
+  const nameOnly = validateServerMessage({ ...delta, baseRevision: delta.revision, revision: delta.revision + 1, changes: { fx: [{ id: fxId, name: "Doubler" }] } }) as Delta;
+  assert.equal("on" in nameOnly.changes.fx![0]!, false);
+  assert.equal(store.accept(nameOnly), true); assert.equal(store.snapshot?.state.fx[0]!.on, false);
+  for (const on of [null, "true", 1]) {
+    source.state.fx[0].on = on;
+    assert.throws(() => validateServerMessage(source), { code: "INVALID_MESSAGE" });
+    assert.throws(() => validateServerMessage({ ...delta, changes: { fx: [{ id: fxId, on }] } }), { code: "INVALID_MESSAGE" });
+  }
+});
+
 test("UTF-8 byte splitting, coalesced messages, CRLF and framing limits", async () => {
   const source = await fixture("initial-state"), bytes = Buffer.from(JSON.stringify(source) + "\r\n");
   const decoder = new NdjsonDecoder(), messages: unknown[] = [];

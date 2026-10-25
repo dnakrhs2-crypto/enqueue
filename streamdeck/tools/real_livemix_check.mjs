@@ -1,5 +1,5 @@
 // Run the built plugin under the fake Stream Deck host against REAL LiveMix (External Control ON).
-// An independent TCP observer checks mic and all-mics group toggles; original values are restored.
+// An independent TCP observer checks mic, all-mics group and FX toggles; original values are restored.
 // Usage from streamdeck/: node tools/real_livemix_check.mjs
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -51,7 +51,7 @@ const waitObserver = (predicate, ms = 6000) => new Promise((res, rej) => {
 });
 const svg = image => image?.startsWith("data:image/svg+xml;base64,") ? Buffer.from(image.split(",")[1], "base64").toString("utf8") : "";
 const groupTargets = () => snapshot.state.channels.flatMap(c => c.pluginGroups.filter(g => g.index === 1).map(g => ({ channelId: c.id, off: g.off })));
-let origin, originalMic, originalGroups, micTouched = false, groupsTouched = false;
+let origin, originalMic, originalGroups, originalFx, micTouched = false, groupsTouched = false, fxTouched = false;
 const sameSession = () => snapshot.instanceId === origin.instanceId && snapshot.sessionId === origin.sessionId;
 async function restoreCommand(command, args) {
   assert.ok(sameSession(), "Session changed; restoration cannot edit another session");
@@ -78,10 +78,19 @@ async function groupVisual(targets) {
     return v.state === (onCount === total ? 1 : 0) && svg(v.image) === expected && v.title?.replace(/\n/g, "") === "전체 마이크 · 그룹 1";
   }, 8000);
 }
+async function fxVisual(on) {
+  await host.wait(() => {
+    const fx = snapshot.state.fx.find(f => f.id === originalFx.fxId);
+    if (!fx || fx.on !== on) return false;
+    const lamp = snapshot.state.muteGroups.fx && fx.muteGroup ? (on ? "muted-on" : "muted-off") : on ? "on" : "off";
+    const v = host.visual("fx-real");
+    return v.state === (on ? 1 : 0) && svg(v.image) === micSvg(lamp, locales.ko, !snapshot.state.audio.running, false, 144, "fx");
+  }, 8000);
+}
 
 try {
   await waitObserver(() => !observer.connecting);
-  observer.write(JSON.stringify({ v: 1, type: "hello", id: "1", supportedVersions: [1], token: discovery.token, client: { name: "real-check-observer", version: "1.1.0" } }) + "\n");
+  observer.write(JSON.stringify({ v: 1, type: "hello", id: "1", supportedVersions: [1], token: discovery.token, client: { name: "real-check-observer", version: "1.3.0" } }) + "\n");
   await waitObserver(() => snapshot);
   origin = { instanceId: snapshot.instanceId, sessionId: snapshot.sessionId };
   const mic = snapshot.state.channels[0]; assert.ok(mic, "No mic channel in the current session");
@@ -122,10 +131,28 @@ try {
     await restoreGroups(); await groupVisual(originalGroups); groupsTouched = false;
     console.log("GROUP_ALL_OK");
   }
+  const hello = lines.find(m => m.type === "helloAck"), fx = snapshot.state.fx[0];
+  if (!hello?.capabilities.includes("fxOn")) console.log("FX_ON_SKIPPED (LiveMix does not advertise fxOn)");
+  else if (!fx) console.log("FX_ON_SKIPPED (no FX in the current session)");
+  else {
+    originalFx = { fxId: fx.id, on: fx.on };
+    host.appear("fx-real", { settingsVersion: 1, fxId: fx.id, fxName: fx.name, mode: "toggle", nameFallback: false }, 2, "fx");
+    await fxVisual(originalFx.on);
+    fxTouched = true;
+    for (const on of [!originalFx.on, originalFx.on]) {
+      const revision = snapshot.revision;
+      host.keyDown("fx-real"); host.keyUp("fx-real");
+      await waitObserver(() => sameSession() && snapshot.revision > revision && snapshot.state.fx.find(f => f.id === originalFx.fxId)?.on === on);
+      await fxVisual(on);
+    }
+    fxTouched = false;
+    console.log("FX_ON_OK");
+  }
   assert.equal(host.output.includes(discovery.token), false, "Token must not appear in plugin logs");
   console.log("REAL_CHECK_OK");
 } finally {
   try {
+    if (fxTouched) await restoreCommand("setFxOn", originalFx);
     if (groupsTouched) await restoreGroups();
     if (micTouched) await restoreCommand("setChannelOn", originalMic);
   } finally {

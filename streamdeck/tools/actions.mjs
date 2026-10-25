@@ -1,6 +1,7 @@
 // Manifest, localization and release assets use the same action catalogue.
 export const actions = [
   { id: "mic", name: "action", tooltip: "tooltip", states: ["off", "on"] },
+  { id: "fx", name: "fxAction", tooltip: "fxActionTooltip", states: ["off", "on"] },
   { id: "all-mics", name: "allMics", tooltip: "allMicsTooltip", states: ["allOff", "allOn"] },
   { id: "mic-mute-group", name: "micMuteGroup", tooltip: "micMuteGroupTooltip", states: ["unmuteState", "muteState"] },
   { id: "fx-mute-group", name: "fxMuteGroup", tooltip: "fxMuteGroupTooltip", states: ["unmuteState", "muteState"] },

@@ -109,8 +109,8 @@ hello는 앞으로도 고정된 v1 bootstrap envelope로 보낸다. `supportedVe
 
 | 종류·방향 | 목적·응답 | JSON 예시 |
 |---|---|---|
-| `hello` C→S | 연결 후 3초 안에 최초 1회. 버전·토큰·client 설명 전달 | `{"v":1,"type":"hello","id":"1","supportedVersions":[1],"token":"<discovery token>","client":{"name":"LiveMix Stream Deck","version":"1.1.0"}}` |
-| `helloAck` S→C | 인증·버전 성공. 바로 snapshot 1개가 뒤따름. `pluginGroupsEverywhere` 추가: **1.1.0 / LiveMix 0.10.0** | `{"v":1,"type":"helloAck","id":"1","instanceId":"I","server":{"name":"LiveMix","version":"0.10.0"},"capabilities":["stateDelta","mic","muteGroups","pluginGroups","sends","pluginGroupsEverywhere"],"eventIntervalMs":100,"heartbeatIntervalMs":5000}` |
+| `hello` C→S | 연결 후 3초 안에 최초 1회. 버전·토큰·client 설명 전달 | `{"v":1,"type":"hello","id":"1","supportedVersions":[1],"token":"<discovery token>","client":{"name":"LiveMix Stream Deck","version":"1.3.0"}}` |
+| `helloAck` S→C | 인증·버전 성공. 바로 snapshot 1개가 뒤따름. `pluginGroupsEverywhere` 추가: **1.1.0 / LiveMix 0.10.0**. `fxOn` 추가: **1.3.0 / LiveMix 0.16.0** | `{"v":1,"type":"helloAck","id":"1","instanceId":"I","server":{"name":"LiveMix","version":"0.16.0"},"capabilities":["stateDelta","mic","muteGroups","pluginGroups","sends","pluginGroupsEverywhere","fxOn"],"eventIntervalMs":100,"heartbeatIntervalMs":5000}` |
 | `state` S→C | hello, `requestState`, 구조·세션 교체 시 전체 상태. 기존 캐시를 원자적으로 대체 | `{"v":1,"type":"state","instanceId":"I","sessionId":"S","revision":12,"reason":"requested","requestId":"9","state":{"session":{"name":"방송","dirty":false},"audio":{"running":false},"channels":[],"fx":[],"muteGroups":{"mic":false,"fx":false}}}` |
 | `stateDelta` S→C | 동일 session의 변경분. `baseRevision` 일치 시 적용 | `{"v":1,"type":"stateDelta","instanceId":"I","sessionId":"S","baseRevision":12,"revision":14,"changes":{"session":{"dirty":true},"channels":[{"id":"11111111111141118111111111111111","on":false}]}}` |
 | `command` C→S | 허용된 편집 또는 조회. 아래 표 참조 | `{"v":1,"type":"command","id":"2","instanceId":"I","sessionId":"S","command":"toggleChannel","args":{"channelId":"11111111111141118111111111111111"}}` |
@@ -137,7 +137,8 @@ hello는 앞으로도 고정된 v1 bootstrap envelope로 보낸다. `supportedVe
 | `channels[].id/name/on/muteGroup` | Uuid, 실제 이름, 원래 ON 비트, 마이크 뮤트그룹 소속 |
 | `channels[].pluginGroups[]` | 실제로 존재하는 그룹만. `index`는 **1-based** 1~5, `off`는 그룹 OFF 비트 |
 | `channels[].sends[]` | 실제 FX마다 `fxId`, `amount`(유한한 0~1), `pre`(boolean) |
-| `state.fx[]` | 현재 FX 채널(최대 4개)의 `id`, `name`, `muteGroup`, `return` |
+| `state.fx[]` | 현재 FX 채널(최대 4개)의 `id`, `name`, `on`, `muteGroup`, `return`. `on` 추가: **1.3.0 / LiveMix 0.16.0** |
+| `fx[].on` (**1.3.0 / LiveMix 0.16.0**) | 개별 FX의 원래 ON boolean. OFF이면 리턴은 무음, 보내는 양은 유지. FX 뮤트그룹과 독립된 스위치이며 차단 효과는 OR. LiveMix 0.6.0~0.15.5의 snapshot에서 생략되면 plugin은 true로 읽고, 값이 있으나 boolean이 아니면 `INVALID_MESSAGE` |
 | `fx[].return` | `MixFx::returnAmount`의 유한한 0~1. 뮤트 중에도 저장값 유지 |
 | `state.muteGroups.mic/fx` | `MuteGroups::isMuted()`의 현재 상태. true=뮤트, false=해제 |
 
@@ -163,7 +164,7 @@ hello는 앞으로도 고정된 v1 bootstrap envelope로 보낸다. `supportedVe
       }
     ],
     "fx": [
-      { "id": "22222222222242228222222222222222", "name": "리버브", "muteGroup": true, "return": 1.0 }
+      { "id": "22222222222242228222222222222222", "name": "리버브", "on": true, "muteGroup": true, "return": 1.0 }
     ],
     "muteGroups": { "mic": false, "fx": true }
   }
@@ -188,7 +189,7 @@ hello는 앞으로도 고정된 v1 bootstrap envelope로 보낸다. `supportedVe
 | `channels[]` | id로 기존 채널 검색 후 포함된 필드만 교체 | `{"channels":[{"id":"11111111111141118111111111111111","name":"방송 마이크","on":false}]}` |
 | `channels[].pluginGroups` | 해당 채널의 그룹 배열 **전체 교체** | `{"channels":[{"id":"11111111111141118111111111111111","pluginGroups":[{"index":1,"off":true}]}]}` |
 | `channels[].sends` | 해당 채널의 보내기 배열 **전체 교체** | `{"channels":[{"id":"11111111111141118111111111111111","sends":[{"fxId":"22222222222242228222222222222222","amount":0.38,"pre":false}]}]}` |
-| `fx[]` | id로 기존 FX 검색 후 포함된 scalar만 교체 | `{"fx":[{"id":"22222222222242228222222222222222","return":0.5,"muteGroup":true}]}` |
+| `fx[]` | id로 기존 FX 검색 후 포함된 scalar만 교체. `on` 추가: **1.3.0 / LiveMix 0.16.0**. delta에 없으면 기존 값을 유지하고, 있으면 boolean 검증 | `{"fx":[{"id":"22222222222242228222222222222222","on":false,"return":0.5,"muteGroup":true}]}` |
 | 채널/FX 추가·삭제·순서 변경, 그룹 개수 변경, 세션 교체 | delta 대신 full state. v1에는 JSON Patch 경로·삭제 연산 없음 | 최상위 `reason="structureChanged"` 또는 `"sessionChanged"` |
 
 `baseRevision`은 그 client의 송신 FIFO에 마지막으로 발행한 상태의 revision이다. 합쳐진 delta가 12→17처럼 건너뛰는 것은 정상이다. 클라이언트 캐시 revision과 base가 다르거나 모르는 id가 들어오면 적용하지 않고 requestState를 보낸다. snapshot으로 기준을 다시 잡는다. 완성된 프레임을 FIFO에 넣은 뒤에는 delta만 임의로 제거하거나 순서를 바꾸지 않는다. 새 snapshot은 기존 프레임 뒤에 들어가며 이후 delta는 그 snapshot을 기준으로 한다. 출력 한도 초과는 해당 client를 끊고 재접속 시 full state로 복구한다.
@@ -203,6 +204,8 @@ ack의 `result`는 명령 처리 결과·후속 명령 계획용이며 **전역 
 |---|---|---|---|
 | `setChannelOn` | `{"channelId":"11111111111141118111111111111111","on":false}` | 해당 원래 ON 비트 설정. result `{"on":false}` | `document.setChannelOn(id, on)` |
 | `toggleChannel` | `{"channelId":"11111111111141118111111111111111"}` | dispatch 시점의 on 반전. result에 결과 on | `findChannel` 후 같은 message-thread 작업에서 `setChannelOn(id, !on)` |
+| `toggleFx` (**1.3.0 / LiveMix 0.16.0**) | `{"fxId":"22222222222242228222222222222222"}` | 해당 FX의 원래 ON 비트를 서버에서 원자적으로 반전. result `{"on":false}` | message-thread에서 FX 존재 확인 후 반전. 없는 FX는 `FX_NOT_FOUND`. 보내는 양과 FX 뮤트그룹 유지. 정상 `fx[].on` delta로 표시 갱신 |
+| `setFxOn` (**1.3.0 / LiveMix 0.16.0**) | `{"fxId":"22222222222242228222222222222222","on":true}` | 원래 ON 비트 설정. result `{"on":true}`, 동일 값이면 `changed:false` | fxId는 Uuid, on은 boolean. 잘못된 인자는 `INVALID_ARGUMENT`, 없는 FX는 `FX_NOT_FOUND`. ack result는 boolean 검증만 하며 캐시를 patch하지 않음 |
 | `setAllChannelsOn` | `{"on":false}` | 모든 원래 ON 비트 설정. result `{"on":false,"count":2}`. 뮤트그룹 유지 | `document.setAllChannelsOn(on)` |
 | `toggleMuteGroup` | `{"group":"mic"}` 또는 `{"group":"fx"}` | 현재 뮤트/해제 반전. result `{"group":"mic","muted":true}` | `muteGroups.toggle(Group::mic/fx)` |
 | `setMuteGroup` | `{"group":"fx","muted":false}` | 명시적 뮤트/해제. result에 group·muted | `muteGroups.set(group, muted)` |
@@ -215,7 +218,7 @@ ack의 `result`는 명령 처리 결과·후속 명령 계획용이며 **전역 
 
 양은 유한한 0~1만 허용한다. 범위 밖 입력은 clamp 대신 `INVALID_ARGUMENT`로 거부한다. plugin은 사용자 회전 결과만 0~1로 clamp한다. `setSend`의 기존 API는 없는 fxId에도 send를 만들 수 있으므로 **채널과 FX 양쪽 존재 검증을 선행**해야 한다. index는 정수·1~5·실존 여부를 모두 검사한다. 설정값이 이미 같으면 setter를 부르지 않고 `changed:false`로 ack하여 불필요한 dirty·UI refresh를 만들지 않는다.
 
-같은 연결의 명령은 수신 순서로 처리한다. 여러 연결은 message-thread dispatcher가 직렬화한다. 전체 마이크·그룹 OFF 반전처럼 client가 값을 계산한 명령과 dial의 계산된 amount에는 `ifRevision`을 붙인다. 충돌이면 적용 0회와 최신 revision을 반환한다. 직접적인 `toggleChannel`/`toggleMuteGroup`은 서버에서 반전하므로 오래된 캐시의 반전값을 보내지 않는다.
+같은 연결의 명령은 수신 순서로 처리한다. 여러 연결은 message-thread dispatcher가 직렬화한다. 전체 마이크·그룹 OFF 반전처럼 client가 값을 계산한 명령과 dial의 계산된 amount에는 `ifRevision`을 붙인다. 충돌이면 적용 0회와 최신 revision을 반환한다. 직접적인 `toggleChannel`/`toggleMuteGroup`/`toggleFx`(**1.3.0 / LiveMix 0.16.0**)는 서버에서 반전하므로 오래된 캐시의 반전값을 보내지 않는다.
 
 연결 내 중복 id는 다시 실행하지 않는다. 완료 응답은 최대 256개/60초 캐시하여 동일 id·동일 요청이면 같은 결과를 반환하고, 다른 내용이면 `DUPLICATE_ID`다. 아직 in-flight인 동일 요청은 새 작업을 만들지 않고 최초 결과를 기다린다. 보관 범위를 지난 오래된 id도 실행하지 않도록 숫자로 비교하는 요청 번호 high-water mark를 유지한다. 번호 상한에 도달하면 새 연결을 연다. 이 중복 방지는 연결 범위이며 재연결을 넘는 exactly-once를 약속하지 않는다. **timeout/끊김 뒤 toggle·set·dial 누적분을 재생하지 않는다.** 명시적 `REVISION_CONFLICT`로 미적용이 확정된 dial만 같은 세션에서 새 상태 기준으로 최대 2회 재계산할 수 있다.
 
@@ -387,6 +390,7 @@ UUID 접두어 `com.gomtwigim.livemix`는 공개 전 고객이 확정한다. 아
 | 한국어 / 영어 이름 | 전체 action UUID | controller·PI | 입력·표시·명령 |
 |---|---|---|---|
 | 마이크 ON/OFF / Microphone On/Off | `com.gomtwigim.livemix.mic` | Keypad. 마이크, 동작 `토글 / ON / OFF` | keyDown 한 번에 `toggleChannel` 또는 `setChannelOn`. 램프와 현재 마이크 이름. 뮤트그룹 상태는 별도 작은 배지 |
+| FX ON/OFF / FX On/Off (**1.3.0 / LiveMix 0.16.0**) | `com.gomtwigim.livemix.fx` | Keypad, Multi Actions 지원. FX 채널, 동작 `토글 / ON / OFF`, 같은 이름 연결, 표시 이름 | keyDown 한 번에 `toggleFx { fxId }` 또는 `setFxOn { fxId, on }`. `fx/<fxId>` 큐에서 전송 시 존재 확인, `ifRevision`·재시도 없음. keyUp 명령 없음. 마이크와 같은 램프에 FX 글자, ON/OFF 및 뮤트 중 원래 ON/OFF, 오디오 멈춤 배지. state는 `fx.on`의 1/0이며 뮤트그룹과 독립. `fxOn` capability가 없으면 기존 업데이트 안내와 입력 alert만 표시하며 명령을 보내지 않음 |
 | 전체 마이크 / All Microphones | `com.gomtwigim.livemix.all-mics` | Keypad. `토글 / 마이크 전부 ON / 마이크 전부 OFF` | 토글은 **하나라도 ON이면 전부 OFF, 전부 OFF이면 전부 ON**. `setAllChannelsOn` + `ifRevision`. 모두 ON/모두 OFF/일부 ON과 `2/3` 표시. 뮤트그룹은 해제하지 않음 |
 | 마이크 뮤트그룹 / Microphone Mute Group | `com.gomtwigim.livemix.mic-mute-group` | Keypad. `토글 / 뮤트 / 해제` | `toggleMuteGroup(mic)` 또는 `setMuteGroup(mic)`. 소속 마이크 수와 뮤트/해제. 멤버 0개여도 현재 LiveMix처럼 latch 조작 가능; `대상 0개` 표시 |
 | FX 뮤트그룹 / FX Mute Group | `com.gomtwigim.livemix.fx-mute-group` | Keypad. `토글 / 뮤트 / 해제` | 위와 같고 group=`fx`. 보내는 양이나 돌아오는 양을 0으로 덮어쓰지 않음 |
@@ -399,7 +403,7 @@ UUID 접두어 `com.gomtwigim.livemix`는 공개 전 고객이 확정한다. 아
 
 플러그인 그룹은 UI와 같은 **번호 슬롯**이다. 앞 그룹을 삭제하면 뒤 번호가 당겨지므로 “그룹 2” key도 새 2번을 가리킨다. 그룹 자체의 영구 Uuid는 현재 모델에 없다. 이 제약을 PI에 한 줄로 알리고 그룹 편집 후 재확인을 안내한다. 하나의 플러그인이 여러 OFF 그룹에 소속되면 한 그룹을 ON으로 바꿔도 다른 OFF 그룹 때문에 계속 바이패스될 수 있다.
 
-v1에서는 Multi Action과 Key Logic 내부 사용을 숨긴다. 일반 keyDown/keyUp 및 dial 이벤트에서 확인한 한 번의 조작 계약을 먼저 완성한다. 향후 명시적 set mode에 한해 Multi Action 동작을 설계·검증한 뒤 지원할 수 있다.
+초기 v1 설계에서는 Multi Action과 Key Logic 내부 사용을 숨겼다. **1.2.0**부터 Keypad 액션은 Multi Actions에서 PI 동작 설정을 그대로 실행하고 키 state/image/title은 보내지 않는다. **1.3.0 / LiveMix 0.16.0**의 FX ON/OFF도 이 규칙을 따른다. 실패 alert는 기존 초당 10회 예산에 포함한다. Encoder와 Key Logic은 계속 미지원이다. 이 변경은 아래 2026-09-08 Claude 검토의 초기 Multi Action 제외 결정을 대체한다.
 
 전체 마이크·플러그인 그룹처럼 캐시에서 반대 값을 계산하는 key는 같은 대상의 여러 context를 공통 queue로 직렬화한다. 처음 입력의 ack와 해당 revision의 state를 확인한 뒤 다음 **입력 의도**를 최신 값에서 계산한다. 이미 계산한 오래된 bool을 보관하지 않는다. 미전송 key 의도는 대상당 2개·최대 500 ms로 제한하고 초과/기한 만료는 실패 표시한다. 서버가 원자적으로 토글하는 마이크·뮤트그룹은 수신 순서대로 처리하되 연결/세션 경계에서 동일하게 취소한다.
 
@@ -434,6 +438,7 @@ v1 touch 표시는 읽기 전용이며 tap/long touch에 명령을 배정하지 
 | 마이크 ON | 켜진 초록 램프, `ON`, 마이크 이름 | state 1. muteGroups와 별개로 원래 `channel.on` 반영 |
 | 마이크 OFF | 꺼진 회색 램프와 선명한 `OFF` | state 0. 이름을 읽을 수 있는 대비 유지 |
 | 마이크 뮤트그룹 적용 | 빨간 램프 + `뮤트그룹`, 작은 `원래 ON` / `원래 OFF` | state는 원래 on의 1/0 유지. 실제 입력 차단 이유와 저장 스위치를 함께 표시 |
+| FX ON/OFF, **1.3.0 / LiveMix 0.16.0** | 위 마이크 램프의 원·문구·뮤트 배지·slash·일시정지 표시를 그대로 쓰고 glyph는 FX 글자, ON 램프는 accent 파랑 `#4C8DFF`(마이크 키 초록과 구분 — 2026-10-25 gom 후보 2번 선택). OFF 회색·뮤트 빨강은 마이크와 같음 | state는 `fx.on`의 1/0. FX 뮤트그룹이 켜져 있고 해당 FX가 소속일 때만 빨간 muted-on/off 표시. 비소속 FX는 일반 램프 |
 | 뮤트그룹 해제 / 뮤트 | 그룹 도형 + `해제` / 빨간 차단 도형 + `뮤트` | state 0=해제, 1=뮤트. 빨강은 뮤트 중이라는 뜻 |
 | 플러그인 그룹 ON / OFF | 숫자 1~5 + accent 활성 / 빨간 `OFF` | state 1=ON, 0=OFF; wire의 `off`와 반대 |
 | 플러그인 그룹 (전체 마이크), **1.1.0 / LiveMix 0.10.0** | 플러그인 chip과 그룹 숫자, accent `모두 ON` / 빨간 `모두 OFF` / 주황 `일부 ON`, 켜진 수/해당 그룹이 있는 채널 수 | 모두 ON일 때만 state 1, 나머지 state 0. 오디오 멈춤 배지 유지. action-list 아이콘은 겹친 chip 힌트로 단일 마이크 그룹과 구별 |
@@ -460,7 +465,7 @@ v1 touch 표시는 읽기 전용이며 tap/long touch에 명령을 배정하지 
 |---|---|
 | `settingsVersion:1` | action 설정 migration 버전. wire `v`와 별개 |
 | `channelId`, `channelName` | 사용자가 선택한 원래 마이크 Uuid와 마지막 확인 이름 |
-| `fxId`, `fxName` | 원래 FX Uuid·이름. FX 보내는 양에서만 사용 |
+| `fxId`, `fxName` | 원래 FX Uuid·이름. FX 보내는 양과 FX ON/OFF(**1.3.0 / LiveMix 0.16.0**)에서 사용 |
 | `groupIndex` | 실제 UI와 같은 1-based 그룹 번호 |
 | `mode`, `stepPercent`, `pressMode` | action별 동작 선택. 서버 명령으로 변환 전에 enum·범위 검증 |
 | `nameFallback:true` | 기본 ON. `세션을 바꿀 때 같은 이름 연결` 안내와 함께 제공 |

@@ -9,7 +9,15 @@ import { brandSvg, categorySvg, glyph, svgDocument, micSvg, actionSvg, sendSvg, 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plugin = resolve(root, "com.gomtwigim.livemix.sdPlugin");
 const design = resolve(root, "design");
-async function write(path, data) { await mkdir(dirname(path), { recursive: true }); await writeFile(path, data); }
+async function write(path, data) {
+  await mkdir(dirname(path), { recursive: true });
+  if (typeof data === "string") {
+    const previous = await readFile(path, "utf8").catch(error => { if (error.code !== "ENOENT") throw error; return ""; });
+    // Preserve checked-out line endings so unchanged artwork stays byte-identical on Windows.
+    if (previous.includes("\r\n")) data = data.replace(/\r?\n/g, "\r\n");
+  }
+  await writeFile(path, data);
+}
 async function asset(path, data) {
   const source = resolve(design, path);
   await write(source, data);
@@ -23,6 +31,8 @@ function states(id, size) {
   switch (id) {
     case "mic": return { off: micSvg("off", en, false, false, size), on: micSvg("on", en, false, false, size),
       "muted-on": micSvg("muted-on", en, false, false, size), "muted-off": micSvg("muted-off", en, false, false, size) };
+    case "fx": return { off: micSvg("off", en, false, false, size, "fx"), on: micSvg("on", en, false, false, size, "fx"),
+      "muted-on": micSvg("muted-on", en, false, false, size, "fx"), "muted-off": micSvg("muted-off", en, false, false, size, "fx") };
     case "all-mics": return { off: actionSvg("all-off", en, 0, 3, false, "mic", size), on: actionSvg("all-on", en, 3, 3, false, "mic", size),
       mixed: actionSvg("mixed", en, 2, 3, false, "mic", size) };
     case "mic-mute-group":
@@ -71,7 +81,7 @@ for (const [language, strings] of Object.entries(locales)) await write(resolve(p
 const manifest = JSON.parse(await readFile(resolve(plugin, "manifest.json"), "utf8"));
 const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 manifest.Version = pkg.version + ".0";
-manifest.Description = "Control LiveMix microphones, mute groups, plugin groups and FX sends on this Windows PC.";
+manifest.Description = "Control LiveMix microphones, FX channels, mute groups, plugin groups and FX sends on this Windows PC.";
 manifest.Actions = actions.map(a => ({ UUID: `com.gomtwigim.livemix.${a.id}`, Name: locales.en[a.name], Tooltip: locales.en[a.tooltip],
   Icon: `imgs/actions/${a.id}/icon`, PropertyInspectorPath: "ui/inspector.html", Controllers: [a.id === "fx-send" ? "Encoder" : "Keypad"],
   DisableAutomaticStates: true, DisableCaching: true, UserTitleEnabled: false, SupportedInMultiActions: a.id !== "fx-send", SupportedInKeyLogicActions: false,

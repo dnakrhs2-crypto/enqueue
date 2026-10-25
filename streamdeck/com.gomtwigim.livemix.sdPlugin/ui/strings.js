@@ -3,6 +3,8 @@ window.LiveMixStrings = {
   "en": {
     "action": "Microphone On/Off",
     "tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
+    "fxAction": "FX On/Off",
+    "fxActionTooltip": "Toggle one LiveMix FX channel or explicitly set it on or off (LiveMix 0.16.0+).",
     "connected": "Connected",
     "disconnected": "LiveMix offline",
     "disabled": "Control disabled",
@@ -93,6 +95,8 @@ window.LiveMixStrings = {
   "ko": {
     "action": "마이크 ON/OFF",
     "tooltip": "LiveMix 마이크를 토글하거나 ON/OFF로 설정합니다.",
+    "fxAction": "FX ON/OFF",
+    "fxActionTooltip": "LiveMix FX 채널 하나를 토글하거나 ON/OFF로 설정합니다 (LiveMix 0.16.0 이상).",
     "connected": "연결됨",
     "disconnected": "LiveMix 미연결",
     "disabled": "제어 꺼짐",

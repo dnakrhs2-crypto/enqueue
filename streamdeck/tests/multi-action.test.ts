@@ -6,7 +6,7 @@ import { FakeHost } from "./fake-host.mjs";
 import { until } from "./helpers.mjs";
 import { setupActions, options, alerts, commands, title } from "./action-helpers.js";
 
-const kinds = ["mic", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send-step", "status"] as const;
+const kinds = ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send-step", "status"] as const;
 const visualEvents = ["setState", "setImage", "setTitle"];
 const assertSilent = (host: FakeHost, id: string): void => {
   assert.deepEqual(host.records.filter(r => r.context === id && visualEvents.includes(r.event)), [], id);
@@ -30,6 +30,7 @@ for (const kind of kinds) test(`${kind}: multi-action stays silent on appear/ref
       for (const group of channel.pluginGroups) group.off = true;
       for (const send of channel.sends) send.amount = 0.6;
     }
+    for (const fx of s.state.fx) fx.on = false;
     s.state.muteGroups = { mic: true, fx: true }; s.state.audio.running = false;
   }, true);
   await until(host, "pi", () => pi.messages.at(-1)?.payload.revision === server.snapshot.revision);
@@ -39,6 +40,7 @@ for (const kind of kinds) test(`${kind}: multi-action stays silent on appear/ref
 
   const expected = {
     mic: { command: "toggleChannel", args: { channelId: settings.channelId } },
+    fx: { command: "toggleFx", args: { fxId: settings.fxId } },
     "all-mics": { command: "setAllChannelsOn", args: { on: true } },
     "mic-mute-group": { command: "toggleMuteGroup", args: { group: "mic" } },
     "fx-mute-group": { command: "toggleMuteGroup", args: { group: "fx" } },
@@ -55,7 +57,7 @@ for (const kind of kinds) test(`${kind}: multi-action stays silent on appear/ref
   host.assertBudget();
 });
 
-for (const kind of ["mic", "all-mics", "plugin-group", "plugin-group-all"] as const) test(`${kind}: multi-action executes toggle/on/off settings regardless of userDesiredState`, async t => {
+for (const kind of ["mic", "fx", "all-mics", "plugin-group", "plugin-group-all"] as const) test(`${kind}: multi-action executes toggle/on/off settings regardless of userDesiredState`, async t => {
   const { server, host, settings } = await setupActions(t);
   host.appear("multi", settings, 0, kind, "Keypad", { isInMultiAction: true });
   const { pi } = await options(host, "multi");
@@ -67,6 +69,9 @@ for (const kind of ["mic", "all-mics", "plugin-group", "plugin-group-all"] as co
     expected.push(kind === "mic" ? mode === "toggle"
       ? { command: "toggleChannel", args: { channelId: settings.channelId } }
       : { command: "setChannelOn", args: { channelId: settings.channelId, on } }
+      : kind === "fx" ? mode === "toggle"
+        ? { command: "toggleFx", args: { fxId: settings.fxId } }
+        : { command: "setFxOn", args: { fxId: settings.fxId, on } }
       : kind === "all-mics" ? { command: "setAllChannelsOn", args: { on } }
       : { command: kind === "plugin-group" ? "setPluginGroupOff" : "setPluginGroupOffEverywhere",
         args: { ...(kind === "plugin-group" ? { channelId: settings.channelId } : {}), index: 1, off: !on } });
