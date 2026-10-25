@@ -28,7 +28,7 @@ namespace GainUnits
 
     double maxPercent() noexcept
     {
-        return toPercent (Cue::maxGainDb);
+        return 200.0;
     }
 
     juce::String format (double db, bool percent)
@@ -113,6 +113,24 @@ void GainSlider::applyUnit()
 {
     setTextValueSuffix (showsPercent() ? " %" : " dB");
     updateText();
+    repaint();   // the knob moves to its place on the other scale
+}
+
+double GainSlider::proportionOfLengthToValue (double proportion)
+{
+    if (! showsPercent())
+        return juce::Slider::proportionOfLengthToValue (proportion);
+
+    return GainUnits::fromPercent (juce::jlimit (0.0, 1.0, proportion) * GainUnits::maxPercent());
+}
+
+double GainSlider::valueToProportionOfLength (double value)
+{
+    if (! showsPercent())
+        return juce::Slider::valueToProportionOfLength (value);
+
+    // a gain set above 200 % in dB keeps the knob at the right end (the box shows it as it is)
+    return juce::jlimit (0.0, 1.0, GainUnits::toPercent (value) / GainUnits::maxPercent());
 }
 
 juce::String GainSlider::getTextFromValue (double value)
@@ -166,8 +184,8 @@ double GainSlider::onGrid (double db) const
 {
     db = juce::jlimit (Cue::minGainDb, Cue::maxGainDb, db);
 
-    if (showsPercent())
-        return GainUnits::fromPercent (std::round (GainUnits::toPercent (db) * 10.0) / 10.0);
+    if (showsPercent())   // 0.1 % steps, never past the top of the % scale (200 %)
+        return GainUnits::fromPercent (juce::jlimit (0.0, GainUnits::maxPercent(), std::round (GainUnits::toPercent (db) * 10.0) / 10.0));
 
     // the 0.1 dB interval the slider had, by the same rule JUCE snapped it with
     return juce::jlimit (Cue::minGainDb, Cue::maxGainDb, Cue::minGainDb + 0.1 * std::floor ((db - Cue::minGainDb) / 0.1 + 0.5));
@@ -193,6 +211,12 @@ double GainSlider::snapValue (double attemptedValue, DragMode)
 
 void GainSlider::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
+    // in %, a gain set above 200 % in dB sits at the right end: a notch up must not pull it down to 200 %
+    const float amount = (std::abs (wheel.deltaX) > std::abs (wheel.deltaY) ? -wheel.deltaX : wheel.deltaY) * (wheel.isReversed ? -1.0f : 1.0f);
+
+    if (showsPercent() && amount > 0.0f && GainUnits::toPercent (getValue()) > GainUnits::maxPercent())
+        return;
+
     const juce::ScopedValueSetter<bool> notch (wheeling, true);
     wheelFrom = getValue();
     juce::Slider::mouseWheelMove (e, wheel);

@@ -64,6 +64,19 @@ public:
         return c;
     }
 
+    /** One mouse-wheel notch on the slider, at a new event time (JUCE drops a repeat with the same time). */
+    static void wheelNotch (juce::Slider& slider, float deltaY, juce::int64& ms)
+    {
+        ms += 100;
+        const auto at = slider.getLocalBounds().getCentre().toFloat();
+        const juce::Time time (ms);
+        const juce::MouseEvent event (juce::Desktop::getInstance().getMainMouseSource(), at, {}, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                      &slider, &slider, time, at, time, 1, false);
+        juce::MouseWheelDetails details {};
+        details.deltaY = deltaY;
+        slider.mouseWheelMove (event, details);
+    }
+
     void press (GainUnitButton& button)
     {
         button.triggerClick();   // JUCE posts the click; the dispatch delivers it like a real one
@@ -161,12 +174,13 @@ public:
             };
             check ("150", 150.0, "150.0 %");
             expectWithinAbsoluteError (play.wave->getWaveScale (0), 1.5f, 1e-5f, "150 % draws the wave at 1.5 times");
-            check ("250 %", 250.0, "250.0 %");
-            check ("1000", 1000.0, "1000.0 %");
+            check ("180 %", 180.0, "180.0 %");
+            check ("250", 200.0, "200.0 %");   // the top of the % scale
+            check ("1000", 200.0, "200.0 %");
             check ("70%", 70.0, "70.0 %");
             check ("33.33", 33.3, "33.3 %");   // the box shows what the cue holds: 0.1 % steps
-            check ("99999", GainUnits::maxPercent(), "1584.9 %");
-            expectWithinAbsoluteError (f.document().cues.getSelected()->gainDb, Cue::maxGainDb, 1e-9, "the top is the dB ceiling");
+            check ("99999", GainUnits::maxPercent(), "200.0 %");
+            expectWithinAbsoluteError (f.document().cues.getSelected()->gainDb, GainUnits::fromPercent (200.0), 1e-9, "the top is 200 %, not the dB ceiling");
             check ("-6", GainUnits::toPercent (GainUnits::fromPercent (50.1)), "50.1 %");   // a % cannot be negative: that is dB
             check ("-6 dB", GainUnits::toPercent (GainUnits::fromPercent (50.1)), "50.1 %");
             check ("0", 0.0, "0.0 %");
@@ -181,7 +195,7 @@ public:
                 play.slider->setValue (play.slider->snapValue (db, juce::Slider::absoluteDrag), juce::sendNotificationSync);
                 const double held = f.document().cues.getSelected()->gainDb;
                 const double percent = GainUnits::toPercent (held);
-                expectWithinAbsoluteError (percent, std::round (GainUnits::toPercent (db) * 10.0) / 10.0, 1e-6, "a 0.1 % step");
+                expectWithinAbsoluteError (percent, juce::jmin (200.0, std::round (GainUnits::toPercent (db) * 10.0) / 10.0), 1e-6, "a 0.1 % step, 200 % at most");
                 expectWithinAbsoluteError (play.wave->getWaveScale (0), scaleFor (held), scaleFor (held) * 1e-5f, "the wave follows the drag step");
                 expectEquals (shown (*play.slider), GainUnits::format (held, true));
             }
@@ -252,10 +266,10 @@ public:
             type (slider, "0");
             expectEquals (gain(), Cue::minGainDb);
             wheel (notch);
-            expectWithinAbsoluteError (GainUnits::toPercent (gain()), 0.1, 1e-6, "one notch up from silence");
-            expectEquals (shown (slider), juce::String ("0.1 %"));
+            expectWithinAbsoluteError (GainUnits::toPercent (gain()), 7.0, 1e-6, "one notch up from silence: 7 % on the even % scale");
+            expectEquals (shown (slider), juce::String ("7.0 %"));
             wheel (notch);
-            expectGreaterThan (GainUnits::toPercent (gain()), 0.1 + 1e-6, "and on up");
+            expectWithinAbsoluteError (GainUnits::toPercent (gain()), 14.0, 1e-6, "and on up by the same 7 %");
             type (slider, "0.1");
             wheel (-notch);
             expectEquals (gain(), Cue::minGainDb, "one notch down from 0.1 % is silence");
@@ -296,18 +310,19 @@ public:
             type (slider, "+6%");
             expectWithinAbsoluteError (percent(), 6.0, 1e-6, "with the % typed it is 6 %");
             type (slider, "1,200");
-            expectWithinAbsoluteError (percent(), 1200.0, 1e-6, "a thousands comma");
+            expectWithinAbsoluteError (percent(), 200.0, 1e-6, "a thousands comma: 1200, so the top (not 1.2 %)");
+            type (slider, "50");
             type (slider, "1,000 %");
-            expectWithinAbsoluteError (percent(), 1000.0, 1e-6);
+            expectWithinAbsoluteError (percent(), 200.0, 1e-6);
             type (slider, "1,5");
-            expectWithinAbsoluteError (percent(), 1000.0, 1e-6, "a comma that is no thousands separator keeps the gain");
+            expectWithinAbsoluteError (percent(), 200.0, 1e-6, "a comma that is no thousands separator keeps the gain");
             type (slider, "12,50");
-            expectWithinAbsoluteError (percent(), 1000.0, 1e-6);
-            expectEquals (shown (slider), juce::String ("1000.0 %"));
+            expectWithinAbsoluteError (percent(), 200.0, 1e-6);
+            expectEquals (shown (slider), juce::String ("200.0 %"));
 
             press (*basic.button);   // dB
             type (slider, "-6,5");
-            expectWithinAbsoluteError (f.document().cues.getSelected()->gainDb, 20.0, 1e-9, "dB: the same comma rule, the gain stays");
+            expectWithinAbsoluteError (f.document().cues.getSelected()->gainDb, GainUnits::fromPercent (200.0), 1e-9, "dB: the same comma rule, the gain stays");
             type (slider, "-3");
             expectWithinAbsoluteError (f.document().cues.getSelected()->gainDb, -3.0, 1e-9);
         }
@@ -339,6 +354,67 @@ public:
                 press (*basic.button);
                 expect (f.settings.getGainInPercent());
             }
+        }
+
+        beginTest ("in % the fader runs evenly from 0 % to 200 % (100 % in the middle) and stops at 200 %; dB keeps its scale");
+        {
+            Fixture f;
+            f.addSound ("a");
+            f.document().cues.setSelectedIndex (0);
+            dispatch();
+            auto basic = controlsOn (f, 0);
+            if (basic.button == nullptr || basic.slider == nullptr)
+                return;
+            auto& slider = *basic.slider;
+            expectWithinAbsoluteError (slider.proportionOfLengthToValue (0.5), -48.0, 1e-9, "dB: -120..+24 dB evenly, as before");
+            expectWithinAbsoluteError (slider.valueToProportionOfLength (0.0), 120.0 / 144.0, 1e-9);
+
+            press (*basic.button);
+            expectEquals (GainUnits::maxPercent(), 200.0);
+            expectWithinAbsoluteError (slider.valueToProportionOfLength (0.0), 0.5, 1e-9, "%: 100 % in the middle");
+            expectWithinAbsoluteError (slider.valueToProportionOfLength (GainUnits::fromPercent (50.0)), 0.25, 1e-9);
+            expectWithinAbsoluteError (slider.valueToProportionOfLength (GainUnits::fromPercent (200.0)), 1.0, 1e-9);
+            expectEquals (slider.valueToProportionOfLength (Cue::minGainDb), 0.0);
+
+            double previous = -1.0;   // a drag across the fader (JUCE's drag path): the same % for the same distance
+            for (int step = 0; step <= 20; ++step)
+            {
+                const double p = step / 20.0;
+                slider.setValue (slider.snapValue (slider.proportionOfLengthToValue (p), juce::Slider::absoluteDrag), juce::sendNotificationSync);
+                const double percent = GainUnits::toPercent (f.document().cues.getSelected()->gainDb);
+                expectWithinAbsoluteError (percent, p * 200.0, 1e-6, "position " + juce::String (p, 2));
+                if (previous >= 0.0)
+                    expectWithinAbsoluteError (percent - previous, 10.0, 1e-6, "even steps, no sudden drops");
+                previous = percent;
+            }
+            expectEquals (shown (slider), juce::String ("200.0 %"), "the right end is 200 %");
+            type (slider, "500");
+            expectEquals (shown (slider), juce::String ("200.0 %"), "typing stops at 200 % too");
+            juce::int64 ms = 2000000;
+            wheelNotch (slider, 60.0f / 256.0f, ms);
+            expectEquals (shown (slider), juce::String ("200.0 %"), "and the wheel");
+            expectWithinAbsoluteError (slider.valueToProportionOfLength (slider.getValue()), 1.0, 1e-9);
+        }
+
+        beginTest ("a gain set above 200 % in dB shows as it is in %, at the right end, and a wheel notch up leaves it");
+        {
+            Fixture f;
+            f.addSound ("a");
+            f.document().cues.update (0, [] (Cue& c) { c.gainDb = 12.0; });
+            f.document().cues.setSelectedIndex (0);
+            dispatch();
+            auto basic = controlsOn (f, 0);
+            if (basic.button == nullptr || basic.slider == nullptr)
+                return;
+            auto& slider = *basic.slider;
+            press (*basic.button);
+            expectEquals (shown (slider), juce::String ("398.1 %"), "the cue's real level");
+            expectWithinAbsoluteError (slider.valueToProportionOfLength (slider.getValue()), 1.0, 1e-9, "the knob at the right end");
+            juce::int64 ms = 3000000;
+            wheelNotch (slider, 60.0f / 256.0f, ms);
+            expectWithinAbsoluteError (f.document().cues.getSelected()->gainDb, 12.0, 1e-12, "a notch up does not pull it down to 200 %");
+            wheelNotch (slider, -60.0f / 256.0f, ms);
+            expectWithinAbsoluteError (GainUnits::toPercent (f.document().cues.getSelected()->gainDb), 193.0, 1e-6, "a notch down goes onto the scale");
         }
 
         beginTest ("in dB nothing changes: 0.1 dB steps, a typed % still lands, a typo keeps the gain");
