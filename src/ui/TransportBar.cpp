@@ -158,6 +158,9 @@ void TransportBar::MetaLabel::paint (juce::Graphics& g)
 TransportBar::TransportBar (juce::ApplicationCommandManager& cm)
     : commands (cm)
 {
+    gainUnitFollower.onChange = [this] { if (onGainUnitChanged) onGainUnitChanged(); };
+    gainUnit.addListener (&gainUnitFollower);
+
     goButton.setColour (juce::TextButton::buttonColourId, Palette::goButton);
     goButton.setColour (juce::TextButton::textColourOffId, Palette::onBright);
     goButton.setWantsKeyboardFocus (false);
@@ -305,7 +308,8 @@ void TransportBar::updateStandbyCue (int index, const Cue* cue)
     {
         cueFile.setText (ko ("장치 입력 ") + juce::String (cue->mic.firstInput + 1) + (cue->mic.numInputs > 1 ? "-" + juce::String (cue->mic.firstInput + cue->mic.numInputs) : juce::String()), juce::dontSendNotification);
         cueFile.setColour (juce::Label::textColourId, Palette::dimText);
-        cueMeta.setText (ko ("마이크 큐   정지할 때까지   정지 페이드 ") + juce::String (cue->fadeOutMs) + ko (" ms   게인 ") + juce::String (cue->gainDb, 1) + " dB", juce::dontSendNotification);
+        cueMeta.setText (ko ("마이크 큐   정지할 때까지   정지 페이드 ") + juce::String (cue->fadeOutMs) + ko (" ms   게인 ")
+                         + GainUnits::format (cue->gainDb, static_cast<bool> (gainUnit.getValue())), juce::dontSendNotification);
         return;
     }
 
@@ -384,10 +388,15 @@ void TransportBar::updateStandbyCue (int index, const Cue* cue)
     meta << ko ("길이 ") << (effective < 0.0 ? juce::String::fromUTF8 ("\xE2\x88\x9E") : formatSeconds (effective > 0.0 ? effective : cue->durationSeconds))
          << "   " << ko ("페이드인 ") << juce::roundToInt (cue->audio.envelope.fadeInSeconds (cue->regionLength()) * 1000.0) << " ms"
          << "   " << ko ("정지 페이드 ") << cue->fadeOutMs << " ms"
-         << "   " << ko ("게인 ") << juce::String (cue->gainDb, 1) << " dB";
+         << "   " << ko ("게인 ") << GainUnits::format (cue->gainDb, static_cast<bool> (gainUnit.getValue()));   // dB or %, as the inspector shows it
     if (describePatch)
         meta << ko ("   패치 ") << describePatch (*cue);
     cueMeta.setText (meta, juce::dontSendNotification);
+}
+
+void TransportBar::bindGainUnit (juce::Value& percent)
+{
+    gainUnit.referTo (percent);
 }
 
 void TransportBar::setContextText (const juce::String& text)

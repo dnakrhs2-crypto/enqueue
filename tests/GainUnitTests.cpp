@@ -1,5 +1,6 @@
 #include "VolumeCueUiTestSupport.h"
 #include "ui/GainControl.h"
+#include "ui/TransportBar.h"
 #include "ui/WaveformView.h"
 #include "ui/UiUtils.h"
 
@@ -411,6 +412,48 @@ public:
                 expectEquals (shown (*c.slider), juce::String ("199.5 %"));
                 expectEquals (c.slider->getTextValueSuffix(), juce::String (" %"));
             }
+        }
+
+        beginTest ("the next cue box above (다음 큐) shows the gain in the unit the gain button picks, audio and mic cues");
+        {
+            Fixture f;
+            f.addSound ("a");
+            f.document().cues.update (0, [] (Cue& c) { c.gainDb = -6.0; });
+            Cue mic;
+            mic.name = "mic";
+            mic.type = CueType::mic;
+            mic.mic.numInputs = 2;
+            mic.gainDb = 6.0;
+            f.document().cues.add (mic);
+            f.document().cues.setSelectedIndex (0);   // the playhead follows the selection: the standby cue
+            dispatch();
+            auto* transport = child<TransportBar> (*f.main);
+            expect (transport != nullptr);
+            if (transport == nullptr)
+                return;
+            const auto meta = [transport]
+            {
+                auto* label = child<juce::Label> (*transport, [] (const juce::Label& l) { return l.getText().contains (ko ("정지 페이드")); });
+                return label != nullptr ? label->getText() : juce::String ("<no meta line>");
+            };
+            expect (meta().contains (ko ("게인 -6.0 dB")), meta());
+
+            auto basic = controlsOn (f, 0);
+            if (basic.button == nullptr || basic.slider == nullptr)
+                return;
+            press (*basic.button);
+            expect (meta().contains (ko ("게인 50.1 %")), "the box follows the switch at once: " + meta());
+            type (*basic.slider, "150");
+            expect (meta().contains (ko ("게인 150.0 %")), "and a % edit: " + meta());
+
+            f.document().cues.setSelectedIndex (1);
+            dispatch();
+            expect (meta().startsWith (ko ("마이크 큐")) && meta().contains (ko ("게인 199.5 %")), "a mic cue's line too: " + meta());
+
+            basic = controlsOn (f, 0);
+            if (basic.button != nullptr)
+                press (*basic.button);
+            expect (meta().contains (ko ("게인 6.0 dB")), "back in dB as before: " + meta());
         }
 
         beginTest ("no cue selected: the slider is off, the unit can still be switched");

@@ -49,6 +49,8 @@ public:
     void setPlayback (const std::vector<AudioEngine::PlayingCue>& playing);
     /** Show mode: everything read-only. */
     void setEditable (bool editable);
+    /** The gain unit the 기본 / 재생 tabs' gain button picks (true = %), for other places that show a cue's gain. */
+    juce::Value& getGainUnit() noexcept { return gainInPercent; }
     /** Jumps to the 기본 tab and focuses the notes field. */
     void showNotes();
     /** Jumps to the 재생 tab (or the 페이드 tab of a fade cue). */

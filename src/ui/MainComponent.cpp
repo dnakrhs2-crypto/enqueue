@@ -206,6 +206,9 @@ MainComponent::MainComponent (AudioEngine& e, AppSettings& s, juce::ApplicationC
     // the menu bar's full screen button runs the same command as F11 and the Edit menu (after this click is done)
     modeToggle.onFullScreenClicked = [this] { commands.invokeDirectly (CommandIDs::toggleFullScreen, true); };
     transport.onLufsAverageSecondsChanged = [this] (int seconds) { settings.setLufsAverageSeconds (seconds); };
+    // the standby cue's gain in the unit the inspector's gain button picks (dB or %), switched at once with it
+    transport.onGainUnitChanged = [this] { updateTransportStandby(); };
+    transport.bindGainUnit (inspector.getGainUnit());
     footer.onWarningsClicked = [this] { showWarnings(); };
 
     document.snapshotDecorator = [this] (Project& project) { captureLivePluginStates (project); };

@@ -3,6 +3,7 @@
 #include "model/Cue.h"
 #include "app/ShortcutService.h"
 
+#include "ui/GainControl.h"
 #include "ui/UiUtils.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -29,6 +30,10 @@ public:
     std::function<juce::String (const Cue& groupCue)> describeGroup;
     /** The current project's patch name and output count. */
     std::function<juce::String (const Cue&)> describePatch;
+    /** The unit the inspector's gain button picks (true = %): the standby cue's '게인' shows in it. */
+    void bindGainUnit (juce::Value& percent);
+    /** The unit changed: the owner shows the standby cue again. */
+    std::function<void()> onGainUnitChanged;
     void setContextText (const juce::String& text);
     /** The gear next to the panic button: open the fade time menu at this screen position. */
     std::function<void (juce::Point<int> screenPosition)> onPanicSettings;
@@ -99,6 +104,8 @@ private:
     TransportButton pauseButton { TransportButton::Icon::pause }, fadeOutButton { TransportButton::Icon::fade }, panicButton { TransportButton::Icon::stop };
     juce::Label standbyTitle, cueNumber, cueName, cueFile, playingLabel, statusLabel, contextLabel;
     MetaLabel cueMeta;
+    ValueFollower gainUnitFollower;
+    juce::Value gainUnit;   // bound to the inspector's gain unit
     juce::Label momentaryLabel, momentaryValue, averageLabel, averageValue;
     juce::TextButton averageWindow;
     int averageSeconds = 20;
