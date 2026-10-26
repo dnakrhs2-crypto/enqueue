@@ -1,6 +1,8 @@
 #pragma once
 #include "CollabPlayout.h"
 #include "CollabSender.h"
+#include "CollabRoster.h"
+#include "CollabAudio.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -29,6 +31,28 @@ inline Packet tone (uint64_t number, float level = 0.25f, double hz = 0, bool st
     return p;
 }
 inline bool push (CollabPlayout& play, const Packet& p) { return play.push (p.header, p.payload.data(), p.arrival); }
+inline RosterSnapshot rosterFor (std::initializer_list<uint32_t> ids, uint32_t revision = 1, uint32_t webId = 0)
+{
+    RosterSnapshot result; result.session = 0xfedcba9876543210ULL; result.revision = revision;
+    for (auto id : ids)
+    {
+        auto& m = result.members[result.memberCount++]; m.participantId = id;
+        m.nickname = "person" + juce::String (id); m.appVersion = "0.17.0";
+        m.capabilities = contracts::allCapabilities; m.state = contracts::ConnectionState::connected;
+        m.kind = id == webId ? contracts::ParticipantKind::web : contracts::ParticipantKind::native;
+    }
+    return result;
+}
+inline void receiveTone (CollabAudio& audio, uint32_t pid, uint64_t number, float level, bool web = false, uint32_t revision = 1)
+{
+    auto p = tone (number, level);
+    contracts::HeaderV2 h; h.session = 0xfedcba9876543210ULL; h.origin = pid; h.linkSender = 1;
+    h.seq = (uint32_t) number; h.firstFrame = number * 120; h.streamEpoch = 1; h.rosterRevision = revision;
+    h.frames = 120; h.payloadBytes = web ? 240 : 720;
+    h.flags = web ? contracts::Flags::monoPcm16 : contracts::Flags::stereoPcm24;
+    if (web) { std::array<float, 120> mono; mono.fill (level); packPcm16 (p.payload.data(), mono.data(), 120); }
+    audio.receiveV2 (h, p.payload.data(), p.arrival);
+}
 inline double amplitude (const std::vector<float>& signal, double rate, double hz)
 {
     double real = 0, imag = 0, weight = 0;

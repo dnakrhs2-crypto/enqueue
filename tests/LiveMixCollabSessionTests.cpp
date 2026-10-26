@@ -5,11 +5,17 @@
 #include <windows.h>
 #include "CollabSession.h"
 #include "LiveMixSettings.h"
+#include "MixEngine.h"
+#include "LiveMixCollabTestHelpers.h"
+#include "lm_obs_metadata.h"
 #include "ui/UiUtils.h"
 #include "ui/CollabWindow.h"
 #include <atomic>
 #include <mutex>
 #include <deque>
+#include <map>
+#include <condition_variable>
+#include <thread>
 
 namespace gocue::livemix::collab
 {
@@ -21,6 +27,7 @@ struct CollabSessionTestAccess
     static bool heartbeatStopped (CollabSession& s) { return s.heartbeatStopped; }
     static bool loopbackOnly (CollabSession& s) { return s.options.loopbackOnly; }
     static bool punching (CollabSession& s) { return s.punching; }
+    static bool legacyReady (CollabSession& s) { return ! s.switchingTransport && ! s.transportV2 && s.transport.getState() == CollabTransport::State::waiting; }
 };
 }
 
@@ -718,4 +725,457 @@ public:
     }
 };
 static LiveMixCollabSessionTests liveMixCollabSessionTests;
+
+namespace
+{
+namespace c = livemix::collab::contracts;
+class V2Service
+{
+public:
+    CollabRoom::RequestFunction requests() { return [this] (const auto& request) { return call (request); }; }
+    juce::String pending (const juce::String& nick)
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        const auto id = juce::Uuid().toString().removeCharacters ("-");
+        auto value = object ({ { "requestId", id }, { "nick", nick }, { "expiresAtMs", juce::Time::currentTimeMillis() + (juce::int64) 60000 } });
+        requestsById[id] = value; event (false, "request", value); return id;
+    }
+    void expire (const juce::String& id)
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        requestsById.erase (id); event (false, "requestState", object ({ { "requestId", id }, { "state", "expired" } }));
+    }
+    void remoteSignal (uint32_t generation, const juce::var& value)
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        event (true, "signal", object ({ { "connectionGeneration", (int) generation }, { "signalId", 1 }, { "from", "web" }, { "signal", value } }));
+    }
+    void reserveLegacy (int port)
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        members.push_back ({ nextId++, "Old", "native", port, "connected", 1, true }); ++revision;
+    }
+    int count (const char* suffix)
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        return (int) std::count_if (calls.begin(), calls.end(), [&] (const auto& item) { return item.first.endsWith (suffix); });
+    }
+    juce::var last (const char* suffix)
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        for (auto i = calls.rbegin(); i != calls.rend(); ++i) if (i->first.endsWith (suffix)) return i->second;
+        return {};
+    }
+    bool available = true;
+    std::atomic<bool> onMessageThread { false };
+private:
+    struct Member { int id; juce::String nick, kind; int port; juce::String state; int epoch = 1; bool legacy = false; };
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::vector<Member> members;
+    std::vector<std::pair<juce::String, juce::var>> calls;
+    std::vector<std::pair<bool, juce::var>> events;
+    std::map<juce::String, juce::var> requestsById;
+    int nextId = 2, revision = 1, inviteGeneration = 0, eventId = 0, wireRate = 48000;
+    juce::var room()
+    {
+        juce::Array<juce::var> list, reservations, names;
+        for (const auto& cap : c::capabilityNames) names.add (cap.name);
+        bool legacy = false;
+        for (const auto& m : members)
+        {
+            legacy |= m.legacy;
+            juce::Array<juce::var> protocols; protocols.add (m.kind == "web" ? 2 : 1);
+            if (m.kind != "web" && ! m.legacy) protocols.add (2);
+            list.add (object ({ { "participantId", m.id }, { "kind", m.kind }, { "nick", m.nick },
+                { "appVersion", m.legacy ? "0.16.0" : "0.17.0" }, { "protocols", protocols },
+                { "capabilities", m.legacy ? juce::Array<juce::var>() : names }, { "connectionGeneration", m.id },
+                { "streamEpoch", m.epoch }, { "state", m.state } }));
+        }
+        return object ({ { "apiVersion", 2 }, { "code", "0842" }, { "session", sessionHex },
+            { "roomMode", legacy ? "legacy2" : "v2" }, { "wireRate", wireRate }, { "revision", revision },
+            { "capabilities", legacy ? juce::Array<juce::var>() : names }, { "nativeState", available ? "reachable" : "unavailable" },
+            { "members", list }, { "reservations", reservations } });
+    }
+    void event (bool connection, const char* type, const juce::var& value)
+    {
+        events.push_back ({ connection, object ({ { "id", juce::String (++eventId) }, { "type", type }, { "data", value } }) });
+        wake.notify_all();
+    }
+    CollabRoom::Response call (const CollabRoom::Request& request)
+    {
+        if (juce::MessageManager::getInstance()->isThisTheMessageThread()) onMessageThread.store (true);
+        const auto action = request.url.fromLastOccurrenceOf ("/", false, false);
+        const auto body = juce::JSON::parse (request.body);
+        if (request.cancellation) request.cancellation->setHandler ([this] { std::lock_guard<std::mutex> lock (mutex); wake.notify_all(); });
+        std::unique_lock<std::mutex> lock (mutex);
+        calls.push_back ({ request.url, body });
+        if (action == "events")
+        {
+            const bool connection = body.hasProperty ("connectionToken");
+            const auto cursor = body["cursor"].toString().getLargeIntValue();
+            const auto ready = [&]
+            { return std::any_of (events.begin(), events.end(), [&] (const auto& e) { return e.first == connection && e.second["id"].toString().getLargeIntValue() > cursor; }); };
+            wake.wait (lock, [&] { return ready() || (request.cancellation && request.cancellation->isCancelled()); });
+            if (request.cancellation && request.cancellation->isCancelled()) return {};
+            juce::Array<juce::var> result;
+            for (const auto& e : events) if (e.first == connection && e.second["id"].toString().getLargeIntValue() > cursor) result.add (e.second);
+            return response (object ({ { "apiVersion", 2 }, { "cursor", juce::String (eventId) }, { "events", result } }));
+        }
+        if (action == "create")
+        {
+            wireRate = (int) body["wireRate"];
+            members = { { 1, body["nick"].toString(), "native", (int) body["port"], "connected" } };
+            if (available) probe (members[0].port);
+            auto value = room(); auto* o = value.getDynamicObject();
+            o->setProperty ("hostToken", nonceHex); o->setProperty ("publicIp", "203.0.113.8"); o->setProperty ("nonce", nonceHex);
+            o->setProperty ("participantId", 1); o->setProperty ("connectionGeneration", 1); o->setProperty ("streamEpoch", 1);
+            return response (value);
+        }
+        if (action == "join")
+        {
+            if (members.size() >= 3) return { 409, "{\"error\":\"full\"}" };
+            const int id = nextId++;
+            members.push_back ({ id, body["nick"].toString(), "native", (int) body["port"], "connecting" }); ++revision;
+            auto value = room(); auto* o = value.getDynamicObject();
+            o->setProperty ("hostNick", members[0].nick); o->setProperty ("sameNetwork", true);
+            o->setProperty ("candidates", juce::Array<juce::var> { object ({ { "ip", "127.0.0.1" }, { "port", members[0].port } }) });
+            o->setProperty ("participantId", id); o->setProperty ("connectionGeneration", id); o->setProperty ("streamEpoch", 1);
+            return response (value);
+        }
+        if (action == "heartbeat")
+        {
+            if (const auto* states = body["memberStates"].getArray())
+                for (const auto& state : *states)
+                {
+                    const int id = (int) state["participantId"];
+                    auto m = std::find_if (members.begin(), members.end(), [&] (const auto& p) { return p.id == id; });
+                    if (m == members.end()) continue;
+                    if (state["state"].toString() == "left") { members.erase (m); ++revision; }
+                    else if (m->state != state["state"].toString() || m->epoch != (int) state["streamEpoch"])
+                    { m->state = state["state"].toString(); m->epoch = (int) state["streamEpoch"]; ++revision; }
+                }
+        }
+        if (action == "heartbeat" || action == "confirm")
+        {
+            auto value = room(); auto* o = value.getDynamicObject(); o->setProperty ("ok", true); o->setProperty ("punch", false);
+            juce::Array<juce::var> peers;
+            for (const auto& m : members) if (m.id != 1 && m.kind == "native")
+                peers.add (object ({ { "participantId", m.id }, { "connectionId", juce::String::repeatedString ("1", 32) },
+                    { "candidates", juce::Array<juce::var> { object ({ { "ip", "127.0.0.1" }, { "port", m.port } }) } } }));
+            o->setProperty ("peers", peers); return response (value);
+        }
+        if (action == "invite")
+        {
+            ++inviteGeneration;
+            for (const auto& pending : requestsById) event (false, "requestState", object ({ { "requestId", pending.first }, { "state", "invalidated" } }));
+            requestsById.clear();
+            return response (object ({ { "apiVersion", 2 }, { "inviteGeneration", inviteGeneration },
+                { "inviteToken", juce::String::repeatedString (inviteGeneration == 1 ? "a" : "b", 64) }, { "hostNick", members[0].nick } }));
+        }
+        if (action == "accept")
+        {
+            const auto rid = body["requestId"].toString(); const auto pending = requestsById.find (rid);
+            if (pending == requestsById.end()) return { 410, "{\"error\":\"expired\"}" };
+            if (members.size() >= 3) return { 409, "{\"error\":\"full\"}" };
+            const int id = nextId++; members.push_back ({ id, pending->second["nick"].toString(), "web", 0, "connecting" }); ++revision;
+            requestsById.erase (pending);
+            return response (object ({ { "apiVersion", 2 }, { "requestId", rid }, { "state", "accepted" }, { "participantId", id },
+                { "streamEpoch", 1 }, { "connectionGeneration", id }, { "connectionToken", juce::String::repeatedString ("c", 64) },
+                { "reservationExpiresAtMs", juce::Time::currentTimeMillis() + (juce::int64) 15000 }, { "room", room() } }));
+        }
+        if (action == "reject") requestsById.erase (body["requestId"].toString());
+        if (action == "kick" || action == "leave")
+        {
+            const int generation = (int) body["connectionGeneration"];
+            members.erase (std::remove_if (members.begin(), members.end(), [&] (const auto& m) { return m.id == generation; }), members.end()); ++revision;
+            event (false, "ended", object ({ { "participantId", generation }, { "connectionGeneration", generation },
+                                             { "reason", action == "kick" ? "kicked" : "left" } }));
+        }
+        return response (object ({ { "apiVersion", 2 }, { "ok", true }, { "signalId", body["signalId"] } }));
+    }
+};
+
+class FakeWebEndpoint : public CollabSession::WebEndpoint
+{
+public:
+    FakeWebEndpoint() : worker ([this] { run(); }) {}
+    ~FakeWebEndpoint() override
+    {
+        { std::lock_guard<std::mutex> lock (mutex); stopping = true; } wake.notify_all(); worker.join();
+    }
+    void start (const c::WebConnection& connection, WebGuestTransport::Options, WebGuestTransport::Callbacks value) override
+    {
+        { std::lock_guard<std::mutex> lock (mutex); current = connection; callbacks = value; }
+        ++starts;
+        value.onLocalDescription (connection.generation, "offer", "fake-sdp");
+        value.onLocalCandidate (connection.generation, "candidate:fake", "0", 0);
+        value.onGatheringComplete (connection.generation);
+        value.onState (connection.generation, WebGuestTransport::State::open);
+    }
+    void description (uint32_t, const juce::String&, const juce::String&) override { ++descriptions; }
+    void candidate (uint32_t, const juce::String&, const juce::String&, int) override { ++candidates; }
+    void endCandidates (uint32_t) override { ++ends; }
+    void sendTestAudio (uint32_t callbackGeneration)
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        c::HeaderV2 h; h.session = current.session; h.origin = h.linkSender = current.guestId;
+        h.streamEpoch = current.guestEpoch; h.rosterRevision = lastRoster; h.frames = 120; h.payloadBytes = 240;
+        h.flags = c::Flags::monoPcm16;
+        std::array<float, 120> mono; mono.fill (0.25f); std::array<uint8_t, 240> payload;
+        packPcm16 (payload.data(), mono.data(), 120);
+        std::vector<uint8_t> packet (288); writePacketV2 (packet.data(), packet.size(), h, payload.data());
+        incoming.push_back ({ callbackGeneration, std::move (packet) }); wake.notify_all();
+    }
+    bool send (uint32_t generation, const uint8_t* data, size_t bytes, bool audio) override
+    {
+        if (audio) { ++audioPackets; return true; }
+        c::HeaderV2 h; const uint8_t* payload = nullptr;
+        if (! readPacketV2 (data, bytes, h, payload)) return false;
+        std::lock_guard<std::mutex> lock (mutex);
+        if (generation != current.generation) return false;
+        if (h.kind == c::Kind::roster || h.kind == c::Kind::ping)
+        {
+            const bool ping = h.kind == c::Kind::ping;
+            if (! ping) lastRoster = h.rosterRevision;
+            h.kind = ping ? c::Kind::pong : c::Kind::rosterAck; h.origin = h.linkSender = current.guestId; h.payloadBytes = ping ? 8 : 0;
+            std::vector<uint8_t> packet (1200);
+            packet.resize (writePacketV2 (packet.data(), packet.size(), h, ping ? payload : nullptr));
+            incoming.push_back ({ generation, std::move (packet) }); wake.notify_all();
+        }
+        return true;
+    }
+    void close() override
+    {
+        std::unique_lock<std::mutex> lock (mutex); current = {}; callbacks = {}; incoming.clear();
+        wake.wait (lock, [&] { return ! delivering; }); ++closes;
+    }
+    std::atomic<int> starts { 0 }, closes { 0 }, descriptions { 0 }, candidates { 0 }, ends { 0 }, audioPackets { 0 };
+private:
+    void run()
+    {
+        std::unique_lock<std::mutex> lock (mutex);
+        while (! stopping)
+        {
+            wake.wait (lock, [&] { return stopping || ! incoming.empty(); });
+            if (stopping) break;
+            auto packet = std::move (incoming.front()); incoming.pop_front(); auto cb = callbacks.onPacket; delivering = true;
+            lock.unlock();
+            if (cb) cb (packet.first, packet.second.data(), packet.second.size(),
+                (uint64_t) (juce::Time::getMillisecondCounterHiRes() * 1000000.0));
+            lock.lock(); delivering = false; wake.notify_all();
+        }
+    }
+    std::mutex mutex;
+    std::condition_variable wake;
+    c::WebConnection current;
+    uint32_t lastRoster = 0;
+    WebGuestTransport::Callbacks callbacks;
+    std::deque<std::pair<uint32_t, std::vector<uint8_t>>> incoming;
+    bool stopping = false, delivering = false;
+    std::thread worker;
+};
+
+struct V2Fixture
+{
+    explicit V2Fixture (V2Service& service)
+        : settings (directory.file), engine ("Local\\LiveMix.R8.Session." + juce::Uuid().toString())
+    {
+        engine.prepare (48000, 120); settings.setCollabPort (freePort());
+        CollabSession::Options options; options.loopbackOnly = true; options.stunServers.clear();
+        options.probeTimeoutMs = 250; options.heartbeatIntervalMs = 100; options.punchHeartbeatMs = 100;
+        options.webRequest = service.requests(); options.webServer = "http://127.0.0.1:8899"; options.webEndpoint = web;
+        session = std::make_unique<CollabSession> (engine, settings, std::make_unique<CollabRoom> (service.requests(), options.webServer),
+            std::make_unique<FakeUpnp> (std::make_shared<UpnpState>()), options);
+    }
+    const CollabSession::PersonSnapshot* person (const CollabSession::Snapshot& snapshot, uint32_t id)
+    {
+        for (const auto& p : snapshot.people) if (p.participantId == id) return &p;
+        return nullptr;
+    }
+    bool people (int n) { return until ([&] { return (int) session->getSnapshot().personCount == n; }); }
+    TempDirectory directory;
+    LiveMixSettings settings;
+    MixEngine engine;
+    std::shared_ptr<FakeWebEndpoint> web = std::make_shared<FakeWebEndpoint>();
+    std::unique_ptr<CollabSession> session;
+};
+struct SessionMetadataView
+{
+    explicit SessionMetadataView (const juce::String& ring)
+    {
+        handle = OpenFileMappingW (FILE_MAP_READ, FALSE, (ring + ".Metadata").toWideCharPointer());
+        if (handle) data = (const lm_obs_metadata*) MapViewOfFile (handle, FILE_MAP_READ, 0, 0, 256);
+    }
+    ~SessionMetadataView() { if (data) UnmapViewOfFile (data); if (handle) CloseHandle (handle); }
+    HANDLE handle = nullptr; const lm_obs_metadata* data = nullptr;
+};
+}
+
+class LiveMixCollabR8SessionTests : public juce::UnitTest
+{
+public:
+    LiveMixCollabR8SessionTests() : UnitTest ("LiveMix Collab R8 session integration", "LiveMix") {}
+    void runTest() override
+    {
+        beginTest ("old server keeps the v1 connection and exposes the same people and volume commands");
+        {
+            auto service = std::make_shared<FakeService>(); Fixture host (service), guest (service);
+            host.session->setMonitor (0.3f, true); host.session->createRoom ("Host");
+            expect (host.reaches (State::hostWaiting));
+            guest.session->joinRoom ("0842", "Guest");
+            expect (host.reaches (State::connected)); expect (guest.reaches (State::connected));
+            auto snapshot = host.session->getSnapshot();
+            expect (snapshot.roomMode == c::RoomMode::legacy2 && snapshot.nativeAvailable);
+            expect (guest.session->getSnapshot().nativeAvailable);
+            expect (! snapshot.canCreateWebInvite && ! CollabSessionTestAccess::transport (*host.session).getStats().v2);
+            expectEquals ((int) snapshot.personCount, 2);
+            expectEquals (snapshot.people[1].slot, 1); expectEquals (snapshot.people[1].nickname, juce::String ("Guest"));
+            expectEquals (snapshot.people[1].monitorVolume, 0.3f);
+            host.session->setPersonMonitorVolume (2, 0.6f);
+            expect (until ([&] { return host.session->getSnapshot().people[1].monitorVolume == 0.6f; }));
+            expectEquals (host.settings.getCollabPersonVolume ("Guest"), 0.6f);
+        }
+        beginTest ("host plus two native guests: roster, persistent seats, person volumes and metadata");
+        {
+            V2Service service; V2Fixture host (service), first (service), second (service);
+            host.session->setMonitor (0.4f, true); host.session->createRoom ("Host");
+            expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            const auto takes = host.directory.file.getChildFile ("takes");
+            expect (host.engine.startRecording ({ recording::Format::wav, 320, takes.getFullPathName().toStdString() }));
+            expect (until ([&] { return host.engine.getRecorder().snapshot().state == recording::State::recording; }));
+            expect (host.engine.getRecorder().snapshot().collabAtStart && host.engine.getRecorder().snapshot().fileCount == 4);
+            first.session->joinRoom ("0842", "First"); expect (host.people (2));
+            expect (until ([&] { return first.session->getSnapshot().state == State::connected; }));
+            second.session->joinRoom ("0842", "Second"); expect (host.people (3)); expect (first.people (3)); expect (second.people (3));
+            expect (until ([&] { return CollabSessionTestAccess::transport (*host.session).getStats (3).v2; }));
+            auto hs = host.session->getSnapshot(); auto fs = first.session->getSnapshot(); auto ss = second.session->getSnapshot();
+            expect (host.person (hs, 2) && host.person (hs, 3) && first.person (fs, 1) && second.person (ss, 1));
+            if (host.person (hs, 2) && host.person (hs, 3))
+            {
+                expectEquals (host.person (hs, 2)->slot, 1); expectEquals (host.person (hs, 3)->slot, 2);
+                expectEquals (host.person (hs, 2)->monitorVolume, 0.4f);
+                expectEquals (host.person (hs, 3)->monitorVolume, 0.4f);
+            }
+            if (first.person (fs, 1)) expectEquals (first.person (fs, 1)->slot, 1);
+            if (second.person (ss, 1)) expectEquals (second.person (ss, 1)->slot, 1);
+            SessionMetadataView one (host.engine.getPeerRingNames()[0]), two (host.engine.getPeerRingNames()[1]);
+            expect (one.data && two.data);
+            if (one.data && two.data)
+            {
+                expectEquals ((int) one.data->participant_id, 2); expectEquals ((int) two.data->participant_id, 3);
+                expectEquals (juce::String::fromUTF8 (two.data->nickname_utf8), juce::String ("Second"));
+            }
+            host.session->setPersonMonitorVolume (2, 0.2f); host.session->setPersonMonitorVolume (3, 0.7f);
+            expect (until ([&] { return host.settings.getCollabPersonVolume ("Second") == 0.7f; }));
+            hs = host.session->getSnapshot();
+            juce::AudioBuffer<float> monitor (2, 120);
+            for (uint64_t n = 0; n < 100; ++n)
+            {
+                collabtest::receiveTone (host.engine.getCollab(), 2, n, 0.25f, false, hs.rosterRevision);
+                collabtest::receiveTone (host.engine.getCollab(), 3, n, 0.125f, false, hs.rosterRevision);
+                host.engine.renderBlock (nullptr, 0, monitor.getArrayOfWritePointers(), 2, 120);
+            }
+            expectWithinAbsoluteError (monitor.getSample (0, 119), 0.1375f, 0.00001f);
+            host.engine.getRecorder().finish();
+            auto files = takes.findChildFiles (juce::File::findFiles, true, "*.wav");
+            expect (std::any_of (files.begin(), files.end(), [] (const auto& f) { return f.getFileName() == "B_First.wav"; }));
+            expect (std::any_of (files.begin(), files.end(), [] (const auto& f) { return f.getFileName() == "C_Second.wav"; }));
+            host.session->setMonitor (0.9f, false); hs = host.session->getSnapshot();
+            if (host.person (hs, 2)) expectEquals (host.person (hs, 2)->monitorVolume, 0.2f);
+            expect (! hs.monitorOn); expect (! hs.canCreateWebInvite);
+            first.session->leave(); expect (host.people (2));
+            hs = host.session->getSnapshot();
+            if (host.person (hs, 3)) { expectEquals (host.person (hs, 3)->slot, 2); expectEquals (host.person (hs, 3)->monitorVolume, 0.7f); }
+            expect (hs.state == State::connected);
+            if (one.data) expectEquals ((int) one.data->participant_id, 0);
+            first.session->joinRoom ("0842", "First"); expect (host.people (3)); hs = host.session->getSnapshot();
+            const auto* returning = host.person (hs, 4); expect (returning != nullptr);
+            if (returning) { expectEquals (returning->slot, 1); expectEquals (returning->monitorVolume, 0.2f); }
+            host.session->leave();
+            if (one.data && two.data) expect (one.data->participant_id == 0 && two.data->participant_id == 0);
+            expect (! service.onMessageThread.load());
+        }
+        beginTest ("host plus native plus web: invite, reject, expiry, accept, signals and kick");
+        {
+            V2Service service; V2Fixture host (service), native (service);
+            host.session->createRoom ("Host"); expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            native.session->joinRoom ("0842", "Native"); expect (host.people (2));
+            host.session->createWebInvite(); expect (until ([&] { return host.session->getSnapshot().inviteGeneration == 1; }));
+            auto hs = host.session->getSnapshot();
+            expectEquals (hs.webInviteUrl, juce::String (c::webOrigin) + c::joinPath + "#v=2&code=0842&invite=" + juce::String::repeatedString ("a", 64) + "&generation=1");
+            expectEquals (hs.webInviteUrl, hs.webInviteQrUrl);
+            auto request = service.pending ("Rejected"); expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            host.session->rejectWebRequest (request); expect (until ([&] { return host.session->getSnapshot().webRequestCount == 0; }));
+            request = service.pending ("Expired"); expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            service.expire (request); expect (until ([&] { return host.session->getSnapshot().webRequestCount == 0; }));
+            request = service.pending ("Old invite"); expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            host.session->createWebInvite(); expect (until ([&] { return host.session->getSnapshot().inviteGeneration == 2 && host.session->getSnapshot().webRequestCount == 0; }));
+            request = service.pending ("Browser"); expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            expect (host.session->getSnapshot().webRequests[0].canAccept);
+            host.session->acceptWebRequest (request); expect (host.people (3)); expect (native.people (3));
+            expect (until ([&] { return CollabSessionTestAccess::transport (*host.session).getStats (3).v2; }));
+            expect (until ([&] { return service.last ("/signal")["signal"]["type"].toString() == "connected"; }));
+            hs = host.session->getSnapshot(); expectEquals ((int) hs.kickableWebId, 3); expect (! hs.canCreateWebInvite);
+            expectEquals ((int) hs.webRequestCount, 0); expectEquals (host.web->starts.load(), 1);
+            const auto* browser = host.person (hs, 3); expect (browser && browser->kind == c::ParticipantKind::web && browser->slot == 2);
+            juce::AudioBuffer<float> output (2, 120);
+            for (int n = 0; n < 4; ++n) host.engine.renderBlock (nullptr, 0, output.getArrayOfWritePointers(), 2, 120);
+            expect (until ([&] { return host.web->audioPackets > 0; }));
+            service.remoteSignal (3, object ({ { "type", "answer" }, { "sdp", "fake-answer" } }));
+            service.remoteSignal (3, object ({ { "type", "candidate" }, { "candidate", "fake-candidate" }, { "sdpMid", "0" }, { "sdpMLineIndex", 0 } }));
+            service.remoteSignal (3, object ({ { "type", "endOfCandidates" } }));
+            expect (until ([&] { return host.web->descriptions == 1 && host.web->candidates == 1 && host.web->ends == 1; }));
+            const auto extra = service.pending ("Waiting"); expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            expect (! host.session->getSnapshot().webRequests[0].canAccept);
+            host.session->kickWebGuest (3); expect (host.people (2)); expect (native.people (2));
+            expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            expect (host.session->getSnapshot().state == State::connected); expectEquals ((int) host.session->getSnapshot().kickableWebId, 0);
+            host.session->acceptWebRequest (extra); expect (host.people (3));
+            expect (until ([&] { return CollabSessionTestAccess::transport (*host.session).getStats (4).v2; }));
+            host.web->sendTestAudio (3); // an earlier PeerConnection's generation is ignored even with the new participant's packet
+            host.web->sendTestAudio (4);
+            expect (until ([&] { return host.engine.getCollab().getStats (1).received > 0; }));
+            expectEquals ((int) host.engine.getCollab().getStats (1).received, 1);
+            host.session.reset(); expectEquals ((int) service.last ("/close")["apiVersion"], 2);
+            expect (! service.onMessageThread.load());
+        }
+        beginTest ("v2 web-only host remains open when native UDP is unavailable");
+        {
+            V2Service service; service.available = false; V2Fixture host (service);
+            host.session->createRoom ("Host"); expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            expect (! host.session->getSnapshot().nativeAvailable); expect (host.session->getSnapshot().state == State::hostWaiting);
+        }
+        beginTest ("v2 native negotiation keeps the host's 44.1k room rate across a guest device restart");
+        {
+            V2Service service; V2Fixture host (service), guest (service);
+            host.settings.setCollabRate (44100); host.session->createRoom ("Host");
+            expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            guest.session->joinRoom ("0842", "Guest");
+            expect (until ([&] { return CollabSessionTestAccess::transport (*guest.session).getStats (1).v2; }));
+            expectEquals ((int) guest.engine.getCollab().getWireRate(), 44100);
+            guest.engine.prepare (96000, 120);
+            expect (until ([&]
+            {
+                const auto snapshot = host.session->getSnapshot(); const auto* p = host.person (snapshot, 2);
+                return p && p->streamEpoch == 2;
+            }));
+            expectEquals ((int) guest.engine.getCollab().getWireRate(), 44100);
+            expectEquals (guest.settings.getCollabRate(), 48000);
+        }
+        beginTest ("a legacy guest selects v1, then leaving restores the host's v2 invitation");
+        {
+            V2Service service; V2Fixture host (service); CollabTransport old;
+            host.session->createRoom ("Host"); expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            expect (old.open (0, true).isEmpty()); service.reserveLegacy (old.getLocalPort());
+            expect (until ([&] { return host.session->getSnapshot().roomMode == c::RoomMode::legacy2; }));
+            expect (until ([&] { return CollabSessionTestAccess::legacyReady (*host.session); }));
+            old.startGuest (sessionNumber, { { "127.0.0.1", CollabSessionTestAccess::transport (*host.session).getLocalPort() } }, { "Old", "0.16.0" });
+            expect (until ([&] { return host.session->getSnapshot().state == State::connected; }));
+            expect (! old.getStats().v2); expect (! host.session->getSnapshot().canCreateWebInvite);
+            old.stop(); expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+        }
+    }
+};
+static LiveMixCollabR8SessionTests liveMixCollabR8SessionTests;
 }

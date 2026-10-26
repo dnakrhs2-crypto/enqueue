@@ -5,6 +5,7 @@
 #include "HostTransport.h"
 #include "ObsSender.h"
 #include "CollabAudio.h"
+#include "recording/Recorder.h"
 #include "audio/PluginChain.h"
 #include "audio/PluginHost.h"
 
@@ -42,6 +43,11 @@ public:
 
     explicit MixEngine (const juce::String& obsMappingName = {});
     ~MixEngine() override;
+    recording::Recorder& getRecorder() noexcept { return recorder; }
+    // Message thread. Freezes the current room/seat identities at the start of a take.
+    bool startRecording (const recording::Options&);
+    void setRecordingContext (bool collabOpen, const std::array<recording::TrackIdentity, 3>&);
+    const std::array<juce::String, 2>& getPeerRingNames() const noexcept { return peerRingNames; }
 
     /** Saved device, then first ASIO device, then the Windows default capture/render endpoints. */
     juce::String initialise (const MixDevice* saved);
@@ -151,11 +157,13 @@ public:
     Meter readChannelMeter (const juce::Uuid& id);
     Meter readFxMeter (const juce::Uuid& id);
     Meter readMasterMeter();
+    Meter readCollabMeter (unsigned slotIndex) noexcept { return slotIndex < 2 ? collabMeters[slotIndex].take() : Meter {}; }
 
 private:
     friend struct MixEngineTestAccess;
     friend struct MixTransportTestAccess;
     friend struct CollabEngineTestAccess;
+    friend struct RecordingEngineTestAccess;
     struct MeterCell
     {
         std::atomic<float> left { 0.0f }, right { 0.0f };
@@ -237,11 +245,16 @@ private:
     void applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst);
     static void addToOutputs (float* const* outputs, int numOutputs, int first, const juce::AudioBuffer<float>& source, int offset, int numSamples) noexcept;
     void finishOutput (float* const* outputs, int numOutputs, int offset, int frames,
-                       float* const* splitBuffer, MonitorOutput*) noexcept;
+                       float* const* splitBuffer, MonitorOutput*, collab::contracts::AudioSourceView masterSource) noexcept;
     juce::AudioDeviceManager deviceManager;
     PluginHost pluginHost;
     ObsSender obsSender;
+    const std::array<juce::String, 2> peerRingNames;
     collab::CollabAudio collab;
+    recording::Recorder recorder;
+    recording::StartRequest recordingContext; // message thread only
+    uint32_t recordingFormatEpoch = 1;
+    std::array<MeterCell, 2> collabMeters;
     // Busy-graph output must not touch buffers being resized by prepare().
     std::array<std::array<float, 512>, 2> collabMonitorSilence {};
     bool callbackAdded = false;

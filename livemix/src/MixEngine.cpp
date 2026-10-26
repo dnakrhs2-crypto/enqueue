@@ -10,6 +10,17 @@ namespace gocue::livemix
 
 namespace
 {
+    juce::String obsBase (const juce::String& requested)
+    {
+        if (requested.isNotEmpty()) return requested;
+        const auto overrideName = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_OBS_RING", {});
+        return overrideName.isNotEmpty() ? overrideName : juce::String ("Local\\LiveMix.ObsAudio.v1");
+    }
+    juce::String peerRing (const juce::String& base, const char* variable, const char* suffix)
+    {
+        const auto overrideName = juce::SystemStats::getEnvironmentVariable (variable, {});
+        return overrideName.isNotEmpty() ? overrideName : obsBase (base) + suffix;
+    }
     std::pair<int, bool> preferredFormat (const juce::String& choice)
     {
         if (choice == "int16") return { 16, false };
@@ -82,7 +93,10 @@ struct MixEngine::MonitorAccess
 static_assert (std::atomic<MonitorOutput*>::is_always_lock_free && std::atomic<unsigned>::is_always_lock_free);
 
 MixEngine::MixEngine (const juce::String& obsMappingName)
-    : obsSender (obsMappingName), collab (obsMappingName.isEmpty() ? "Local\\LiveMix.ObsAudio.v1.Peer" : obsMappingName + ".Peer")
+    : obsSender (obsBase (obsMappingName)),
+      peerRingNames { peerRing (obsMappingName, "LIVEMIX_OBS_PEER_RING", ".Peer"),
+                      peerRing (obsMappingName, "LIVEMIX_OBS_PEER2_RING", ".Peer2") },
+      collab (peerRingNames[0], peerRingNames[1])
 {
     master.chain->setTimingHook (&transport);
     prepare (48000.0, 256);
@@ -91,6 +105,22 @@ MixEngine::MixEngine (const juce::String& obsMappingName)
 MixEngine::~MixEngine()
 {
     shutdown();
+}
+
+bool MixEngine::startRecording (const recording::Options& options)
+{
+    auto request = recordingContext;
+    request.options = options;
+    return recorder.start (request);
+}
+
+void MixEngine::setRecordingContext (bool open, const std::array<recording::TrackIdentity, 3>& people)
+{
+    for (unsigned slot = 1; slot <= 2; ++slot)
+        if (recordingContext.people[slot].participantId != people[slot].participantId) collabMeters[slot - 1].take();
+    recordingContext.collabAtStart = open;
+    recordingContext.people = people;
+    for (unsigned slot = 1; slot <= 2; ++slot) recorder.noteSeatOccupant (slot, people[slot]);
 }
 
 //==============================================================================
@@ -441,7 +471,9 @@ juce::String MixEngine::openSessionDevice (const MixDevice& device)
 void MixEngine::shutdown()
 {
     stopTimer();
+    recorder.requestStop(); // stop accepting new recording input before joining the device callback
     removeCallback();
+    recorder.finish();
     setObsEnabled (false);
     deviceManager.closeAudioDevice();
     if (monitor != nullptr) monitor->stop();
@@ -504,6 +536,8 @@ void MixEngine::prepare (double newSampleRate, int newBlockSize)
 {
     newBlockSize = juce::jmax (16, newBlockSize);
     const juce::ScopedLock sl (lock);
+    if (sampleRate.load() != newSampleRate) ++recordingFormatEpoch;
+    recorder.prepareFormat ({ newSampleRate, newBlockSize, recordingFormatEpoch });
     transport.prepare (newSampleRate);
     sampleRate.store (newSampleRate, std::memory_order_relaxed);
     blockSize.store (newBlockSize, std::memory_order_relaxed);
@@ -534,20 +568,37 @@ void MixEngine::setObsEnabled (bool enabled)
 }
 
 void MixEngine::finishOutput (float* const* outputs, int numOutputs, int offset, int frames,
-                             float* const* splitBuffer, MonitorOutput* monitorOutput) noexcept
+                             float* const* splitBuffer, MonitorOutput* monitorOutput,
+                             collab::contracts::AudioSourceView masterSource) noexcept
 {
+    const auto sources = collab.renderSources (frames);
+    recorder.push (masterSource, sources.remote[0], sources.remote[1], frames);
+    for (size_t slot = 0; slot < sources.remote.size(); ++slot)
+    {
+        const auto& source = sources.remote[slot];
+        float left = 0, right = 0;
+        for (int n = 0; n < sources.frames; ++n)
+        {
+            if (source.left) left = std::max (left, std::abs (source.left[n]));
+            if (source.right) right = std::max (right, std::abs (source.right[n]));
+        }
+        collabMeters[slot].push (left, right);
+    }
     // The partner joins after the master on the master's pair, on a pair of its own, or nowhere when it is heard
     // through OBS monitoring; never the master bus, which the partner and the 'LiveMix' OBS source receive.
     using Route = collab::CollabAudio::Route;
     const auto route = collab.getRoute();
     const int first = outputFirst (route == Route::direct ? collab.getRouteFirst() : master.outputFirst.load (std::memory_order_relaxed));
     const int count = splitBuffer != nullptr ? 2 : numOutputs;
-    float* pair[2] {};
+    // renderMonitor resolves the configured route. Alias its requested pair to the
+    // actual device pair, including the existing stereo-only split-output remap.
+    std::array<float*, maxDeviceChannels> routed {};
+    const int requested = route == Route::direct ? collab.getRouteFirst() : 0;
     for (int ch = 0; ch < 2 && route != Route::obs; ++ch)
-        if (first + ch < count)
-            pair[ch] = splitBuffer != nullptr ? splitBuffer[first + ch]
+        if (first + ch < count && requested + ch < maxDeviceChannels)
+            routed[(size_t) (requested + ch)] = splitBuffer != nullptr ? splitBuffer[first + ch]
                 : (outputs[first + ch] != nullptr ? outputs[first + ch] + offset : nullptr);
-    collab.renderRemote (pair, 2, 0, frames);
+    collab.renderMonitor (sources, routed.data(), maxDeviceChannels, requested);
     if (splitBuffer != nullptr && monitorOutput != nullptr)
         monitorOutput->push (splitBuffer[0], splitBuffer[1], frames);
 }
@@ -583,13 +634,14 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
     {
         obsSender.writeSilence (numSamples);
         collab.pushLocalSilence (numSamples);
-        for (int offset = 0; offset < numSamples; offset += 512)
+        const int chunk = juce::jlimit (1, 512, blockSize.load());
+        for (int offset = 0; offset < numSamples; offset += chunk)
         {
-            const int n = juce::jmin (512, numSamples - offset);
+            const int n = juce::jmin (chunk, numSamples - offset);
             float* silence[2] { collabMonitorSilence[0].data(), collabMonitorSilence[1].data() };
             const bool split = isSplitMonitor();
             if (split) { std::fill_n (silence[0], n, 0.0f); std::fill_n (silence[1], n, 0.0f); }
-            finishOutput (outputs, numOutputs, offset, n, split ? silence : nullptr, monitorOutput);
+            finishOutput (outputs, numOutputs, offset, n, split ? silence : nullptr, monitorOutput, {});
         }
         return; // the graph did not run: the sample clock does not advance
     }
@@ -806,7 +858,8 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
         obsSender.write (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         collab.pushLocal (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         addToOutputs (routedOutputs, routedCount, outputFirst (master.outputFirst.load (std::memory_order_relaxed)), masterBus, routedOffset, n);
-        finishOutput (outputs, numOutputs, offset, n, split ? monitorStage.getArrayOfWritePointers() : nullptr, monitorOutput);
+        finishOutput (outputs, numOutputs, offset, n, split ? monitorStage.getArrayOfWritePointers() : nullptr, monitorOutput,
+                      { masterBus.getReadPointer (0), masterBus.getReadPointer (1) });
     }
     transport.advance (numSamples); // once for the full device callback, never per chain or chunk
 }

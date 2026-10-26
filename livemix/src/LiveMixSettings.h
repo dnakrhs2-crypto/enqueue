@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MixModel.h"
+#include "recording/RecordingTypes.h"
 
 #include <juce_data_structures/juce_data_structures.h>
 
@@ -66,6 +67,10 @@ public:
     int getCollabRouteFirst() const;     // first channel of the partner's direct pair (0 = 1-2)
     void setCollabRouteFirst (int first);
     juce::String getCollabInstallId();   // created and saved on first use
+    float getCollabPersonVolume (const juce::String& nickname) const;
+    void setCollabPersonVolume (const juce::String& nickname, float volume01); // most recent last, at most 32
+    recording::Options getRecordingOptions() const;
+    void setRecordingOptions (const recording::Options&);
 
     /** The global hotkeys as KeyPress descriptions ("F9", "ctrl + alt + M"); empty = none. */
     juce::String getMicMuteHotkey() const;
