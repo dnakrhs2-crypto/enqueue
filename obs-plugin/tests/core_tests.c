@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "receiver.h"
 #include "lm_obs_protocol.h"
+#include "ring-names.h"
 
 #include <math.h>
 #include <sddl.h>
@@ -1433,6 +1434,223 @@ done:
 static bool test_soak_positive(void) { return test_soak(1000.0); }
 static bool test_soak_negative(void) { return test_soak(-1000.0); }
 
+static bool test_peer_ring_names(void)
+{
+	const wchar_t *keys[] = {L"LIVEMIX_OBS_RING", L"LIVEMIX_OBS_PEER_RING", L"LIVEMIX_OBS_PEER2_RING"};
+	wchar_t *saved[3] = {0};
+	lm_ring_names names;
+	bool ok = true;
+	for (int i = 0; i < 3; ++i) {
+		DWORD size = GetEnvironmentVariableW(keys[i], NULL, 0);
+		if (size) {
+			saved[i] = calloc(size, sizeof(wchar_t));
+			if (!saved[i])
+				abort();
+			GetEnvironmentVariableW(keys[i], saved[i], size);
+		}
+		SetEnvironmentVariableW(keys[i], NULL);
+	}
+	lm_resolve_ring_names(&names);
+	CHECK(wcscmp(names.master, LM_OBS_RING_NAME) == 0);
+	CHECK(wcscmp(names.peer[0], LM_OBS_PEER_RING_NAME) == 0);
+	CHECK(wcscmp(names.peer[1], LM_OBS_PEER2_RING_NAME) == 0);
+	CHECK(SetEnvironmentVariableW(keys[0], L"Local\\R7.Base.Peer.Inside"));
+	lm_resolve_ring_names(&names);
+	CHECK(wcscmp(names.master, L"Local\\R7.Base.Peer.Inside") == 0);
+	CHECK(wcscmp(names.peer[0], L"Local\\R7.Base.Peer.Inside.Peer") == 0);
+	CHECK(wcscmp(names.peer[1], L"Local\\R7.Base.Peer.Inside.Peer2") == 0);
+	CHECK(SetEnvironmentVariableW(keys[1], L"Local\\R7.ExplicitOne"));
+	lm_resolve_ring_names(&names);
+	CHECK(wcscmp(names.peer[0], L"Local\\R7.ExplicitOne") == 0);
+	CHECK(wcscmp(names.peer[1], L"Local\\R7.Base.Peer.Inside.Peer2") == 0);
+	CHECK(SetEnvironmentVariableW(keys[2], L"Local\\R7.ExplicitTwo"));
+	lm_resolve_ring_names(&names);
+	CHECK(wcscmp(names.peer[0], L"Local\\R7.ExplicitOne") == 0);
+	CHECK(wcscmp(names.peer[1], L"Local\\R7.ExplicitTwo") == 0);
+	CHECK(SetEnvironmentVariableW(keys[1], L""));
+	lm_resolve_ring_names(&names);
+	CHECK(wcscmp(names.peer[0], L"Local\\R7.Base.Peer.Inside.Peer") == 0);
+	CHECK(wcscmp(names.peer[1], L"Local\\R7.ExplicitTwo") == 0);
+	CHECK(SetEnvironmentVariableW(keys[0], L""));
+	CHECK(SetEnvironmentVariableW(keys[2], L""));
+	lm_resolve_ring_names(&names);
+	CHECK(wcscmp(names.master, LM_OBS_RING_NAME) == 0);
+	CHECK(wcscmp(names.peer[0], LM_OBS_PEER_RING_NAME) == 0);
+	CHECK(wcscmp(names.peer[1], LM_OBS_PEER2_RING_NAME) == 0);
+done:
+	for (int i = 0; i < 3; ++i) {
+		SetEnvironmentVariableW(keys[i], saved[i]);
+		free(saved[i]);
+	}
+	return ok;
+}
+
+typedef struct metadata_fixture {
+	fixture audio;
+	HANDLE mapping;
+	lm_obs_metadata *metadata;
+} metadata_fixture;
+
+static bool metadata_open(metadata_fixture *f, unsigned slot)
+{
+	if (!fixture_open(&f->audio) || !writer_open(&f->audio, (DWORD)RING_BYTES) || !warm_up(&f->audio))
+		return false;
+	wchar_t name[144];
+	swprintf(name, 144, L"%ls.Metadata", f->audio.ring_name);
+	f->mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, LM_OBS_METADATA_BYTES, name);
+	if (!f->mapping)
+		return false;
+	f->metadata = MapViewOfFile(f->mapping, FILE_MAP_ALL_ACCESS, 0, 0, LM_OBS_METADATA_BYTES);
+	if (!f->metadata)
+		return false;
+	lm_obs_metadata *m = f->metadata;
+	memset(m, 0, sizeof(*m));
+	m->magic = LM_OBS_METADATA_MAGIC;
+	m->version = LM_OBS_METADATA_VERSION;
+	m->mapping_bytes = LM_OBS_METADATA_BYTES;
+	m->slot = slot;
+	m->session = 77;
+	m->participant_id = slot + 1;
+	m->stream_epoch = 1;
+	m->state = LM_OBS_PARTICIPANT_CONNECTED;
+	m->kind = LM_OBS_PARTICIPANT_WEB;
+	m->writer_pid = GetCurrentProcessId();
+	memcpy(m->nickname_utf8, "Guest", 6);
+	m->nickname_bytes = 5;
+	lm_obs_store_release(&m->sequence, 2);
+	return true;
+}
+
+static void metadata_close(metadata_fixture *f)
+{
+	if (f->metadata)
+		UnmapViewOfFile(f->metadata);
+	if (f->mapping)
+		CloseHandle(f->mapping);
+	fixture_close(&f->audio);
+}
+
+static bool test_metadata_snapshots(void)
+{
+	metadata_fixture f[2] = {0};
+	lm_obs_metadata snapshot;
+	bool ok = true;
+	for (unsigned i = 0; i < 2; ++i) {
+		CHECK(metadata_open(&f[i], i + 1));
+		CHECK(lm_connection_read_metadata(f[i].audio.connection, i + 1, &snapshot));
+		CHECK(snapshot.slot == i + 1 && snapshot.participant_id == i + 2);
+		CHECK(snapshot.sequence == 2 && snapshot.session == 77 && snapshot.stream_epoch == 1);
+		CHECK(snapshot.writer_pid == GetCurrentProcessId());
+		CHECK(snapshot.state == LM_OBS_PARTICIPANT_CONNECTED && snapshot.kind == LM_OBS_PARTICIPANT_WEB);
+		CHECK(snapshot.nickname_bytes == 5 && strcmp(snapshot.nickname_utf8, "Guest") == 0);
+		CHECK(!lm_connection_read_metadata(f[i].audio.connection, 2 - i, &snapshot));
+	}
+done:
+	metadata_close(&f[0]);
+	metadata_close(&f[1]);
+	return ok;
+}
+
+static bool test_metadata_publication(void)
+{
+	metadata_fixture f = {0};
+	lm_obs_metadata snapshot;
+	bool ok = true;
+	CHECK(metadata_open(&f, 1));
+	lm_obs_store_release(&f.metadata->sequence, 3);
+	memcpy(f.metadata->nickname_utf8, "Newer", 6);
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	CHECK(snapshot.nickname_bytes == 0 && snapshot.nickname_utf8[0] == '\0');
+	lm_obs_store_release(&f.metadata->sequence, 4);
+	CHECK(lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	CHECK(snapshot.sequence == 4 && strcmp(snapshot.nickname_utf8, "Newer") == 0);
+done:
+	metadata_close(&f);
+	return ok;
+}
+
+static bool test_metadata_writer(void)
+{
+	metadata_fixture f = {0};
+	lm_obs_metadata snapshot;
+	bool ok = true;
+	CHECK(metadata_open(&f, 1));
+	++f.metadata->writer_pid;
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	--f.metadata->writer_pid;
+	lm_obs_store_release(&f.audio.header->writer_pid, GetCurrentProcessId() + 1);
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	lm_obs_store_release(&f.audio.header->writer_pid, GetCurrentProcessId());
+	lm_obs_store_release(&f.audio.header->heartbeat_qpc, 0);
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	lm_obs_store_release(&f.audio.header->heartbeat_qpc, f.audio.now - 3 * TEST_QPC);
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	lm_obs_store_release(&f.audio.header->heartbeat_qpc, f.audio.now);
+	lm_obs_store_release(&f.audio.header->send_enabled, 0);
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	lm_obs_store_release(&f.audio.header->send_enabled, 1);
+	CHECK(lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+done:
+	metadata_close(&f);
+	return ok;
+}
+
+static bool test_metadata_empty(void)
+{
+	metadata_fixture f = {0};
+	lm_obs_metadata snapshot;
+	bool ok = true;
+	CHECK(fixture_open(&f.audio));
+	CHECK(writer_open(&f.audio, (DWORD)RING_BYTES));
+	CHECK(warm_up(&f.audio));
+	/* A 0.15/0.16 writer has audio and no metadata. */
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	CHECK(lm_receiver_connected(f.audio.receiver) && settled(&f.audio, 0.5f));
+	fixture_close(&f.audio);
+	memset(&f.audio, 0, sizeof(f.audio));
+	CHECK(metadata_open(&f, 1));
+	lm_obs_store_release(&f.metadata->sequence, 3);
+	f.metadata->session = 0;
+	f.metadata->participant_id = 0;
+	f.metadata->stream_epoch = 0;
+	f.metadata->state = LM_OBS_PARTICIPANT_EMPTY;
+	f.metadata->kind = LM_OBS_PARTICIPANT_NONE;
+	f.metadata->nickname_bytes = 0;
+	memset(f.metadata->nickname_utf8, 0, sizeof(f.metadata->nickname_utf8));
+	lm_obs_store_release(&f.metadata->sequence, 4);
+	CHECK(lm_connection_read_metadata(f.audio.connection, 1, &snapshot));
+	CHECK(snapshot.participant_id == 0 && snapshot.stream_epoch == 0 && snapshot.state == LM_OBS_PARTICIPANT_EMPTY);
+	CHECK(snapshot.nickname_bytes == 0 && snapshot.nickname_utf8[0] == '\0');
+done:
+	metadata_close(&f);
+	return ok;
+}
+
+static bool test_metadata_layout(void)
+{
+	metadata_fixture f = {0};
+	lm_obs_metadata snapshot;
+	bool ok = true;
+	CHECK(metadata_open(&f, 2));
+	++f.metadata->version;
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 2, &snapshot));
+	--f.metadata->version;
+	f.metadata->mapping_bytes = 128;
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 2, &snapshot));
+	f.metadata->mapping_bytes = LM_OBS_METADATA_BYTES;
+	f.metadata->nickname_bytes = 161;
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 2, &snapshot));
+	f.metadata->nickname_bytes = 160;
+	memset(f.metadata->nickname_utf8, 'a', sizeof(f.metadata->nickname_utf8));
+	CHECK(!lm_connection_read_metadata(f.audio.connection, 2, &snapshot));
+	f.metadata->nickname_utf8[160] = '\0';
+	CHECK(lm_connection_read_metadata(f.audio.connection, 2, &snapshot));
+	CHECK(snapshot.nickname_bytes == 160 && strlen(snapshot.nickname_utf8) == 160);
+done:
+	metadata_close(&f);
+	return ok;
+}
+
 static void run_test(const char *name, bool (*test)(void))
 {
 	if (test_filter && !strstr(name, test_filter))
@@ -1490,6 +1708,12 @@ int main(int argc, char **argv)
 	run_test("adaptive target: monotonic growth capped at 200 ms", test_target_cap);
 	run_test("+1000 ppm for two simulated hours", test_soak_positive);
 	run_test("-1000 ppm for two simulated hours", test_soak_negative);
+	run_test("peer metadata: default, base-derived and explicit ring name precedence", test_peer_ring_names);
+	run_test("peer metadata: independent stable snapshots for both slots", test_metadata_snapshots);
+	run_test("peer metadata: odd publication is ignored until the next even sequence", test_metadata_publication);
+	run_test("peer metadata: writer identity, disabled audio and stale heartbeat", test_metadata_writer);
+	run_test("peer metadata: legacy audio without metadata and an empty slot", test_metadata_empty);
+	run_test("peer metadata: ABI version, size, nickname bound and terminating NUL", test_metadata_layout);
 	printf("LiveMix OBS core tests: %d passed, %d failed (%d total)\n",
 	       tests_run - tests_failed, tests_failed, tests_run);
 	return tests_failed ? EXIT_FAILURE : EXIT_SUCCESS;

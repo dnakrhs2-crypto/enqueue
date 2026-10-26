@@ -1,13 +1,21 @@
 # -*- coding: utf-8 -*-
-"""LiveMix 합방 시험: 가짜 HTTP 요청과 loopback UDP만 사용하며 서버를 실행하지 않는다.
+"""LiveMix 합방 시험: 가짜 요청·loopback UDP 및 --serve 실제 HTTP 왕복.
 python -m unittest test_livemix_collab -v
 """
 import io
+import http.client
 import json
+import os
+from pathlib import Path
 import socket
 import struct
+import subprocess
+import sys
+import threading
+import time
 import unittest
-from contextlib import redirect_stdout
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing, redirect_stdout
 from email.message import Message
 from unittest import mock
 
@@ -382,6 +390,454 @@ class CollabTest(unittest.TestCase):
         for port in (0, 70000, "5", True):
             self.assertEqual(self.post("join", {"code": room["code"], "nick": "하늘", "inst": "g", "port": port}, 400,
                                        client_ip=GUEST_IP), {"error": "bad"})
+
+
+class CollabV2Test(unittest.TestCase):
+    setUp = CollabTest.setUp
+    response = CollabTest.response
+    send = CollabTest.send
+    post = CollabTest.post
+
+    def client(self, number=1):
+        return dict(apiVersion=2, appVersion="0.17.0", protocols=[1, 2],
+                    capabilities=lc.CAPABILITIES[:], connectionId="%032x" % number, wireRate=48000)
+
+    def create(self, number=1, **fields):
+        body = dict(self.client(number), nick="방장", inst="same-profile", port=HOST_PORT)
+        body.update(fields)
+        return self.post("create", body)
+
+    def host(self, action, room, status=200, **fields):
+        return self.post(action, dict(apiVersion=2, code=room["code"], hostToken=room["hostToken"], **fields), status)
+
+    def open(self, number=1, **fields):
+        room = self.create(number, **fields)
+        self.host("confirm", room, reachable=True)
+        return room
+
+    def join(self, room, number=2, status=200, **fields):
+        body = dict(self.client(number), code=room["code"], nick="네이티브", inst="same-profile", port=13000 + number)
+        body.update(fields)
+        return self.post("join", body, status, client_ip=GUEST_IP)
+
+    def beat(self, room, members=()):
+        return self.host("heartbeat", room, connected=bool(members), memberStates=list(members))
+
+    def state(self, member, state="connected", epoch=1):
+        return dict(participantId=member["participantId"], connectionGeneration=member["connectionGeneration"],
+                    state=state, streamEpoch=epoch)
+
+    def invite(self, room):
+        return self.host("web/invite", room)
+
+    def request(self, room, invite, number=10, status=200):
+        return self.post("web/request", dict(apiVersion=2, code=room["code"], inviteToken=invite["inviteToken"],
+                inviteGeneration=invite["inviteGeneration"], action="join", nick="웹 손님", connectionId="%032x" % number,
+                protocols=[2], capabilities=lc.CAPABILITIES[:]), status, client_ip="2001:db8::42")
+
+    def accept(self, room, request, status=200):
+        return self.host("web/accept", room, status, requestId=request["requestId"])
+
+    def events(self, room, cursor="0", status=200, **auth):
+        return self.post("web/events", dict(apiVersion=2, code=room["code"], cursor=cursor, **auth), status)
+
+    def signal(self, room, accepted, signal, sid=1, status=200):
+        return self.post("web/signal", dict(apiVersion=2, code=room["code"],
+                connectionToken=accepted["connectionToken"], connectionGeneration=accepted["connectionGeneration"],
+                signalId=sid, signal=signal), status)
+
+    def web_pair(self, room):
+        req = self.request(room, self.invite(room))
+        host = self.accept(room, req)
+        events = self.events(room, req["cursor"], requestToken=req["requestToken"])
+        web = next(e["data"] for e in events["events"] if e["type"] == "accepted")
+        return req, host, web
+
+    def test_three_native_same_profile_retries_and_private_addresses(self):
+        room = self.open()
+        self.assertEqual(self.create()["code"], room["code"])
+        a, b = self.join(room), self.join(room, 3)
+        self.assertEqual([m["participantId"] for m in b["members"]], [1, 2, 3])
+        self.assertEqual(len(b["reservations"]), 2)
+        self.assertEqual(b["roomMode"], "v2")
+        self.assertEqual(self.join(room)["participantId"], a["participantId"])
+        self.assertEqual(self.join(room, 4, 409), {"error": "full"})
+        self.assertNotIn("connectionId", json.dumps(b))
+        beat = self.beat(room, [self.state(a), self.state(b)])
+        self.assertEqual(beat["reservations"], [])
+        self.assertEqual(len(beat["peers"]), 2)
+        self.assertEqual(beat["peers"][0]["candidates"], [{"ip": GUEST_IP, "port": 13002}])
+        revision = beat["revision"]
+        self.assertEqual(self.beat(room, [self.state(a), self.state(b)])["revision"], revision)
+
+    def test_native_and_web_both_entry_orders(self):
+        for web_first in (False, True):
+            with self.subTest(web_first=web_first):
+                room = self.open(100 + int(web_first))
+                if not web_first:
+                    self.join(room, 200)
+                _, host, _ = self.web_pair(room)
+                if web_first:
+                    self.join(room, 201)
+                self.assertEqual(len(self.beat(room)["members"]), 3)
+                self.signal(room, host, {"type": "connected"})
+                self.assertEqual(self.join(room, 202, 409), {"error": "full"})
+
+    def test_full_native_room_rejects_web_accept(self):
+        room = self.open()
+        req = self.request(room, self.invite(room))
+        self.join(room)
+        self.join(room, 3)
+        self.assertEqual(self.accept(room, req, 409), {"error": "full"})
+
+    def test_second_web_accept_rejected_and_retry_does_not_extend_reservation(self):
+        room = self.open()
+        invite = self.invite(room)
+        one, two = self.request(room, invite), self.request(room, invite, 11)
+        first = self.accept(room, one)
+        self.now += 5
+        self.assertEqual(self.accept(room, one), first)
+        self.assertEqual(self.accept(room, two, 409), {"error": "web_full"})
+        self.assertEqual(self.request(room, invite), one)
+
+    def test_concurrent_join_accept_reserves_only_remaining_seat(self):
+        room = self.open()
+        self.join(room)
+        req = self.request(room, self.invite(room))
+        barrier = threading.Barrier(3)
+        def submit(action, body):
+            h = H(lc.PREFIX + action, body)
+            barrier.wait()
+            lc.handle_post(h)
+            return h.status
+        native = dict(self.client(3), code=room["code"], nick="동시", inst="same-profile", port=14000)
+        web = dict(apiVersion=2, code=room["code"], hostToken=room["hostToken"], requestId=req["requestId"])
+        with ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(submit, "join", native), pool.submit(submit, "web/accept", web)]
+            barrier.wait()
+            self.assertEqual(sorted(f.result(5) for f in futures), [200, 409])
+        members = self.beat(room)["members"]
+        self.assertEqual(len(members), 3)
+        self.assertLessEqual(sum(m["kind"] == "web" for m in members), 1)
+
+    def test_concurrent_accepts_keep_one_web(self):
+        room = self.open()
+        invite = self.invite(room)
+        requests = [self.request(room, invite, n) for n in (10, 11)]
+        barrier = threading.Barrier(2)
+        def accept(req):
+            h = H(lc.PREFIX + "web/accept", dict(apiVersion=2, code=room["code"], hostToken=room["hostToken"], requestId=req["requestId"]))
+            barrier.wait()
+            lc.handle_post(h)
+            return h.status
+        with ThreadPoolExecutor(2) as pool:
+            self.assertEqual(sorted(pool.map(accept, requests)), [200, 409])
+        self.assertEqual(len(self.beat(room)["members"]), 2)
+
+    def test_reissue_invalidates_pending_only(self):
+        room = self.open()
+        invite = self.invite(room)
+        pending = self.request(room, invite)
+        req = self.request(room, invite, 11)
+        accepted = self.accept(room, req)
+        newer = self.invite(room)
+        self.assertEqual(newer["inviteGeneration"], invite["inviteGeneration"] + 1)
+        self.assertEqual(self.request(room, invite, 12, 410), {"error": "invite"})
+        self.assertEqual(self.accept(room, pending, 409), {"error": "request_state"})
+        self.events(room, requestToken=pending["requestToken"], status=410)
+        self.signal(room, accepted, {"type": "offer", "sdp": "v=0\r\n"})
+
+    def test_pending_and_reservation_expire_and_ids_are_not_reused(self):
+        room = self.open()
+        invite = self.invite(room)
+        req = self.request(room, invite)
+        self.now += 40
+        self.beat(room)
+        self.now += 20
+        self.assertEqual(self.accept(room, req, 410), {"error": "expired"})
+        req = self.request(room, invite, 11)
+        first = self.accept(room, req)
+        self.now += 15
+        self.assertEqual(self.accept(room, req, 410), {"error": "expired"})
+        self.signal(room, first, {"type": "connected"}, status=410)
+        self.beat(room)
+        native = self.join(room)
+        self.now += 15
+        newer = self.join(room, 3)
+        self.assertGreater(newer["participantId"], native["participantId"])
+        self.assertEqual(self.join(room, 2, 410), {"error": "expired"})
+
+    def test_kick_leave_and_native_left_reuse_seats(self):
+        room = self.open()
+        native = self.join(room)
+        _, host, web = self.web_pair(room)
+        self.signal(room, host, {"type": "connected"})
+        self.host("web/kick", room, participantId=host["participantId"], connectionGeneration=host["connectionGeneration"])
+        self.signal(room, web, {"type": "answer", "sdp": "old"}, status=410)
+        _, host2, web2 = self.web_pair(room)
+        self.assertGreater(host2["participantId"], host["participantId"])
+        self.post("web/leave", dict(apiVersion=2, code=room["code"], connectionToken=web2["connectionToken"], connectionGeneration=web2["connectionGeneration"]))
+        self.beat(room, [self.state(native, "left")])
+        self.assertEqual(len(self.join(room, 3)["members"]), 2)
+
+    def test_legacy_mix_downgrades_then_restores_v2(self):
+        room = self.open()
+        old = dict(code=room["code"], nick="구 앱", inst="old")
+        joined = self.post("join", old)
+        self.assertEqual(list(joined), ["session", "hostNick", "candidates", "sameNetwork"])
+        beat = self.beat(room)
+        self.assertEqual(beat["roomMode"], "legacy2")
+        self.host("web/invite", room, 409)
+        self.join(room, 3, 409)
+        self.beat(room, [self.state(beat["members"][1], "left")])
+        self.assertEqual(self.beat(room)["roomMode"], "v2")
+        self.invite(room)
+        self.join(room)
+        self.join(room, 3)
+        self.assertEqual(self.post("join", old, 409), {"error": "full"})
+
+    def test_new_guest_in_old_host_room_and_capability_intersection(self):
+        room = self.post("create", dict(nick="old", inst="old", port=12000))
+        self.post("confirm", dict(code=room["code"], hostToken=room["hostToken"], reachable=True))
+        self.assertEqual(self.join(room)["roomMode"], "legacy2")
+        self.join(room, 3, 409)
+        self.host("web/invite", room, 409)
+        self.post("heartbeat", dict(code=room["code"], hostToken=room["hostToken"], connected=True))
+        self.post("heartbeat", dict(code=room["code"], hostToken=room["hostToken"], connected=False))
+        self.join(room, 3)
+        modern = self.open(99, capabilities=lc.CAPABILITIES[:3])
+        self.assertEqual(self.join(modern)["capabilities"], lc.CAPABILITIES[:3])
+        self.host("web/invite", modern, 409)
+
+    def test_native_unavailable_keeps_web_and_epochs_update(self):
+        room = self.create()
+        confirmed = self.host("confirm", room, reachable=False, reason="no UDP")
+        self.assertEqual(confirmed["nativeState"], "unavailable")
+        self.assertEqual(self.join(room, 2, 409), {"error": "native_unavailable"})
+        _, host, _ = self.web_pair(room)
+        beat = self.beat(room, [self.state(host, epoch=2)])
+        self.assertEqual(beat["members"][1]["streamEpoch"], 2)
+        self.host("heartbeat", room, 409, connected=True, memberStates=[self.state(host)])
+
+    def test_role_tokens_and_signals_are_private_and_deduplicated(self):
+        room = self.open()
+        req, host, web = self.web_pair(room)
+        self.assertNotEqual(host["connectionToken"], web["connectionToken"])
+        self.signal(room, web, {"type": "offer", "sdp": "bad"}, status=403)
+        self.signal(room, host, {"type": "answer", "sdp": "bad"}, status=403)
+        self.signal(room, web, {"type": "connected"}, status=403)
+        before = self.events(room, hostToken=room["hostToken"])["cursor"]
+        first = self.signal(room, host, {"type": "offer", "sdp": "v=0\r\n"})
+        self.assertEqual(self.signal(room, host, {"type": "offer", "sdp": "v=0\r\n"}), first)
+        events = self.events(room, before, connectionToken=web["connectionToken"], connectionGeneration=web["connectionGeneration"])
+        self.assertEqual(len(events["events"]), 1)
+        self.assertEqual(events["events"][0]["data"]["from"], "host")
+        self.signal(room, web, {"type": "answer", "sdp": "v=0\r\n"})
+        reply = self.events(room, before, connectionToken=host["connectionToken"], connectionGeneration=host["connectionGeneration"])
+        self.assertEqual([e["data"]["from"] for e in reply["events"]], ["web"])
+        with mock.patch.object(lc, "EVENT_WAIT_SEC", 0):
+            self.assertEqual(self.events(room, before, hostToken=room["hostToken"])["events"], [])
+            request_events = self.events(room, req["cursor"], requestToken=req["requestToken"])
+            self.assertNotIn("signal", [e["type"] for e in request_events["events"]])
+        self.signal(room, dict(host, connectionGeneration=99), {"type": "connected"}, 2, 409)
+
+    def test_limits_and_event_pages(self):
+        room = self.open()
+        invite = self.invite(room)
+        requests = [self.request(room, invite, n) for n in range(10, 18)]
+        self.request(room, invite, 18, 429)
+        host = self.accept(room, requests[0])
+        web = next(e["data"] for e in self.events(room, requestToken=requests[0]["requestToken"])["events"] if e["type"] == "accepted")
+        before = self.events(room, hostToken=room["hostToken"])["cursor"]
+        self.signal(room, host, {"type": "offer", "sdp": "x" * 65537}, status=400)
+        self.signal(room, host, {"type": "offer", "sdp": "x" * 65536})
+        self.signal(room, host, {"type": "offer", "sdp": "another"}, 2, 400)
+        candidate = dict(type="candidate", candidate="x" * 2048, sdpMid=None, sdpMLineIndex=None)
+        self.signal(room, host, dict(candidate, candidate="x" * 2049), 2, 400)
+        self.signal(room, host, dict(candidate, sdpMid="x" * 65), 2, 400)
+        self.signal(room, host, dict(candidate, sdpMLineIndex=True), 2, 400)
+        for n in range(2, 66):
+            self.signal(room, host, candidate, n)
+        self.signal(room, host, candidate, 66, 400)
+        auth = dict(connectionToken=web["connectionToken"], connectionGeneration=web["connectionGeneration"])
+        page1 = self.events(room, before, **auth)
+        page2 = self.events(room, page1["cursor"], **auth)
+        page3 = self.events(room, page2["cursor"], **auth)
+        self.assertEqual([len(p["events"]) for p in (page1, page2, page3)], [32, 32, 1])
+        self.assertEqual(self.events(room, before, **auth), page1)
+
+    def test_reject_cancel_and_validation(self):
+        room = self.open()
+        invite = self.invite(room)
+        req = self.request(room, invite)
+        self.host("web/reject", room, requestId=req["requestId"])
+        self.accept(room, req, 409)
+        req = self.request(room, invite, 11)
+        self.post("web/leave", dict(apiVersion=2, code=room["code"], requestToken=req["requestToken"]))
+        self.accept(room, req, 409)
+        for version in (True, "2", 3):
+            self.post("create", dict(self.client(), apiVersion=version, nick="a", inst="a", port=12000), 400)
+        for cursor in (0, "-1", "18446744073709551616"):
+            self.events(room, cursor, 400, hostToken=room["hostToken"])
+        self.host("heartbeat", room, 400, connected=False, memberStates=[dict(participantId=True)])
+        self.post("web/request", dict(apiVersion=2, code=room["code"], inviteToken=invite["inviteToken"], inviteGeneration=invite["inviteGeneration"], action="unknown"), 400)
+
+    def test_longpoll_releases_global_lock_and_close_wakes_it(self):
+        room, other = self.open(), self.open(99)
+        cursor = self.events(room, hostToken=room["hostToken"])["cursor"]
+        condition = lc._rooms[room["code"]]["condition"]
+        waiting = threading.Event()
+        original_wait = condition.wait
+        def wait(timeout):
+            waiting.set()
+            return original_wait(timeout)
+        with mock.patch.object(condition, "wait", side_effect=wait), ThreadPoolExecutor(2) as pool:
+            poll = pool.submit(self.events, room, cursor, hostToken=room["hostToken"])
+            self.assertTrue(waiting.wait(5))
+            beat = pool.submit(self.beat, other).result(5)
+            self.assertEqual(beat["code"], other["code"])
+            self.beat(room)
+            self.assertFalse(poll.done())
+            self.host("close", room)
+            self.assertIn("closed", [e["data"].get("reason") for e in poll.result(5)["events"]])
+        self.events(room, cursor, 410, hostToken=room["hostToken"])
+
+    def test_waiting_request_poll_receives_invalidation_then_token_expires(self):
+        room = self.open()
+        req = self.request(room, self.invite(room))
+        condition = lc._rooms[room["code"]]["condition"]
+        waiting, original_wait = threading.Event(), condition.wait
+        def wait(timeout):
+            waiting.set()
+            return original_wait(timeout)
+        with mock.patch.object(condition, "wait", side_effect=wait), ThreadPoolExecutor(1) as pool:
+            poll = pool.submit(self.events, room, req["cursor"], requestToken=req["requestToken"])
+            self.assertTrue(waiting.wait(5))
+            self.invite(room)
+            self.assertIn("ended", [e["type"] for e in poll.result(5)["events"]])
+        self.events(room, req["cursor"], 410, requestToken=req["requestToken"])
+
+    def test_cors_exact_origin_errors_text_plain_and_ipv6(self):
+        room = self.open()
+        invite = self.invite(room)
+        for origin in (lc.WEB_ORIGIN, None, "null", "http://dnakrhs2-crypto.github.io", "https://xn--jb0byyo90f.com", lc.WEB_ORIGIN + ":443", lc.WEB_ORIGIN + ".evil"):
+            for valid in (True, False):
+                h = H(lc.PREFIX + "web/request", dict(apiVersion=2, code=room["code"], inviteToken=invite["inviteToken"] if valid else "old",
+                        inviteGeneration=invite["inviteGeneration"], action="inspect"), client_ip="::1", xff="2001:db8::1")
+                h.headers.replace_header("Content-Type", "text/plain")
+                if origin is not None:
+                    h.headers["Origin"] = origin
+                self.send(h, 200 if valid else 410)
+                self.assertEqual(h.response_headers.get("Access-Control-Allow-Origin"), lc.WEB_ORIGIN if origin == lc.WEB_ORIGIN else None)
+                self.assertNotIn("Access-Control-Allow-Credentials", h.response_headers)
+        self.assertEqual(len(self.beat(room)["members"]), 1)
+        oversized = H(lc.PREFIX + "web/request", raw=b" " * (lc.MAX_WEB_BODY + 1))
+        self.send(oversized, 400)
+        self.assertEqual(oversized.rfile.tell(), 0)
+
+    def test_legacy_response_bytes_and_headers(self):
+        with mock.patch.object(lc.secrets, "choice", return_value="1234"), mock.patch.object(lc.secrets, "token_hex", side_effect=["a" * 16, "b" * 32, "c" * 32]):
+            h = H(lc.PREFIX + "create", dict(nick="다현", inst="host", port=12000))
+            self.send(h)
+        expected = ('{"code": "1234", "session": "' + "a" * 16 + '", "hostToken": "' + "b" * 32
+                    + '", "publicIp": "203.0.113.17", "nonce": "' + "c" * 32 + '"}').encode()
+        self.assertEqual(h.wfile.getvalue(), expected)
+        self.assertEqual(set(h.response_headers), {"Content-Type", "Content-Length", "Cache-Control"})
+        for action, fields in (("confirm", dict(reachable=True)), ("heartbeat", dict(connected=False)), ("close", {})):
+            h = H(lc.PREFIX + action, dict(code="1234", hostToken="b" * 32, **fields))
+            self.send(h)
+            self.assertEqual(h.wfile.getvalue(), b'{"ok": true}')
+
+    def test_legacy_punch_bytes_after_repeated_disconnected_heartbeats(self):
+        room = self.post("create", dict(nick="Old", inst="host", port=12000, stun=dict(ip=HOST_IP, port=40000)))
+        auth = dict(code=room["code"], hostToken=room["hostToken"])
+        self.post("confirm", dict(auth, reachable=False, punch=True))
+        self.post("join", dict(code=room["code"], nick="Old guest", inst="guest", port=13000), client_ip=GUEST_IP)
+        expected = b'{"ok": true, "guest": {"candidates": [{"ip": "198.51.100.28", "port": 13000}]}}'
+        for connected in (True, False, False):
+            h = H(lc.PREFIX + "heartbeat", dict(auth, connected=connected))
+            self.send(h)
+            self.assertEqual(h.wfile.getvalue(), expected)
+        for action, fields in (("confirm", dict(reachable="invalid")), ("heartbeat", dict(connected=1)), ("join", dict(nick="", inst="id"))):
+            self.assertEqual(self.post(action, dict(code="xxxx", **fields), 400), {"error": "bad"})
+
+    def test_two_concurrent_native_joins_fill_distinct_reservations(self):
+        room = self.open()
+        barrier = threading.Barrier(2)
+        def join(number):
+            barrier.wait()
+            return self.join(room, number)
+        with ThreadPoolExecutor(2) as pool:
+            results = list(pool.map(join, (2, 3)))
+        self.assertEqual(sorted(r["participantId"] for r in results), [2, 3])
+        self.assertEqual(len(self.beat(room)["reservations"]), 2)
+
+    def test_http_response_write_does_not_hold_global_lock(self):
+        room = self.open()
+        h = H(lc.PREFIX + "heartbeat", dict(apiVersion=2, code=room["code"], hostToken=room["hostToken"],
+                                           connected=False, memberStates=[]))
+        acquired = []
+        write = h.wfile.write
+        def unlocked_write(payload):
+            free = lc._lock.acquire(blocking=False)
+            acquired.append(free)
+            if free:
+                lc._lock.release()
+            return write(payload)
+        with mock.patch.object(h.wfile, "write", side_effect=unlocked_write):
+            self.send(h)
+        self.assertEqual(acquired, [True])
+
+
+class StandaloneHTTPTest(unittest.TestCase):
+    def test_real_http_create_invite_accept_signals_and_leave(self):
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        process = subprocess.Popen([sys.executable, str(Path(lc.__file__).resolve()), "--serve", "127.0.0.1:%d" % port],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        self.addCleanup(lambda: (process.terminate(), process.wait(timeout=5)))
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                with socket.create_connection(("127.0.0.1", port), 1):
+                    break
+            except OSError:
+                if time.monotonic() >= deadline or process.poll() is not None:
+                    self.fail("standalone server did not start")
+                time.sleep(0.05)
+        def post(endpoint, **body):
+            with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as conn:
+                conn.request("POST", lc.PREFIX + endpoint, json.dumps(dict(apiVersion=2, **body), ensure_ascii=False).encode(),
+                             {"Content-Type": "text/plain", "Origin": lc.WEB_ORIGIN})
+                response = conn.getresponse()
+                payload = response.read()
+                self.assertEqual(response.status, 200, payload)
+                self.assertEqual(response.getheader("Access-Control-Allow-Origin"), lc.WEB_ORIGIN)
+                self.assertEqual(int(response.getheader("Content-Length")), len(payload))
+                return json.loads(payload)
+        room = post("create", nick="실제 HTTP 방장", inst="http-host", port=12000, appVersion="0.17.0", protocols=[1, 2],
+                    capabilities=lc.CAPABILITIES, connectionId="1" * 32, wireRate=48000)
+        code, token = room["code"], room["hostToken"]
+        post("confirm", code=code, hostToken=token, reachable=False)
+        invite = post("web/invite", code=code, hostToken=token)
+        req = post("web/request", code=code, inviteToken=invite["inviteToken"], inviteGeneration=invite["inviteGeneration"],
+                   action="join", nick="실제 웹", connectionId="2" * 32, protocols=[2], capabilities=lc.CAPABILITIES)
+        host = post("web/accept", code=code, hostToken=token, requestId=req["requestId"])
+        events = post("web/events", code=code, requestToken=req["requestToken"], cursor=req["cursor"])
+        web = next(e["data"] for e in events["events"] if e["type"] == "accepted")
+        auths = [dict(connectionToken=a["connectionToken"], connectionGeneration=a["connectionGeneration"]) for a in (host, web)]
+        for sender, receiver, kind in ((0, 1, "offer"), (1, 0, "answer")):
+            signal = dict(type=kind, sdp="v=0\r\ns=LiveMix\r\n")
+            post("web/signal", code=code, **auths[sender], signalId=1, signal=signal)
+            events = post("web/events", code=code, **auths[receiver], cursor="0")
+            self.assertIn(signal, [e["data"].get("signal") for e in events["events"]])
+        post("web/signal", code=code, **auths[0], signalId=2, signal=dict(type="connected"))
+        post("web/leave", code=code, **auths[1])
+        beat = post("heartbeat", code=code, hostToken=token, connected=False, memberStates=[])
+        self.assertEqual(len(beat["members"]), 1)
+        post("close", code=code, hostToken=token)
 
 
 if __name__ == "__main__":
