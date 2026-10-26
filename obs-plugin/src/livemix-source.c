@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "livemix-obs.h"
 #include <util/platform.h>
+#include <util/dstr.h>
 
 #include <stdlib.h>
 
@@ -10,6 +11,8 @@
 typedef struct livemix_source {
 	obs_source_t *source;
 	lm_receiver *receiver;
+	lm_connection *connection;
+	unsigned slot; /* 0 master, 1/2 collab partner */
 	HANDLE thread;
 	volatile LONG stop;
 	float left[LM_SOURCE_MAX_FRAMES], right[LM_SOURCE_MAX_FRAMES];
@@ -88,6 +91,12 @@ static const char *peer_source_name(void *type_data)
 	return obs_module_text("PeerSource.Name");
 }
 
+static const char *peer2_source_name(void *type_data)
+{
+	(void)type_data;
+	return obs_module_text("Peer2Source.Name");
+}
+
 static void source_destroy(void *data)
 {
 	livemix_source *s = data;
@@ -102,12 +111,14 @@ static void source_destroy(void *data)
 	free(s);
 }
 
-static void *source_create_for_connection(obs_source_t *source, lm_connection *connection)
+static void *source_create_for_connection(obs_source_t *source, lm_connection *connection, unsigned slot)
 {
 	livemix_source *s = calloc(1, sizeof(*s));
 	if (!s)
 		return NULL;
 	s->source = source;
+	s->connection = connection;
+	s->slot = slot;
 	audio_t *audio = obs_get_audio();
 	uint32_t rate = audio ? audio_output_get_sample_rate(audio) : 48000;
 	s->receiver = lm_receiver_create(connection, rate);
@@ -123,21 +134,36 @@ static void *source_create_for_connection(obs_source_t *source, lm_connection *c
 static void *source_create(obs_data_t *settings, obs_source_t *source)
 {
 	(void)settings;
-	return source_create_for_connection(source, livemix_obs_connection());
+	return source_create_for_connection(source, livemix_obs_connection(), 0);
 }
 
 static void *peer_source_create(obs_data_t *settings, obs_source_t *source)
 {
 	(void)settings;
-	return source_create_for_connection(source, livemix_obs_peer_connection());
+	return source_create_for_connection(source, livemix_obs_peer_connection(1), 1);
+}
+
+static void *peer2_source_create(obs_data_t *settings, obs_source_t *source)
+{
+	(void)settings;
+	return source_create_for_connection(source, livemix_obs_peer_connection(2), 2);
 }
 
 static obs_properties_t *source_properties_for_status(void *data, const char *connected_key, const char *waiting_key)
 {
 	livemix_source *s = data;
 	obs_properties_t *properties = obs_properties_create();
-	const char *key = s && lm_receiver_connected(s->receiver) ? connected_key : waiting_key;
-	obs_properties_add_text(properties, "status", obs_module_text(key), OBS_TEXT_INFO);
+	bool connected = s && lm_receiver_connected(s->receiver);
+	struct dstr status = {0};
+	dstr_copy(&status, obs_module_text(connected ? connected_key : waiting_key));
+	lm_obs_metadata metadata;
+	if (connected && s->slot && lm_connection_read_metadata(s->connection, s->slot, &metadata) &&
+	    metadata.participant_id && metadata.state == LM_OBS_PARTICIPANT_CONNECTED && metadata.nickname_bytes) {
+		dstr_cat(&status, " \xc2\xb7 ");
+		dstr_cat(&status, metadata.nickname_utf8);
+	}
+	obs_properties_add_text(properties, "status", status.array, OBS_TEXT_INFO);
+	dstr_free(&status);
 	return properties;
 }
 
@@ -167,6 +193,16 @@ struct obs_source_info livemix_peer_source = {
 	.output_flags = OBS_SOURCE_AUDIO,
 	.get_name = peer_source_name,
 	.create = peer_source_create,
+	.destroy = source_destroy,
+	.get_properties = peer_source_properties,
+};
+
+struct obs_source_info livemix_peer2_source = {
+	.id = "livemix_peer2_source",
+	.type = OBS_SOURCE_TYPE_INPUT,
+	.output_flags = OBS_SOURCE_AUDIO,
+	.get_name = peer2_source_name,
+	.create = peer2_source_create,
 	.destroy = source_destroy,
 	.get_properties = peer_source_properties,
 };
