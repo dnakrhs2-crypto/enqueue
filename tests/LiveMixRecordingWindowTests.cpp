@@ -380,6 +380,9 @@ private:
         CollabViewport viewport (settings, actions);
         viewport.setVisible (true); // hit testing only; no native window or desktop peer
         auto& panel = *dynamic_cast<CollabPanel*> (viewport.getViewedComponent());
+        beginTest ("the scrolling wrapper adds no Tab stop between the room code and the nickname");
+        expect (! viewport.getWantsKeyboardFocus());
+        expect (! viewport.getVerticalScrollBar().getWantsKeyboardFocus());
         for (int state = 0; state < 3; ++state)
         {
             beginTest (juce::String ("short collab window keeps controls reachable: ") + names[state]);

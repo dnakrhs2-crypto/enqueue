@@ -846,6 +846,7 @@ CollabViewport::CollabViewport (LiveMixSettings& settings, CollabPanel::Actions 
     : panel (settings, std::move (actions))
 {
     setOpaque (true);
+    setWantsKeyboardFocus (false); // no extra Tab stop: Tab keeps moving between the panel's own fields
     setViewedComponent (&panel, false);
     setScrollBarsShown (true, false); // inherits the same LiveMix scrollbars as the main channel list
     setSize (panel.getWidth(), panel.getHeight());
