@@ -968,7 +968,7 @@ collabNick/Port/Rate/MonitorVolume/MonitorOn/Route/RouteFirst/InstallId의 기�
 | 상대 2 | `livemix_peer2_source` / LiveMix 합방 상대 2 | `Local\LiveMix.ObsAudio.v1.Peer2` | 링 이름 + `.Metadata` |
 
 기존 장면의 `livemix_peer_source`는 그대로 자리 1을 읽는다. 플러그인 버전은 R7에서 0.17.0.
-닉네임은 속성의 `현재 참가자`에 표시하고 사용자가 지정한 OBS 소스 이름을 바꾸지 않는다.
+닉네임은 속성의 기존 상태 줄 `연결됨` 뒤에 ` · <닉네임>`으로만 붙이고(새 라벨을 만들지 않음, R7 클로드 지시) 사용자가 지정한 OBS 소스 이름을 바꾸지 않는다.
 빈 자리에도 오디오 무음을 기록하며 메타데이터 participantId/epoch/nick을 지운다.
 마스터 OBS 보내기 또는 합방 열림일 때 상대 링 1/2를 사용 가능하게 하는 기존 정책을 함께 적용한다.
 
@@ -994,7 +994,7 @@ collabNick/Port/Rate/MonitorVolume/MonitorOn/Route/RouteFirst/InstallId의 기�
 작성자는 제어 스레드 하나, 처음 전체 0 후 위 머리를 초기화한다. 기존 Windows 공유 메모리 acquire/release
 규칙으로 sequence를 홀수 게시→내용 복사→다음 짝수 게시한다. 읽기는 짝수 sequence 확인→복사→
 같은 짝수 재확인 후 사용한다. 이 읽기는 OBS 속성/제어 경로이며 audio callback을 기다리지 않는다.
-writer_pid/해당 오디오 링의 기존 heartbeat 상태가 현재 writer와 맞지 않으면 이름을 현재 참가자로 쓰지 않는다.
+writer_pid/해당 오디오 링의 기존 heartbeat 상태가 현재 writer와 맞지 않으면 닉네임을 붙이지 않는다.
 새 닉네임을 위해 오디오 링 reserved를 쓰거나 읽기 전용 mapping에 Interlocked 쓰기를 하지 않는다.
 
 R7 작성기의 공개 계약:
