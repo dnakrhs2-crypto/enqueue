@@ -16,7 +16,7 @@
    방 서버 모델 `members/reservations/pendingWebRequests/inviteGeneration/events/revision`, 수락 시점에 자리 원자 예약.
 2. **OBS:** 자리 1 = 기존 소스 ID `livemix_peer_source` + 링 `Local\LiveMix.ObsAudio.v1.Peer`(그대로), 자리 2 = `livemix_peer2_source` +
    `...Peer2`. 메뉴 이름 'LiveMix 합방 상대 1/2'. 닉네임은 별도 메타데이터 공유 메모리(`…Peer.Metadata`/`…Peer2.Metadata`)로 보내
-   OBS 소스 속성에 '현재 참가자', 사용자 소스 이름은 안 바꿈. 플러그인 버전 0.17.0.
+   OBS 소스 속성의 상태 줄 '연결됨 · <닉네임>'(새 라벨 없음), 사용자 소스 이름은 안 바꿈. 플러그인 버전 0.17.0.
 3. **웹 연결(아스트라 설계 그대로):** libdatachannel v0.24.6 + Mbed TLS 3.6.7 정적(`/MT`), `NO_MEDIA/NO_WEBSOCKET/NO_EXAMPLES/NO_TESTS`,
    `USE_MBEDTLS=ON`, 하위 libjuice b89c792·usrsctp fec583d·plog 94899e0 소스를 `third_party`에(원본 묶음은 클로드가 받아 둠 —
    `C:\Users\claude\AppData\Local\Temp\claude\C--Users-claude--local-bin\b3b9a98c-c3de-4465-9066-c9e910ec58a6\scratchpad\dl_ldc\`,
