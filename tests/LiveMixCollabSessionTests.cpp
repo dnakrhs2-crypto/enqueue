@@ -16,6 +16,7 @@
 #include <map>
 #include <condition_variable>
 #include <thread>
+#include <chrono>
 
 namespace gocue::livemix::collab
 {
@@ -1017,6 +1018,66 @@ struct SessionMetadataView
     HANDLE handle = nullptr; const lm_obs_metadata* data = nullptr;
 };
 }
+
+class LiveMixCollabRosterAudioInstallationTests : public juce::UnitTest
+{
+public:
+    LiveMixCollabRosterAudioInstallationTests() : UnitTest ("LiveMix Collab roster audio installation", "LiveMix") {}
+    void runTest() override
+    {
+        beginTest ("normal third-person leave and rejoin never sends audio ahead of the installed roster");
+        V2Service service; V2Fixture host (service), first (service), second (service);
+        host.session->createRoom ("Host");
+        expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+        first.session->joinRoom ("0842", "First"); expect (host.people (2));
+        expect (until ([&] { return first.session->getSnapshot().state == State::connected; }));
+        second.session->joinRoom ("0842", "Second");
+        expect (host.people (3)); expect (first.people (3)); expect (second.people (3));
+        expect (until ([&] { return CollabSessionTestAccess::transport (*host.session).getStats (3).v2; }));
+
+        std::atomic<bool> running { true };
+        std::thread device ([&]
+        {
+            std::array<float, 120> pcm; pcm.fill (0.125f);
+            auto deadline = std::chrono::steady_clock::now();
+            while (running.load())
+            {
+                for (auto* fixture : { &host, &first, &second })
+                {
+                    auto& audio = fixture->engine.getCollab();
+                    audio.pushLocal (pcm.data(), pcm.data(), 120); audio.renderSources (120);
+                }
+                deadline += std::chrono::microseconds (2500); std::this_thread::sleep_until (deadline);
+            }
+        });
+        const auto settle = []
+        {
+            const auto end = juce::Time::getMillisecondCounterHiRes() + 3000;
+            until ([&] { return juce::Time::getMillisecondCounterHiRes() >= end; }, 3500);
+        };
+        // The message loop runs normally throughout; actions are seconds apart, just as in R9 nnn.
+        settle();
+        auto& h = host.engine.getCollab(); auto& f = first.engine.getCollab();
+        const auto hostDrops = h.getFutureRevisionDrops(), firstDrops = f.getFutureRevisionDrops();
+        const auto hostReceived = h.getStats (0).received, firstReceived = f.getStats (0).received;
+        second.session->leave(); expect (host.people (2)); expect (first.people (2));
+        settle();
+        second.session->joinRoom ("0842", "Second");
+        expect (host.people (3)); expect (first.people (3)); expect (second.people (3));
+        settle();
+        running.store (false); device.join();
+        const auto hostRejected = h.getFutureRevisionDrops() - hostDrops;
+        const auto firstRejected = f.getFutureRevisionDrops() - firstDrops;
+        logMessage ("future-revision rejects during leave/rejoin: host=" + juce::String (hostRejected)
+                    + ", first=" + juce::String (firstRejected));
+        expectEquals (hostRejected, uint64_t (0)); expectEquals (firstRejected, uint64_t (0));
+        expectGreaterThan (h.getStats (0).received, hostReceived);
+        expectGreaterThan (f.getStats (0).received, firstReceived);
+        expect (host.session->getSnapshot().state == State::connected);
+        expect (first.session->getSnapshot().state == State::connected);
+    }
+};
+static LiveMixCollabRosterAudioInstallationTests liveMixCollabRosterAudioInstallationTests;
 
 class LiveMixCollabR8SessionTests : public juce::UnitTest
 {

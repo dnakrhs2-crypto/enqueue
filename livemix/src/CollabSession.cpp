@@ -535,6 +535,8 @@ void CollabSession::startTransport (const PeerInfo& local, const std::vector<Col
         { if (impl->generation.load() == id) audio.receiveV2 (h, p, time); };
         callbacks.onRoster = [this, id, serial] (const auto& r)
         { impl->complete (id, [this, serial, r] { if (serial == transportSerial) applyRoster (r); }); };
+        callbacks.isRosterInstalled = [this, id] (const auto& r)
+        { return impl->generation.load() == id && audio.hasInstalledRoster (r.session, r.revision); };
         callbacks.onPeerState = [this, id, serial] (auto pid, auto state)
         { impl->complete (id, [this, serial, pid, state] { if (serial == transportSerial) peerChanged (pid, state); }); };
         transport.configureV2 (snapshot.selfId, roster, nativePeers, std::move (callbacks));

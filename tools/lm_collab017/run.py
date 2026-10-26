@@ -83,10 +83,13 @@ class Native:
         write_json(self.output/'process.json', {'pid':self.process.pid, 'executable':str(probe)})
 
     def status(self):
-        s = read_json(self.output/'status.json')
-        if self.process.poll() is not None:
-            raise RuntimeError(f'{self.output.name} exited {self.process.returncode}: '+(self.output/'process.log').read_text(encoding='utf-8', errors='replace')[-1600:])
-        return s
+        def snapshot():
+            s = read_json(self.output/'status.json')
+            if self.process.poll() is not None:
+                raise RuntimeError(f'{self.output.name} exited {self.process.returncode}: '+(self.output/'process.log').read_text(encoding='utf-8', errors='replace')[-1600:])
+            # read_json can return no snapshot while the probe publishes its next status.
+            return s if 'session' in s else None
+        return wait_for(snapshot, 5, f'{self.output.name}: complete status snapshot')
 
     def command(self, action, **fields):
         self.serial += 1

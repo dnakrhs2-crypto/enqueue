@@ -228,6 +228,12 @@ void CollabAudio::pushLocal (const float* l, const float* r, int n) noexcept
     const Access access (*this);
     if (access.active && attached.load()) sender.push (l, r, n);
 }
+bool CollabAudio::hasInstalledRoster (uint64_t session, c::Revision revision) const noexcept
+{
+    const Access access (*this);
+    const auto& table = *publishedSlots.load();
+    return table.v2 && table.session == session && table.revision >= revision;
+}
 void CollabAudio::receive (const Header& h, const uint8_t* payload, uint64_t ns) noexcept
 {
     const Access access (*this);
@@ -240,7 +246,12 @@ void CollabAudio::receiveV2 (const c::HeaderV2& h, const uint8_t* payload, uint6
     const Access access (*this);
     if (! access.active || payload == nullptr || h.kind != c::Kind::audio || ! validHeaderV2 (h)) return;
     const auto& table = *publishedSlots.load();
-    if (! table.v2 || h.session != table.session || h.rosterRevision > table.revision) return;
+    if (! table.v2 || h.session != table.session) return;
+    if (h.rosterRevision > table.revision)
+    {
+        futureRevisionDrops.fetch_add (1, std::memory_order_relaxed);
+        return;
+    }
     for (const auto& slot : table.remote)
         if (slot.id != 0 && slot.id == h.origin && slot.epoch == h.streamEpoch && slot.playout)
         {
