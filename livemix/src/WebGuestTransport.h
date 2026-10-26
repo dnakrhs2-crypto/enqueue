@@ -63,7 +63,9 @@ private:
     // congestion test does not depend on saturating a localhost SCTP socket.
     struct AudioQueue
     {
-        static constexpr size_t capacity = 8;
+        // 20 ms (ceil(rate x 0.020 / 120) = 8 packets at 44.1/48 kHz) for each of up to two downlink streams:
+        // the host and one forwarded native participant (contract 4, per-person downlink).
+        static constexpr size_t capacity = 8 * contracts::remoteSlots;
         static constexpr size_t packetBytes = contracts::v2HeaderBytes + contracts::stereoPcm24Bytes;
         static constexpr uint64_t maxAgeNs = 20'000'000;
         std::array<Packet, capacity> packets {};

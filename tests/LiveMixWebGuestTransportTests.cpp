@@ -178,8 +178,10 @@ public:
         beginTest("20ms backlog keeps newest audio and counts old/expired packets");
         {
             using Queue = WebGuestTransport::AudioQueue;
+            // 20 ms per downlink stream, two streams (host + one forwarded native participant).
             for (const auto rate : { 44100u, 48000u })
-                expectEquals(int((rate * 20 + 120000 - 1) / 120000), int(Queue::capacity));
+                expectEquals(int((rate * 20 + 120000 - 1) / 120000 * contracts::remoteSlots), int(Queue::capacity));
+            constexpr int capacity = int(Queue::capacity);
             Queue queue;
             uint64_t dropped = 0;
             constexpr uint64_t start = 1'000'000'000;
@@ -188,9 +190,9 @@ public:
                 const auto packet = fixture::audio(false, seq);
                 dropped += queue.push(packet.data(), packet.size(), start);
             }
-            expectEquals(int(dropped), 32);
-            expectEquals(int(queue.count), 8);
-            dropped += queue.trim(6 * Queue::packetBytes, start);
+            expectEquals(int(dropped), 40 - capacity);
+            expectEquals(int(queue.count), capacity);
+            dropped += queue.trim((capacity - 2) * Queue::packetBytes, start);
             expectEquals(int(dropped), 38);
             expectEquals(int(queue.count), 2);
             expectEquals(int(fixture::sequence(queue.pop().data.data())), 38);
@@ -200,7 +202,7 @@ public:
             expectEquals(int(queue.trim(0, start + Queue::maxAgeNs)), 1);
             expectEquals(int(queue.count), 0);
             queue.push(packet.data(), packet.size(), start);
-            expectEquals(int(queue.trim(8 * Queue::packetBytes, start)), 1);
+            expectEquals(int(queue.trim(capacity * Queue::packetBytes, start)), 1);
         }
 
         beginTest("in-band unordered rexmit=0, early ICE, mono16/stereo24 and control contents");
@@ -234,6 +236,19 @@ public:
                 expect(pair.packets(16, 17));
                 { std::lock_guard<std::mutex> lock(pair.mutex); expect(pair.atBrowser.back() == control); }
 
+                beginTest("per-person downlink: a forwarded LiveMix speaker reaches the web, its own voice and foreign controls do not");
+                auto forwarded = fixture::audio(false, 16, pair.context);
+                fixture::put(forwarded, 16, 3, 4); // origin = another LiveMix participant; linkSender stays the host
+                expect(host.sendAudio(7, forwarded.data(), forwarded.size()));
+                expect(pair.packets(16, 18));
+                { std::lock_guard<std::mutex> lock(pair.mutex); expect(pair.atBrowser.back() == forwarded); }
+                auto echo = fixture::audio(false, 17, pair.context);
+                fixture::put(echo, 16, pair.context.guestId, 4); // the web guest's own voice is never sent back
+                expect(!host.sendAudio(7, echo.data(), echo.size()));
+                auto foreignControl = fixture::control(false, pair.context);
+                fixture::put(foreignControl, 16, 3, 4); // controls on this link are the host's own
+                expect(!host.sendControl(7, foreignControl.data(), foreignControl.size()));
+
                 beginTest("bad envelope, text, sender/session binding and obsolete generations are dropped");
                 auto bad = fixture::audio(true, 99, pair.context);
                 bad[0] ^= 0xff; pair.send(bad);
@@ -249,13 +264,13 @@ public:
                 host.applyRemoteDescription(6, "offer", "obsolete");
                 host.addRemoteCandidate(6, "obsolete", "0", 0);
                 host.endRemoteCandidates(6);
-                expect(pair.wait([&] { return host.snapshot().dropped >= 12; }));
+                expect(pair.wait([&] { return host.snapshot().dropped >= 14; }));
                 expectEquals(int(host.snapshot().received), 16);
-                expectEquals(int(host.snapshot().dropped), 12);
+                expectEquals(int(host.snapshot().dropped), 14); // 12 bad/obsolete + echo + foreign control above
                 expect(host.snapshot().state == WebGuestTransport::State::open);
                 pair.send(fixture::audio(true, 100, pair.context));
                 expect(host.sendAudio(7, stereo.data(), stereo.size()));
-                expect(pair.packets(17, 18));
+                expect(pair.packets(17, 19));
                 expectEquals(int(host.snapshot().received), 17);
                 expect(!pair.callbackError.load());
             }

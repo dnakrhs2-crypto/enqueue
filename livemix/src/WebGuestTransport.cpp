@@ -27,16 +27,26 @@ uint64_t readLE(const uint8_t* p, size_t bytes)
 }
 // Only the envelope and authenticated link binding belong here. R3 validates
 // kinds, flags, PCM content, roster revisions and stream epochs.
-bool envelope(const void* data, size_t bytes, const c::WebConnection& connection, bool incoming)
+// Incoming (web -> host): origin = linkSender = this web guest.
+// Outgoing audio (host -> web, per-person downlink, contract 2.4): linkSender = host and origin = the speaker,
+// the host or a forwarded native participant, never the web guest itself. Outgoing control is the host's own.
+enum class Envelope { incoming, outgoingAudio, outgoingControl };
+bool envelope(const void* data, size_t bytes, const c::WebConnection& connection, Envelope direction)
 {
     if (data == nullptr || bytes < c::v2HeaderBytes || bytes > c::maxPacketBytes) return false;
     const auto* p = static_cast<const uint8_t*>(data);
-    const auto sender = incoming ? connection.guestId : connection.hostId;
-    return readLE(p, 4) == c::packetMagic && p[c::offset::version] == c::packetVersion
-        && bytes == c::v2HeaderBytes + readLE(p + c::offset::payloadBytes, 2)
-        && readLE(p + c::offset::session, 8) == connection.session
-        && readLE(p + c::offset::origin, 4) == sender
-        && readLE(p + c::offset::linkSender, 4) == sender;
+    if (readLE(p, 4) != c::packetMagic || p[c::offset::version] != c::packetVersion
+        || bytes != c::v2HeaderBytes + readLE(p + c::offset::payloadBytes, 2)
+        || readLE(p + c::offset::session, 8) != connection.session) return false;
+    const auto origin = readLE(p + c::offset::origin, 4), linkSender = readLE(p + c::offset::linkSender, 4);
+    switch (direction)
+    {
+        case Envelope::incoming: return origin == connection.guestId && linkSender == connection.guestId;
+        case Envelope::outgoingAudio:
+            return linkSender == connection.hostId && origin != c::noParticipant && origin != connection.guestId;
+        case Envelope::outgoingControl: return origin == connection.hostId && linkSender == connection.hostId;
+    }
+    return false;
 }
 }
 
@@ -194,7 +204,8 @@ struct WebGuestTransport::Impl
         if (!connection) return false;
         auto reject = [&] { connection->dropped.fetch_add(1); return false; };
         if (generation != connection->context.generation || !connection->live()
-            || !envelope(data, bytes, connection->context, false)) return reject();
+            || !envelope(data, bytes, connection->context,
+                         audioPacket ? Envelope::outgoingAudio : Envelope::outgoingControl)) return reject();
         const auto* p = static_cast<const uint8_t*>(data);
         if ((p[c::offset::kind] == static_cast<uint8_t>(c::Kind::audio)) != audioPacket) return reject();
         if (audioPacket && (bytes != AudioQueue::packetBytes
@@ -324,7 +335,7 @@ void WebGuestTransport::startAcceptedGuest(const c::WebConnection& context, Opti
             {
                 const auto* binary = std::get_if<rtc::binary>(&message);
                 if (value.state.load() != State::open || !binary
-                    || !envelope(binary->data(), binary->size(), value.context, true))
+                    || !envelope(binary->data(), binary->size(), value.context, Envelope::incoming))
                 {
                     value.dropped.fetch_add(1);
                     return;
