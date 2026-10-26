@@ -496,6 +496,7 @@ export function createGuestClient({ onState, onRoster, onMeter, onError }) {}
 // client.prepareMicrophone(deviceId = null) -> Promise<MediaDeviceInfo[]>
 // client.requestJoin(invite, nickname) -> Promise<void>
 // client.setMicEnabled(enabled) -> void
+// client.setPeerVolume(gain) -> void   // 0..1, playback only (설계서 13-1 '상대방 음량'); default 1
 // client.cancel() / client.leave() -> Promise<void>
 // client.dispose() -> Promise<void> (tracks, PC, ports, context, worker close)
 // onState({state, generation})
@@ -508,6 +509,9 @@ export function createGuestClient({ onState, onRoster, onMeter, onError }) {}
 getUserMedia는 audio mono, echoCancellation/noiseSuppression/autoGainControl=false,
 선택 deviceId를 사용하며 실제 track settings와 AudioContext.sampleRate를 진단 결과에 남긴다.
 마이크 OFF는 캡처 값을 0으로 만들어 상향 시계를 계속 진행한다. 하향 재생은 유지한다.
+`setPeerVolume`(10/26 gom 원문 18)은 웹 사용자가 듣는 하향 재생에만 곱하는 음량이다(0~1, 화면 0~100%). 스테레오 출력
+노드 뒤 GainNode 등 main thread의 AudioParam으로 적용하고 바뀔 때 짧게 램프(약 20ms)해 딱 소리가 나지 않게 한다.
+상향(웹 마이크) 소리와 방장·다른 사람이 듣는 소리는 바꾸지 않는다. 기기별 기억(localStorage, 실패해도 기본 100%)은 R11 화면이 맡는다.
 AudioContext/PC는 Window에 두고 stereo 출력 노드의 channelCount=2,
 channelCountMode=`explicit`, channelInterpretation=`discrete`를 사용한다.
 Worklet은 process()의 실제 배열 길이를 사용한다. 128을 네트워크 packet 크기로 바꾸지 않는다.
@@ -1078,8 +1082,9 @@ R8은 R1~R7 뒤 단독 → (R9/R10/R11). 최대 세 회차.
 합방 창은 440×800, 두 자리 행, 방장만 `웹 초대`/`주소 복사`/`새 주소`/
 `들어오기 요청`/`수락`/`거절`/`내보내기`를 다룬다.
 웹은 `닉네임`, `마이크`, `헤드폰을 쓰고 들어오세요.`, `들어가기`,
-`방장이 수락하면 연결됩니다`, `취소`, `연결됨`, `마이크 ON/OFF`, `나가기`,
-`초대 주소가 바뀌었거나 방이 닫혔습니다.`를 사용한다. 새 오류 코드에 맞춰 설명 문구를 임의로 늘리지 않는다.
+`방장이 수락하면 연결됩니다`, `취소`, `연결됨`, `마이크 ON/OFF`, `상대방 음량`(+ `0%`~`100%` 값), `나가기`,
+`초대 주소가 바뀌었거나 방이 닫혔습니다.`를 사용한다. `상대방 음량`은 '연결됨' 화면의 사람 목록 칸 아래(시안 `webguest.html` ③,
+비교 `webvol.html` B안), LiveMix 슬라이더 부품과 같은 모양, 기본 100%, 기기에 기억. 새 오류 코드에 맞춰 설명 문구를 임의로 늘리지 않는다.
 시안 설명용 board 제목·프레임 설명은 실제 화면에 넣지 않는다.
 
 R0 서버 원본은 다음 두 파일이며 byte 복사와 SHA-256/복사 시각은 `server/ytdown/ORIGIN.txt`에 기록한다.

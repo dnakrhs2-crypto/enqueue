@@ -75,7 +75,7 @@
 | R8 | 앱 통합 `MixEngine.*`·`CollabSession.*`·`Main.cpp`·`LiveMixSettings.*`·공통 CMake | R1~R7 뒤 단독 | 2~3 |
 | R9 | 자동 종단 도구 `tools/lm_collab017/*`·`CollabProbe.cpp` 확장·파일 검사기 | R8 뒤, R10·R11과 동시 | 2~3 |
 | R10 | 앱 화면(시안 확정됨): `MasterCard.*`(녹음 버튼 A안)·`CollabWindow.*`·`MainComponent.*`·새 녹음 창 | R8 뒤, R9·R11과 동시 | 2~3 |
-| R11 | 웹 화면(시안 확정됨): `site/livemix/join/index.html`·CSS·접속 흐름 | R2/R6 뒤, R9·R10과 동시 | 1~2 |
+| R11 | 웹 화면(시안 확정됨): `site/livemix/join/index.html`·CSS·접속 흐름 + **상대방 음량**(gom 10/26 원문 18, 시안 ③ 사람 목록 칸 아래, 기기에 기억) | R2/R6 뒤, R9·R10과 동시 | 1~2 |
 | R12 | 최종 통합·실물 결과 수정 — 실물 시험 PC = **이 PC ↔ roomc**(gom 10/26 "다른 pc랑 연결테스트가 필요하면 roomc pc 쓰면됨": 강남 망, SSH `rbuild.py` 연결 그대로, 빌드 서버 작업과 겹치지 않게) + 이 PC·roomc 브라우저 | 단독 | 2~3 |
 | R13 | 배포 준비: 버전 0.17.0(앱·OBS)·설치기·release 도구(OBS 빌드도 rb.py)·노트·서버 배포 명세 | 단독, 클로드 공개 배포 | 1 |
 
