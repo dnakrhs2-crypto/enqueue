@@ -333,15 +333,16 @@ public:
         controlServer = nullptr;
         mainWindow = nullptr;
 
-        if (collabSession != nullptr) collabSession->leave();
-        collabSession = nullptr;
-
         if (engine != nullptr)
         {
             engine->getDeviceManager().removeChangeListener (this);
             if (engine->isDeviceRunning()) settings->setLastDevice (engine->getOpenDevice());
             engine->shutdown();
         }
+
+        // shutdown has stopped input, joined the callback and finished all recording files.
+        if (collabSession != nullptr) collabSession->leave();
+        collabSession = nullptr;
 
         document = nullptr;
         engine = nullptr;

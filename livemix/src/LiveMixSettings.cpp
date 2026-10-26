@@ -3,6 +3,7 @@
 #include "MixModel.h"
 
 #include "WebDavBackup.h"
+#include <cmath>
 
 #if JUCE_WINDOWS
  #include <windows.h>
@@ -36,6 +37,7 @@ namespace Keys
     constexpr const char* collabRoute = "collabRoute";
     constexpr const char* collabRouteFirst = "collabRouteFirst";
     constexpr const char* collabInstallId = "collabInstallId";
+    constexpr const char* collabPersonVolumes = "collabPersonVolumes";
     constexpr const char* backupUrl = "backupUrl";
     constexpr const char* backupFolder = "backupFolder";
     constexpr const char* backupUser = "backupUser";
@@ -205,6 +207,54 @@ juce::String LiveMixSettings::getCollabInstallId()
         saveIfNeeded();
     }
     return settings->getValue (Keys::collabInstallId);
+}
+
+float LiveMixSettings::getCollabPersonVolume (const juce::String& nickname) const
+{
+    const auto saved = juce::JSON::parse (settings->getValue (Keys::collabPersonVolumes));
+    if (const auto* entries = saved.getArray())
+        for (const auto& entry : *entries)
+            if (entry["nickname"].toString() == nickname)
+            {
+                const auto volume = (float) entry["volume"];
+                if (std::isfinite (volume)) return juce::jlimit (0.0f, 1.0f, volume);
+            }
+    return getCollabMonitorVolume();
+}
+
+void LiveMixSettings::setCollabPersonVolume (const juce::String& nickname, float volume)
+{
+    if (nickname.isEmpty()) return;
+    const auto saved = juce::JSON::parse (settings->getValue (Keys::collabPersonVolumes));
+    juce::Array<juce::var> entries;
+    if (const auto* old = saved.getArray())
+        for (const auto& entry : *old)
+            if (entry["nickname"].toString() != nickname) entries.add (entry);
+    while (entries.size() >= 32) entries.remove (0);
+    auto* entry = new juce::DynamicObject();
+    entry->setProperty ("nickname", nickname);
+    entry->setProperty ("volume", juce::jlimit (0.0f, 1.0f, std::isfinite (volume) ? volume : 0.0f));
+    entries.add (juce::var (entry));
+    settings->setValue (Keys::collabPersonVolumes, juce::JSON::toString (entries, true));
+}
+
+recording::Options LiveMixSettings::getRecordingOptions() const
+{
+    recording::Options result;
+    result.format = settings->getValue (recording::formatSetting) == "mp3" ? recording::Format::mp3 : recording::Format::wav;
+    const int kbps = settings->getIntValue (recording::bitrateSetting, 320);
+    result.mp3Kbps = kbps == 128 || kbps == 256 || kbps == 320 ? (unsigned) kbps : 320;
+    result.directoryUtf8 = settings->getValue (recording::directorySetting).toStdString();
+    return result;
+}
+
+void LiveMixSettings::setRecordingOptions (const recording::Options& options)
+{
+    settings->setValue (recording::formatSetting, options.format == recording::Format::mp3 ? "mp3" : "wav");
+    const auto kbps = options.mp3Kbps;
+    settings->setValue (recording::bitrateSetting, (int) (kbps == 128 || kbps == 256 || kbps == 320 ? kbps : 320));
+    const auto directory = juce::String::fromUTF8 (options.directoryUtf8.c_str());
+    settings->setValue (recording::directorySetting, directory.isEmpty() ? juce::String() : juce::File (directory).getFullPathName());
 }
 
 juce::String LiveMixSettings::getMicMuteHotkey() const { return settings->getValue (Keys::micMuteHotkey); }

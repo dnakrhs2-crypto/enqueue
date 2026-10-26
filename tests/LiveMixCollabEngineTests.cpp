@@ -196,6 +196,30 @@ public:
                 expectEquals (lm_obs_load_acquire (&peerRing.header->write_frames), int64_t (120));
             }
         }
+        beginTest ("R8 resolves two independent peer overrides and empty overrides from the base ring");
+        {
+            struct Environment
+            {
+                const char* name;
+                juce::String old;
+                explicit Environment (const char* key) : name (key), old (juce::SystemStats::getEnvironmentVariable (key, {})) {}
+                ~Environment() { SetEnvironmentVariableA (name, old.isEmpty() ? nullptr : old.toRawUTF8()); }
+                void set (const juce::String& value) { SetEnvironmentVariableA (name, value.isEmpty() ? nullptr : value.toRawUTF8()); }
+            } base ("LIVEMIX_OBS_RING"), peer1 ("LIVEMIX_OBS_PEER_RING"), peer2 ("LIVEMIX_OBS_PEER2_RING");
+            base.set (mappingBase + ".Env"); peer1.set (mappingBase + ".ExplicitOne"); peer2.set (mappingBase + ".ExplicitTwo");
+            {
+                MixEngine engine;
+                expectEquals (engine.getPeerRingNames()[0], mappingBase + ".ExplicitOne");
+                expectEquals (engine.getPeerRingNames()[1], mappingBase + ".ExplicitTwo");
+                engine.setObsEnabled (true);
+                RingView one (engine.getPeerRingNames()[0]), two (engine.getPeerRingNames()[1]);
+                expect (one.header != nullptr && two.header != nullptr);
+            }
+            peer1.set ({}); peer2.set ({});
+            MixEngine engine;
+            expectEquals (engine.getPeerRingNames()[0], mappingBase + ".Env.Peer");
+            expectEquals (engine.getPeerRingNames()[1], mappingBase + ".Env.Peer2");
+        }
     }
 };
 static LiveMixCollabEngineTests liveMixCollabEngineTests;
