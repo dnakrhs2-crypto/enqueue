@@ -154,6 +154,8 @@ export function startApp(doc = document, win = window) {
       if (screen !== "entry") return;
       options.hidden = false;
       microphone.setAttribute("aria-expanded", "true");
+      // In a short window (a 1366x768 laptop at 125%) the list would open below the visible page.
+      options.scrollIntoView({ block: "nearest" });
       activeDevice = Math.max(0, devices.findIndex(device => device.deviceId === deviceId));
       updateDeviceHighlight();
     } catch (error) { fail({ code: error.code }); }

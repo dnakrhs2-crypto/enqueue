@@ -50,6 +50,8 @@ button:focus-visible, input:focus-visible, .slider:has(input:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+/* Inset so the ring stays off the nickname line above and inside the person row. */
+.slider:has(input:focus-visible) { outline-offset: -2px; }
 button:active:not(:disabled) { filter: brightness(.94); }
 #room-title:focus, #brand:focus, #error-message:focus { outline: none; }
 .head {
@@ -141,6 +143,7 @@ h2 { font-size: 22px; font-weight: 700; margin: 0; }
   white-space: nowrap;
 }
 .go { height: 52px; background: var(--accent); color: var(--white); font-size: 17px; }
+.go:disabled { opacity: .45; }
 .ghost { height: 48px; background: var(--card2); box-shadow: inset 0 0 0 1px var(--line); font-size: 16px; }
 .wait { display: flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 700; }
 .spin { width: 18px; height: 18px; border-radius: var(--pill); box-shadow: inset 0 0 0 3px var(--line); position: relative; flex: none; }

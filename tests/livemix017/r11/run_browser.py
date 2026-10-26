@@ -380,6 +380,31 @@ class Suite:
         finally:
             await context.close()
 
+    async def design_fixes(self):
+        from playwright.async_api import expect
+        context = await self.context()
+        try:
+            # 1366x768 at 125% leaves about 1093x478 CSS px of page; the opened device list must be fully on screen.
+            page = await self.page(context, size=(1093, 478))
+            await expect(page.locator("#entry")).to_be_visible()
+            join = page.locator("#join")
+            assert await join.evaluate("e => e.disabled && getComputedStyle(e).opacity") == "0.45"
+            await page.locator("#nickname").fill("하늘")
+            assert await join.evaluate("e => !e.disabled && getComputedStyle(e).opacity") == "1"
+            await page.locator("#microphone").click()
+            await page.wait_for_function("document.querySelector('#microphone').getAttribute('aria-expanded') === 'true'")
+            box = await page.locator("#microphone-options").evaluate("e => [e.getBoundingClientRect().bottom, innerHeight]")
+            assert box[0] <= box[1] + .5, box
+            await page.locator("#microphone").press("Escape")
+            await self.join(page)
+            await page.evaluate("r11.accept()")
+            await page.locator("#volume-1").focus()
+            await page.keyboard.press("Tab")
+            await page.keyboard.press("Shift+Tab")
+            assert await page.locator("#volume-1").evaluate("e => getComputedStyle(e.closest('.slider')).outlineOffset") == "-2px"
+        finally:
+            await context.close()
+
     async def storage_flow(self, failure):
         from playwright.async_api import expect
         context = await self.context(failure=failure)
@@ -515,6 +540,7 @@ class Suite:
             await self.case(f"approved error copy: {stage}/{code}", lambda s=stage, c=code: self.error_flow(s, c))
         await self.case("invalid fragment stops before inspect", self.invalid_invite)
         await self.case("a reissued invite pasted into the same tab opens its room", self.reissued_invite)
+        await self.case("short window device list, disabled join and slider focus ring", self.design_fixes)
         for failure in ("getter", "read", "write"):
             await self.case(f"localStorage {failure} failure keeps UI usable", lambda f=failure: self.storage_flow(f))
         await self.case("pagehide calls dispose", self.disposal)
