@@ -31,6 +31,9 @@
 #include <cstdio>
 #include <vector>
 
+// R9 modes live in the R9-owned tool directory; the original two-PC probe below stays compatible.
+int runCollabProbeV2 (int argc, char** argv);
+
 namespace
 {
 using namespace gocue::livemix;
@@ -448,6 +451,8 @@ int run (const Args& args)
 int main (int argc, char* argv[])
 {
     const juce::ScopedJuceInitialiser_GUI messageManager;   // the session's timers run on this thread
+    if (argc > 1 && (juce::String (argv[1]) == "--v2" || juce::String (argv[1]) == "--decode"))
+        return runCollabProbeV2 (argc, argv);
     Args args;
     args.nick = "probe-" + juce::SystemStats::getComputerName();
     for (int i = 1; i < argc; ++i)
