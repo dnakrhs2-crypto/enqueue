@@ -402,6 +402,12 @@ target_link_libraries(LiveMixCollabProbe PRIVATE LiveMixCore winmm)
 set_property(TARGET LiveMixCollabProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set_target_properties(LiveMixCollabProbe PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
+# LiveMix 0.17 rounds add their sources/probes in their own optional fragment (cmake/livemix017/Rn.cmake).
+foreach(_livemix017_round RANGE 2 11)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/livemix017/R${_livemix017_round}.cmake" OPTIONAL)
+endforeach()
+unset(_livemix017_round)
+
 add_subdirectory(tests)
 option(GOCUE_BUILD_RECORDER "Build Recorder with the pinned FFmpeg SDK when available" ON)
 if(GOCUE_BUILD_RECORDER)

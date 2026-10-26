@@ -10,7 +10,7 @@ namespace gocue::livemix::recording
 enum class Format : std::uint8_t { wav = 0, mp3 = 1 };
 enum class State : std::uint8_t { idle = 0, starting, recording, stopping, error };
 enum class Error : std::uint8_t { none = 0, invalidOptions, openFailed, writeFailed, queueOverflow, encoderUnavailable, encoderFailed };
-enum class Track : std::uint8_t { master = 0, remote1 = 1, remote2 = 2, mix = 3 };
+enum class Track : std::uint8_t { master = 0, remote1 = 1, remote2 = 2, mix = 3 }; // solo take = one mix file
 
 inline constexpr unsigned wavBitsPerSample = 24;
 inline constexpr std::array<unsigned, 3> mp3BitratesKbps {{ 128, 256, 320 }};
@@ -37,11 +37,10 @@ struct TrackIdentity
 struct StartRequest
 {
     Options options;
+    // Frozen file set. true: A/B/C/D all open at start (an empty seat writes silence; on a normal stop a seat
+    // file that never had audio is deleted). false: one solo file, the 1x sum of master and both remote slots.
     bool collabAtStart = false;
-    // Frozen file set: 0 for solo; 1 or 2 remote slots for a collab take.
-    // The highest occupied local OBS slot at start determines the count (minimum 1).
-    unsigned remoteFileCount = 0;
-    std::array<TrackIdentity, 3> people {}; // self, local OBS slot 1, local OBS slot 2
+    std::array<TrackIdentity, 3> people {}; // self, local OBS slot 1, local OBS slot 2 (empty seat: id 0)
 };
 struct DeviceFormat
 {

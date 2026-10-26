@@ -237,7 +237,7 @@ create/join은 기존 필드에 다음을 추가한다.
   "appVersion": "0.17.0",
   "protocols": [1, 2],
   "capabilities": ["packet_v2", "roster_ack", "star_3", "pcm16_mono", "web_guest"],
-  "connectionId": "00112233445566778899aabbccddeeff00",
+  "connectionId": "00112233445566778899aabbccddeeff",
   "wireRate": 48000
 }
 ```
@@ -709,6 +709,7 @@ public:
     void push(collab::contracts::AudioSourceView master,
               collab::contracts::AudioSourceView remote1,
               collab::contracts::AudioSourceView remote2, int n) noexcept;
+    void noteSeatOccupant(unsigned slot, const TrackIdentity&); // control thread; slot 1/2, §7 rename
     Snapshot snapshot() const; // control/UI thread; copying strings allowed here
     void finish(); // non-audio shutdown: consume queued blocks, drain, close, join
 };
@@ -827,14 +828,15 @@ web/events에 재사용하지 않는다. RequestFunction을 주입하는 기존 
 
 | 시작 조건 | 저장 결과 |
 |---|---|
-| 합방 없음 | `<선택 폴더>/LiveMix_2026-10-26_14-05-33.wav` 또는 .mp3 하나(내 마스터) |
-| 합방 두 사람, 상대 자리 1 | `<선택 폴더>/2026-10-26_14-05-33/A_<내 닉>.wav`, `B_<상대1 닉>.wav`, `D_전체.wav` |
-| 합방 세 사람 | 같은 폴더에 `A_<내 닉>`, `B_<상대1 닉>`, `C_<상대2 닉>`, `D_전체` |
+| 합방 없음 | `<선택 폴더>/LiveMix_2026-10-26_14-05-33.wav` 또는 .mp3 하나 = 내 마스터 + 상대 자리 1·2의 1배 합(D와 같은 계산, Track `mix`). 합방이 없으면 상대가 무음이라 내 마스터와 같고, 녹음 중 합방이 시작되면 그때부터 상대 소리도 이 파일에 들어간다 |
+| 합방 중(대기방 포함) | `<선택 폴더>/2026-10-26_14-05-33/`에 `A_<내 닉>`, `B_<자리1>`, `C_<자리2>`, `D_전체` 넷을 시작 때 모두 연다 |
+| 정상으로 멈춘 뒤 | 녹음 내내 소리가 없었던 자리 파일은 지운다 → 두 사람이면 A·B·D, 세 사람(중간에 들어온 사람 포함)이면 A·B·C·D |
 
 기본 선택 폴더는 Windows 문서 Known Folder 아래 `LiveMix 녹음`(문서 위치를 하드코딩하지 않는다).
 시각은 녹음 시작의 로컬 시각 `yyyy-MM-dd_HH-mm-ss`. 한 번의 녹음에 폴더 하나,
-같은 설정 형식·MP3 비트레이트를 모든 파일에 적용한다. A/D/native 자리 파일은 stereo,
-**웹 자리 파일은 mono**다. 웹을 D에 더할 때 L/R에 같은 값을 더한다.
+같은 설정 형식·MP3 비트레이트를 모든 파일에 적용한다. **모든 파일은 stereo**다. 웹 참가자 자리는 mono 원음을
+L=R로 기록하고 D에도 L/R에 같은 값을 더한다(클로드 확정 10/26 — 자리 주인이 녹음 중 웹↔LiveMix로 바뀌어도 파일을
+나누지 않게. 설계서 결정 16의 '웹 자리 파일 모노'를 대체한다).
 상대 소리는 헤드폰 volume/on/출력 경로 전의 재생 결과, 내 소리는 마스터 처리 후 내 OBS와 같은 값이다.
 모든 파일은 한 Recorder 블록 시계에서 시작하고 같은 프레임 구간/길이를 갖는다.
 
@@ -849,15 +851,20 @@ web/events에 재사용하지 않는다. RequestFunction을 주입하는 기존 
 5. 날짜 폴더 또는 솔로 파일이 이미 있으면 `2026-10-26_14-05-33 (2)` /
    `LiveMix_2026-10-26_14-05-33 (2).wav`처럼 번호를 증가시킨다. 기존 파일을 덮어쓰지 않는다.
 
-파일 역할 집합은 녹음 시작 때 고정한다. 합방 없이 시작하면 중간에 합방이 생겨도 솔로 파일 그대로이며
-다음 녹음부터 사람별이다. 합방에서 시작하면 사람이 나간 자리는 무음으로 같은 길이를 유지한다.
-나머지 파일/방송은 멈추지 않는다. 다시 들어온 사람은 해당 로컬 OBS 자리로 기록한다.
-**권장 경계 해석(클로드 확인 필요)**: 파일 개수는 시작 때 가장 높은 사용 자리까지 고정(합방 대기방은 최소 B).
-따라서 자리 2만 남은 두 사람은 자리 번호를 옮기지 않고 A/B(무음)/C/D를 만든다.
-A/B/D로 시작한 뒤 세 번째 사람이 오면 C 파일은 새로 만들지 않고 D에는 그 사람도 포함한다.
-기존 자리 재사용으로 mono↔stereo가 바뀌면 고정 A/B/C/D 역할 집합을 유지한 채 기존 part 분할 경로로
-**전체 묶음**을 함께 다음 part로 넘기는 것을 권장한다. 이 해석은 파일 묶음 고정/웹 mono를 함께 지키기
-위한 제안이며, 최종 확정 전 해당 경계의 시험 기대값을 임의로 고정하지 않는다.
+파일 역할 집합(솔로 1개 / A·B·C·D)은 녹음 시작 때 고정한다(클로드 확정 10/26). 합방 없이 시작하면 중간에 합방이
+생겨도 솔로 파일 하나 그대로이고(상대 소리는 그 파일에 합산) 다음 녹음부터 사람별이다. 합방에서 시작하면:
+
+- B/C는 **자리**(로컬 OBS 자리 1/2) 기준이다. 비어 있는 동안·나간 뒤에는 무음으로 같은 길이를 유지하고, 녹음 중
+  들어온 사람은 그 자리 파일에 이어서 기록한다(다른 파일과 줄이 맞는다). 사람을 다른 자리로 옮기지 않는다.
+  누가 들어오고 나가도 나머지 파일·방송은 멈추지 않고 part도 나누지 않는다.
+- '소리가 있었던 자리' = 녹음 중 그 자리의 view가 한 블록이라도 null이 아니었던 자리(참가자가 있었으나 조용했던 자리 포함).
+  정상 멈춤(`requestStop`·`finish`)에서 모든 파일을 닫은 뒤 소리가 없었던 자리 파일은 모든 part를 지운다.
+- 시작 때 빈 자리라 기본 이름(`B_합방상대1`/`C_합방상대2`)으로 연 파일은 정상 멈춤 때, 녹음 시작 뒤 그 자리에 처음 들어온
+  사람의 닉네임(위 정리 규칙 그대로)으로 모든 part의 이름을 바꾼다. 바꿀 이름 중 하나라도 이미 있거나 바꾸기가 실패하면
+  그 자리 파일은 모두 기본 이름 그대로 두고 오류로 만들지 않는다. 시작 때 사람이 있던 자리는 그 닉네임으로 열고 바꾸지 않는다.
+- 강제 종료나 FIFO·저장 오류로 끝난 녹음에서는 지우기·이름 바꾸기를 하지 않는다(무음 자리 파일·기본 이름이 남을 수 있다).
+- R8은 roster/자리 변경 때 제어 스레드에서 `Recorder::noteSeatOccupant(slot, TrackIdentity)`(slot 1/2)를 부른다.
+  Recorder는 시작 때 비어 있던 자리마다 시작 뒤 처음 받은 사람만 이름 바꾸기에 쓴다.
 
 D는 A+B+C의 1배 합, 별도 리미터·자동 감쇄 없음. 정수 변환에서만 포화하고 각 파일의
 `clippedSamples`를 기록한다. WAV의 정수 샘플 비교 기준은 동일 프레임 A/B/C의 PCM24를 넓은 정수로
@@ -882,11 +889,11 @@ MP3도 완성된 인코더 프레임을 쓰고 파일 flush로 체크포인트�
 
 MP3는 `CLSID_MP3ACMCodecWrapper`의 IMFTransform 직접 사용: 출력 형식 먼저, 입력 PCM16,
 float→PCM16 직전 TPDF dither, 128/256/320kbps. 원본 장치가 32000/44100/48000이면 유지,
-그 외는 전용 lm_asrc로 48000. 각 파일의 mono/stereo 입력과 출력 채널 수를 일치시킨다.
+그 외는 전용 lm_asrc로 48000. 모든 파일이 stereo이므로 입력·출력 모두 2채널이다.
 `AVG_BYTES_PER_SECOND`는 16000/32000/40000. NOTACCEPTING/NEED_MORE_INPUT을 처리하고
 정상 stop은 EOS→drain→남은 출력→파일 close 순이다. MF 가용성은 MP3 시작 때만 확인하며
 실패해도 WAV는 쓸 수 있다. [Microsoft MP3 인코더 형식](https://learn.microsoft.com/en-us/windows/win32/medfound/mp3-audio-encoder)
-R5는 선택 비트레이트의 mono/stereo 실제 출력을 각각 확인한다.
+R5는 세 비트레이트의 stereo 실제 출력을 각각 확인한다.
 
 오디오 콜백은 선할당 FIFO 복사·고정 버퍼 계산·atomic만 사용한다. 권장 큐는 준비된 장치 rate의
 4초 분량. 파일·MF·네트워크·잠금·할당·join 없음. FIFO 초과/저장 실패는 해당 녹음 전체 error,
@@ -1035,8 +1042,8 @@ R7의 metadata 구현 범위에 공통 ABI 헤더는 포함하지 않는다. R5�
 | 웹 audio와 화면 | R6 / R11 각각 독립 | guest-client.js API; index/CSS/app은 R11만 |
 | 운영 Python/배포 | 클로드 | R2는 server/ytdown 작업본; 운영 경로/web_server.py 수정 금지 |
 
-R1은 기존 LiveMixCore/LiveMixUI/LiveMixCollabProbe 대상 생성 뒤, `add_subdirectory(tests)` 앞에서
-LiveMixWebRTC.cmake를 연결하고 R2..R11 빌드 조각을 OPTIONAL include한다.
+기존 LiveMixCore/LiveMixUI/LiveMixCollabProbe 대상 생성 뒤, `add_subdirectory(tests)` 앞의 R2..R11 빌드 조각
+OPTIONAL include 반복은 클로드가 R0 단계에서 미리 넣었다(§11.3). R1은 그 반복 **바로 앞**에 LiveMixWebRTC.cmake 연결만 더한다.
 각 조각은 존재하는 대상에 target_sources/target_link_libraries 또는 자기 probe 대상을 추가한다.
 파일 경로는 `${PROJECT_SOURCE_DIR}`/`${CMAKE_CURRENT_LIST_DIR}`를 사용한다.
 아직 생성되지 않은 다른 회차 .cpp를 미리 source 목록에 넣지 않는다.
@@ -1047,7 +1054,8 @@ R9는 기존 `LiveMixCollabProbe`를 확장한다. 별도 Recorder 앱의 probe 
 R13 버전/배포 연결은 R1 종료 뒤 별도 인계하며 R1~R11 소유가 겹치지 않는다.
 
 ```cmake
-# R1's future root wiring, after all existing LiveMix targets, before tests:
+# Root wiring after all existing LiveMix targets, before tests. The loop is already in place (R0);
+# R1 adds only the include line right above it:
 include(cmake/LiveMixWebRTC.cmake)
 foreach(_livemix017_round RANGE 2 11)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/livemix017/R${_livemix017_round}.cmake" OPTIONAL)
@@ -1105,12 +1113,18 @@ roomc 기본 PATH에 cmake가 없어 위 예시는 설치된 실행 파일의 �
 결과 숫자는 `docs/superpowers/reports/2026-10-26-livemix-webguest-record-r0-baseline.txt`에 별도 기록한다.
 R9 이후 실제 다른 PC 연결은 갱신된 설계/계획에 따라 **이 PC ↔ roomc**이며 빌드 작업과 겹치지 않게 한다.
 
-## 11. 클로드 확인 필요
+## 11. 클로드 확인 결과 (10/26)
 
-1. 녹음 시작 뒤 자리 추가/종류 교체의 경계: §7 권장안(시작 파일 역할 집합 고정, 새 자리 소리는 D에 포함,
-   mono↔stereo 변경은 기존 전체 묶음 part 분할 재사용)을 확인해야 한다. 대표 결정의 최대 인원/웹 mono/
-   고정 파일 묶음은 바꾸지 않는다.
-2. 계획에 없던 접합 세부값의 권장 묶음: §2의 Kind/flag/capability 번호·200ms 제어 재시도,
-   §3의 apiVersion/action=inspect·상한·역할별 연결 토큰·cursor 형식,
-   §4의 채널 이름/fragment/STUN·20ms 적체, §5 pool 상한, §7 파일명 정리/WAV 정수 합산 순서/기본 WAV·320kbps,
-   §8 metadata 256B/환경 변수 파생 규칙. 후속 회차는 이 문서의 값을 사용하며 변경 시 계약을 먼저 갱신한다.
+1. 녹음 시작 뒤 자리 추가/종류 교체: **R0 권장안 대신** §7의 확정안 — 합방 중 시작이면 A·B·C·D를 모두 열고
+   (빈 자리는 무음), 정상 멈춤 때 소리가 없었던 자리 파일은 지우고 시작 때 빈 자리였던 파일은 처음 들어온 사람 닉네임으로
+   이름을 바꾼다. 모든 파일 stereo(웹은 L=R)라 종류 교체로 part를 나누지 않는다. 솔로 파일은 상대 소리까지 합한다.
+   이유: 녹음 중 들어온 사람(게스트 등장)도 자기 파일을 갖게 하고(gom 원문 16 "최대 3명이면 A.B.C.D"),
+   녹음 중 시작된 합방 소리가 솔로 녹음에서 빠지지 않게(gom 원문 "녹음하면 합방 소리도 녹음되게") 하기 위해서다.
+2. 계획에 없던 접합 세부값(§2의 Kind/flag/capability 번호·200ms 제어 재시도, §3의 apiVersion/action=inspect·상한·
+   역할별 연결 토큰·cursor 형식, §4의 채널 이름/fragment/STUN·20ms 적체, §5 pool 상한, §7 파일명 정리/WAV 정수 합산
+   순서/기본 WAV·320kbps, §8 metadata 256B/환경 변수 파생 규칙)은 **이 문서의 값으로 확정**한다.
+   후속 회차는 이 값을 사용하며 변경이 필요하면 계약을 먼저 갱신한다.
+3. 회차별 작업 폴더: rb.py는 작업 폴더마다 roomc의 같은 경로 하나를 덮어쓰므로, 동시에 도는 회차는 각자 작업 폴더
+   (`gocue-webrec-rN`, 브랜치 `livemix-webguest-record-rN`)에서 빌드·시험한다. 아스트라 샌드박스는 공용 `.git`에 쓸 수 없으니
+   회차는 커밋하지 않고, 클로드가 검토 뒤 소유 파일만 커밋해 본 브랜치에 합친다. 루트 CMake의 회차 빌드 조각 반복
+   (`cmake/livemix017/R2..R11.cmake` OPTIONAL include)은 R0 단계에서 클로드가 미리 넣었다 — R1은 그 위에 WebRTC 연결만 더한다.
