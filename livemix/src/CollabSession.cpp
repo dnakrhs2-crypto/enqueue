@@ -377,7 +377,9 @@ void CollabSession::applyRoom (const CollabRoom::RoomSnapshot& room, const std::
         snapshot.roomMode = room.roomMode == "v2" ? c::RoomMode::v2 : c::RoomMode::legacy2;
         snapshot.capabilities = capabilities (room.capabilities);
         snapshot.nativeAvailable = room.nativeState == "reachable" || room.nativeState == "punch";
-        snapshot.wireRate = room.wireRate;
+        // A legacy2 room's rate is the one negotiated in the v1 hello/welcome: a 0.16 host sends no wireRate,
+        // so the server reports its 48 kHz default there. Only a v2 room takes the server's value.
+        if (snapshot.roomMode == c::RoomMode::v2) snapshot.wireRate = room.wireRate;
     }
     RosterSnapshot next;
     next.session = snapshot.session; next.mode = snapshot.roomMode; next.wireRate = snapshot.wireRate;

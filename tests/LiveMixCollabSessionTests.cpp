@@ -755,6 +755,12 @@ public:
         std::lock_guard<std::mutex> lock (mutex);
         members.push_back ({ nextId++, "Old", "native", port, "connected", 1, true }); ++revision;
     }
+    // A room a 0.16 host created through the old create API: it sent no wireRate, so the server reports its 48 kHz default.
+    void legacyHost (int port)
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        members = { { 1, "OldHost", "native", port, "connected", 1, true } }; wireRate = 48000; ++revision;
+    }
     int count (const char* suffix)
     {
         std::lock_guard<std::mutex> lock (mutex);
@@ -1174,6 +1180,18 @@ public:
             expect (until ([&] { return host.session->getSnapshot().state == State::connected; }));
             expect (! old.getStats().v2); expect (! host.session->getSnapshot().canCreateWebInvite);
             old.stop(); expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+        }
+        beginTest ("a 0.17 guest in a 0.16 host's 44.1k room shows the negotiated rate, not the server default");
+        {
+            V2Service service; V2Fixture guest (service); CollabTransport old;
+            expect (old.open (0, true).isEmpty()); service.legacyHost (old.getLocalPort());
+            old.startHost (sessionNumber, { "OldHost", "0.16.0", 0.0, 0.0, 44100, 44100 });
+            guest.session->joinRoom ("0842", "Guest");
+            expect (until ([&] { return guest.session->getSnapshot().state == State::connected; }));
+            expect (guest.session->getSnapshot().roomMode == c::RoomMode::legacy2);
+            expectEquals ((int) guest.session->getSnapshot().wireRate, 44100);
+            expectEquals ((int) guest.engine.getCollab().getWireRate(), 44100);
+            old.stop();
         }
     }
 };
