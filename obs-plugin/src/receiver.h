@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "lm_obs_metadata.h"
 
 typedef struct lm_connection lm_connection;
 typedef struct lm_receiver lm_receiver;
@@ -46,6 +47,10 @@ void lm_connection_destroy(lm_connection *connection);
  * the background manager is running. It retries mappings/presence every 1 s
  * and prepares any requested ASRC format on each call. */
 void lm_connection_poll(lm_connection *connection);
+/* Properties/control path only. Opens <resolved ring>.Metadata read-only and
+ * accepts a stable snapshot only for this audio ring's live writer. No retries
+ * or waiting for a metadata writer. False also clears the output snapshot. */
+bool lm_connection_read_metadata(const lm_connection *connection, unsigned slot, lm_obs_metadata *snapshot);
 
 lm_receiver *lm_receiver_create(lm_connection *connection, double out_rate);
 void lm_receiver_destroy(lm_receiver *receiver);

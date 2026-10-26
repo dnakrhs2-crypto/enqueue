@@ -17,22 +17,23 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
 #include "livemix-obs.h"
+#include "ring-names.h"
 #include <plugin-support.h>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("livemix-obs", "en-US")
 
 static lm_connection *connection;
-static lm_connection *peer_connection;
+static lm_connection *peer_connections[2];
 
 lm_connection *livemix_obs_connection(void)
 {
 	return connection;
 }
 
-lm_connection *livemix_obs_peer_connection(void)
+lm_connection *livemix_obs_peer_connection(unsigned slot)
 {
-	return peer_connection;
+	return slot >= 1 && slot <= 2 ? peer_connections[slot - 1] : NULL;
 }
 
 static void receiver_log(void *context, enum lm_log_level level, const char *format, const char *message)
@@ -48,42 +49,34 @@ MODULE_EXPORT const char *obs_module_description(void)
 
 bool obs_module_load(void)
 {
+	lm_ring_names names;
+	lm_resolve_ring_names(&names);
 	lm_connection_config config = {0};
 	config.log = receiver_log;
-	/* Test instances only: LIVEMIX_OBS_RING=<name> reads another ring (a fake LiveMix) so a long unattended test never
-	 * shares the real ring with a LiveMix running on the same PC. Unset in normal use. */
-	wchar_t test_ring[128];
-	DWORD test_ring_length = GetEnvironmentVariableW(L"LIVEMIX_OBS_RING", test_ring, 128);
-	if (test_ring_length > 0 && test_ring_length < 128) {
-		config.ring_name = test_ring;
-		blog(LOG_INFO, "[livemix-obs] Test ring from LIVEMIX_OBS_RING");
-	}
+	config.ring_name = names.master;
 	connection = lm_connection_create(&config);
 	if (!connection || !lm_connection_start(connection)) {
 		lm_connection_destroy(connection);
 		connection = NULL;
 		blog(LOG_ERROR, "[livemix-obs] Could not start the connection manager");
 	}
-	lm_connection_config peer_config = {0};
-	peer_config.ring_name = L"Local\\LiveMix.ObsAudio.v1.Peer";
-	peer_config.log = receiver_log;
-	wchar_t test_peer_ring[128];
-	DWORD test_peer_ring_length = GetEnvironmentVariableW(L"LIVEMIX_OBS_PEER_RING", test_peer_ring, 128);
-	if (test_peer_ring_length > 0 && test_peer_ring_length < 128) {
-		peer_config.ring_name = test_peer_ring;
-		blog(LOG_INFO, "[livemix-obs] Test ring from LIVEMIX_OBS_PEER_RING");
+	for (unsigned i = 0; i < 2; ++i) {
+		lm_connection_config peer_config = {0};
+		peer_config.ring_name = names.peer[i];
+		peer_config.log = receiver_log;
+		peer_connections[i] = lm_connection_create(&peer_config);
+		if (!peer_connections[i] || !lm_connection_start(peer_connections[i])) {
+			lm_connection_destroy(peer_connections[i]);
+			peer_connections[i] = NULL;
+			blog(LOG_ERROR, "[livemix-obs] Could not start peer %u connection manager", i + 1);
+		}
 	}
-	peer_connection = lm_connection_create(&peer_config);
-	if (!peer_connection || !lm_connection_start(peer_connection)) {
-		lm_connection_destroy(peer_connection);
-		peer_connection = NULL;
-		blog(LOG_ERROR, "[livemix-obs] Could not start the peer connection manager");
-	}
-	if (!connection && !peer_connection)
+	if (!connection && !peer_connections[0] && !peer_connections[1])
 		return false;
 	obs_register_source(&livemix_master_source);
 	obs_register_source(&livemix_master_filter);
 	obs_register_source(&livemix_peer_source);
+	obs_register_source(&livemix_peer2_source);
 	blog(LOG_INFO, "[livemix-obs] Loaded version %s", PLUGIN_VERSION);
 	return true;
 }
@@ -92,6 +85,8 @@ void obs_module_unload(void)
 {
 	lm_connection_destroy(connection);
 	connection = NULL;
-	lm_connection_destroy(peer_connection);
-	peer_connection = NULL;
+	for (unsigned i = 0; i < 2; ++i) {
+		lm_connection_destroy(peer_connections[i]);
+		peer_connections[i] = NULL;
+	}
 }
