@@ -47,6 +47,20 @@ public:
     uint64_t getFutureRevisionDrops() const noexcept { return futureRevisionDrops.load(); }
     void rebuffer() noexcept;
     double getDeviceRate() const noexcept { return publishedRate.load(); }
+    // Publish before prepare() can signal a restart. Output includes the split monitor,
+    // matching CollabSession's PeerInfo. Offline users may keep the roster's values.
+    void setDeviceLatencyMs (double input, double output) noexcept
+    {
+        deviceInputLatencyUs.store ((uint32_t) (input * 1000));
+        deviceOutputLatencyUs.store ((uint32_t) (output * 1000));
+        deviceLatencyKnown.store (true);
+    }
+    bool getDeviceLatencyUs (uint32_t& input, uint32_t& output) const noexcept
+    {
+        if (! deviceLatencyKnown.load()) return false;
+        input = deviceInputLatencyUs.load(); output = deviceOutputLatencyUs.load();
+        return true;
+    }
     struct Meter { float left = 0, right = 0; };
     // Pre-headphone stereo maxima since the UI's previous read, like MixEngine::MeterCell.
     Meter readRemoteMeter() noexcept
@@ -99,6 +113,8 @@ private:
     std::atomic<bool> monitorOn { true };
     std::atomic<int> route { 0 }, routeFirst { 0 };
     std::atomic<double> publishedRate { defaultWireRate };
+    std::atomic<uint32_t> deviceInputLatencyUs { 0 }, deviceOutputLatencyUs { 0 };
+    std::atomic<bool> deviceLatencyKnown { false };
     std::atomic<uint32_t> wireRate { defaultWireRate };
     int rampFrames = 240;
     bool wasConnected = false;

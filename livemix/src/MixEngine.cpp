@@ -892,11 +892,15 @@ void MixEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
         else
             monitorRestartRequested.store (true, std::memory_order_release);
     }
+    const double inputMs = 1000.0 * device->getInputLatencyInSamples() / juce::jmax (1.0, sr);
+    inputLatencyMs.store (inputMs, std::memory_order_relaxed);
+    outputLatencyMs.store (1000.0 * device->getOutputLatencyInSamples() / juce::jmax (1.0, sr), std::memory_order_relaxed);
+    // prepare() publishes the new rate or rewinds the v2 source clock; the transport
+    // must see the new device latency when it detects either restart signal.
+    collab.setDeviceLatencyMs (inputMs, juce::jmax (0.0, getLatencyMs() - inputMs));
     prepare (sr > 0.0 ? sr : 48000.0, bs > 0 ? bs : 256);
     numDeviceInputs.store (device->getActiveInputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
     numDeviceOutputs.store (isSplitMonitor() ? 2 : device->getActiveOutputChannels().countNumberOfSetBits(), std::memory_order_relaxed);
-    inputLatencyMs.store (1000.0 * device->getInputLatencyInSamples() / juce::jmax (1.0, sr), std::memory_order_relaxed);
-    outputLatencyMs.store (1000.0 * device->getOutputLatencyInSamples() / juce::jmax (1.0, sr), std::memory_order_relaxed);
     deviceRunning.store (device->isOpen(), std::memory_order_release);   // JUCE's ASIO reset starts the callback even when the reopen failed
 }
 

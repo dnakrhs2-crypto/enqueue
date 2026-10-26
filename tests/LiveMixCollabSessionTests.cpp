@@ -23,6 +23,8 @@ namespace gocue::livemix::collab
 struct CollabSessionTestAccess
 {
     static CollabTransport& transport (CollabSession& s) { return s.transport; }
+    static const RosterSnapshot& roster (const CollabSession& s) { return s.roster; }
+    static PeerInfo localInfo (const CollabSession& s) { return s.localInfo (s.snapshot.myNick); }
     static void heartbeat (CollabSession& s) { s.sendHeartbeat(); }
     static bool heartbeatPending (CollabSession& s) { return s.heartbeatPending; }
     static bool heartbeatStopped (CollabSession& s) { return s.heartbeatStopped; }
@@ -985,12 +987,12 @@ private:
 
 struct V2Fixture
 {
-    explicit V2Fixture (V2Service& service)
+    explicit V2Fixture (V2Service& service, int heartbeatMs = 100)
         : settings (directory.file), engine ("Local\\LiveMix.R8.Session." + juce::Uuid().toString())
     {
         engine.prepare (48000, 120); settings.setCollabPort (freePort());
         CollabSession::Options options; options.loopbackOnly = true; options.stunServers.clear();
-        options.probeTimeoutMs = 250; options.heartbeatIntervalMs = 100; options.punchHeartbeatMs = 100;
+        options.probeTimeoutMs = 250; options.heartbeatIntervalMs = heartbeatMs; options.punchHeartbeatMs = 100;
         options.webRequest = service.requests(); options.webServer = "http://127.0.0.1:8899"; options.webEndpoint = web;
         session = std::make_unique<CollabSession> (engine, settings, std::make_unique<CollabRoom> (service.requests(), options.webServer),
             std::make_unique<FakeUpnp> (std::make_shared<UpnpState>()), options);
@@ -1007,6 +1009,59 @@ struct V2Fixture
     std::shared_ptr<FakeWebEndpoint> web = std::make_shared<FakeWebEndpoint>();
     std::unique_ptr<CollabSession> session;
 };
+
+// A silent device whose driver latency follows its buffer size. Opening it uses
+// the real AudioDeviceManager -> MixEngine::audioDeviceAboutToStart path.
+class RestartLatencyDevice : public juce::AudioIODevice
+{
+public:
+    RestartLatencyDevice (const juce::String& type, const juce::String& input, const juce::String& output)
+        : AudioIODevice (output.isNotEmpty() ? output : input, type), hasInput (input.isNotEmpty()), hasOutput (output.isNotEmpty()) {}
+    ~RestartLatencyDevice() override { close(); }
+    juce::StringArray getInputChannelNames() override { return hasInput ? juce::StringArray { "In L", "In R" } : juce::StringArray {}; }
+    juce::StringArray getOutputChannelNames() override { return hasOutput ? juce::StringArray { "Out L", "Out R" } : juce::StringArray {}; }
+    juce::Array<double> getAvailableSampleRates() override { return { 48000.0, 44100.0 }; }
+    juce::Array<int> getAvailableBufferSizes() override { return { 256, 512 }; }
+    int getDefaultBufferSize() override { return 256; }
+    juce::String open (const juce::BigInteger& ins, const juce::BigInteger& outs, double sr, int bs) override
+    {
+        close(); rate = sr; block = bs; inputs = ins; outputs = outs;
+        inputs.setRange (hasInput ? 2 : 0, 256, false); outputs.setRange (hasOutput ? 2 : 0, 256, false);
+        opened = true; return {};
+    }
+    void close() override { stop(); opened = false; }
+    bool isOpen() override { return opened; }
+    void start (juce::AudioIODeviceCallback* cb) override { callback = cb; if (cb) cb->audioDeviceAboutToStart (this); }
+    void stop() override { if (callback) callback->audioDeviceStopped(); callback = nullptr; }
+    bool isPlaying() override { return callback != nullptr; }
+    juce::String getLastError() override { return {}; }
+    int getCurrentBufferSizeSamples() override { return block; }
+    double getCurrentSampleRate() override { return rate; }
+    int getCurrentBitDepth() override { return 32; }
+    juce::BigInteger getActiveInputChannels() const override { return inputs; }
+    juce::BigInteger getActiveOutputChannels() const override { return outputs; }
+    int getInputLatencyInSamples() override { return hasInput ? block : 0; }
+    int getOutputLatencyInSamples() override { return hasOutput ? block * 2 : 0; }
+private:
+    const bool hasInput, hasOutput;
+    bool opened = false;
+    double rate = 48000;
+    int block = 256;
+    juce::BigInteger inputs, outputs;
+    juce::AudioIODeviceCallback* callback = nullptr;
+};
+class RestartLatencyDeviceType : public juce::AudioIODeviceType
+{
+public:
+    explicit RestartLatencyDeviceType (bool split) : AudioIODeviceType (split ? "Windows Audio" : "ASIO") {}
+    void scanForDevices() override {}
+    juce::StringArray getDeviceNames (bool input) const override { return { input || getTypeName() == "ASIO" ? "Capture" : "Monitor" }; }
+    int getDefaultDeviceIndex (bool) const override { return 0; }
+    bool hasSeparateInputsAndOutputs() const override { return getTypeName() != "ASIO"; }
+    int getIndexOfDevice (juce::AudioIODevice*, bool) const override { return 0; }
+    juce::AudioIODevice* createDevice (const juce::String& output, const juce::String& input) override
+    { return new RestartLatencyDevice (getTypeName(), input, output); }
+};
 struct SessionMetadataView
 {
     explicit SessionMetadataView (const juce::String& ring)
@@ -1018,6 +1073,102 @@ struct SessionMetadataView
     HANDLE handle = nullptr; const lm_obs_metadata* data = nullptr;
 };
 }
+
+class LiveMixCollabRestartLatencyTests : public juce::UnitTest
+{
+public:
+    LiveMixCollabRestartLatencyTests() : UnitTest ("LiveMix Collab restart latency", "LiveMix") {}
+    void runTest() override
+    {
+        for (const bool split : { false, true })
+        for (const bool hostRestarts : { false, true })
+        {
+            beginTest (juce::String (hostRestarts ? "host" : "guest") + (split ? " split monitor" : " ASIO")
+                       + " buffer reopen updates roster and third person's estimatedOneWayMs across heartbeat");
+            // A full room's normal heartbeat is deferred so it cannot conceal a
+            // stale host restart. Explicit heartbeats below exercise reconciliation.
+            V2Service service; V2Fixture host (service, 60000), first (service, 60000), observer (service, 60000);
+            auto& changed = hostRestarts ? host : first;
+            const uint32_t pid = hostRestarts ? 1u : 2u;
+            auto& manager = changed.engine.getDeviceManager();
+            while (! manager.getAvailableDeviceTypes().isEmpty()) manager.removeAudioDeviceType (manager.getAvailableDeviceTypes().getLast());
+            manager.addAudioDeviceType (std::make_unique<RestartLatencyDeviceType> (split));
+            const auto open = [&] (int block, double rate)
+            {
+                const auto error = changed.engine.openDevice ({ split ? "Windows Audio" : "ASIO", "Capture",
+                                                               split ? "Monitor" : "Capture", block, rate });
+                expect (error.isEmpty(), error);
+            };
+            open (256, 48000);
+            expect (changed.engine.isSplitMonitor() == split);
+            host.session->createRoom ("Host");
+            expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            first.session->joinRoom ("0842", "First"); expect (host.people (2));
+            expect (until ([&] { return first.session->getSnapshot().state == State::connected; }));
+            observer.session->joinRoom ("0842", "Observer");
+            expect (host.people (3)); expect (first.people (3)); expect (observer.people (3));
+            expect (until ([&] { return CollabSessionTestAccess::transport (*host.session).getStats (3).v2; }));
+            const auto settle = [&]
+            {
+                const auto end = juce::Time::getMillisecondCounterHiRes() + 1200;
+                until ([&]
+                {
+                    for (auto* f : { &host, &first, &observer }) f->engine.getCollab().pushLocalSilence (120);
+                    return juce::Time::getMillisecondCounterHiRes() >= end;
+                }, 2000);
+            };
+            const auto check = [&] (const char* stage, bool initial = false)
+            {
+                const auto local = CollabSessionTestAccess::localInfo (*changed.session);
+                // The initial guest hello rounds to us; session/v2 restarts truncate.
+                const auto micros = [&] (double ms) { return (uint32_t) (initial && ! hostRestarts ? std::lround (ms * 1000) : ms * 1000); };
+                const auto inputUs = micros (local.inputLatencyMs), outputUs = micros (local.outputLatencyMs);
+                const auto* member = findMember (CollabSessionTestAccess::roster (*host.session), pid);
+                expect (member != nullptr);
+                if (member)
+                {
+                    logMessage (juce::String (stage) + ": roster input/output us=" + juce::String (member->inputLatencyUs)
+                                + "/" + juce::String (member->outputLatencyUs) + ", expected=" + juce::String (inputUs) + "/" + juce::String (outputUs));
+                    expectEquals ((int) member->inputLatencyUs, (int) inputUs); expectEquals ((int) member->outputLatencyUs, (int) outputUs);
+                    expectEquals ((int) member->deviceRate, (int) local.deviceRate);
+                }
+                const auto snapshot = observer.session->getSnapshot();
+                const auto* person = observer.person (snapshot, pid);
+                expect (person != nullptr);
+                if (person)
+                {
+                    const double otherDelay = person->rttMs * 0.5 + person->bufferMs + 0.5 * packetDurationMs (snapshot.wireRate)
+                        + 16000.0 / snapshot.wireRate + CollabSessionTestAccess::localInfo (*observer.session).outputLatencyMs
+                        + (local.deviceRate != snapshot.wireRate ? 16000.0 / local.deviceRate : 0.0);
+                    logMessage (juce::String (stage) + ": estimatedOneWayMs input contribution="
+                                + juce::String (person->estimatedOneWayMs - otherDelay, 3) + ", expected=" + juce::String (inputUs / 1000.0, 3));
+                    expectWithinAbsoluteError (person->estimatedOneWayMs, otherDelay + inputUs / 1000.0, 0.00001);
+                }
+            };
+            settle(); check ("initial", true);
+            for (const auto rate : { 48000.0, 44100.0 })
+            {
+                if (rate == 44100.0)
+                    beginTest (juce::String (hostRestarts ? "host" : "guest") + (split ? " split monitor" : " ASIO")
+                               + " sample rate reopen updates roster and estimatedOneWayMs across heartbeat");
+                const auto before = changed.session->getSnapshot();
+                const auto* self = changed.person (before, pid);
+                expect (self != nullptr);
+                const auto epoch = self ? self->streamEpoch : 0;
+                open (512, rate);
+                settle();
+                const auto after = observer.session->getSnapshot();
+                const auto* person = observer.person (after, pid);
+                expect (person != nullptr && person->streamEpoch == epoch + 1);
+                check ("reopened");
+                CollabSessionTestAccess::heartbeat (*host.session);
+                expect (until ([&] { return ! CollabSessionTestAccess::heartbeatPending (*host.session); }));
+                settle(); check ("after heartbeat");
+            }
+        }
+    }
+};
+static LiveMixCollabRestartLatencyTests liveMixCollabRestartLatencyTests;
 
 class LiveMixCollabRosterAudioInstallationTests : public juce::UnitTest
 {

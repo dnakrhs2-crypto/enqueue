@@ -624,18 +624,22 @@ struct CollabTransport::Impl
         else return;
         l.lastReceived = d.arrival; ++received; ++linkReceived[indexOf (l)];
     }
-    void beginLocalRestart (uint32_t deviceRate)
+    void beginLocalRestart (const CollabAudio& localAudio)
     {
         if (restartEpoch != 0 || localEpoch == UINT32_MAX || roster.revision == UINT32_MAX) return;
         const auto* mine = findMember (roster, selfId);
         if (mine == nullptr) return;
+        const auto deviceRate = (uint32_t) localAudio.getDeviceRate();
         restart = { deviceRate, mine->inputLatencyUs, mine->outputLatencyUs };
+        localAudio.getDeviceLatencyUs (restart.inputLatencyUs, restart.outputLatencyUs);
         starMe.deviceRate = deviceRate;
         if (starHost)
         {
             auto next = roster; ++next.revision;
             auto& m = next.members[(size_t) (mine - roster.members.data())];
-            ++m.streamEpoch; m.deviceRate = deviceRate; installHostRoster (next);
+            ++m.streamEpoch; m.deviceRate = deviceRate;
+            m.inputLatencyUs = restart.inputLatencyUs; m.outputLatencyUs = restart.outputLatencyUs;
+            installHostRoster (next);
         }
         else
         {
@@ -671,7 +675,7 @@ struct CollabTransport::Impl
         const auto now = nowNs();
         const AudioAccess access (*this);
         if (access.audio != nullptr && (sourceRestart || (uint32_t) access.audio->getDeviceRate() != starMe.deviceRate))
-            beginLocalRestart ((uint32_t) access.audio->getDeviceRate());
+            beginLocalRestart (*access.audio);
         for (auto& l : links)
         {
             if (! l.enabled) continue;
