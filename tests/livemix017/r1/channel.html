@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LiveMix R1 DataChannel probe</title>
+<pre id="status">Playwright controls this answerer through window.probe.</pre>
+<script>
+"use strict";
+(() => {
+  const session = 0x123456789abcdef0n;
+  let pc, channel, options, remoteReady = false, pending = [], seen = new Set();
+  let stats;
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const fail = error => { stats.errors.push(String(error)); };
+  const signal = value => window.signalToHost({generation: options.generation, ...value}).catch(fail);
+  function packet(mono, seq) {
+    const bytes = new Uint8Array(mono ? 288 : 768);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, 0x42434d4c, true);
+    bytes[4] = 2; bytes[5] = 1;
+    view.setUint16(6, mono ? 2 : 1, true);
+    view.setBigUint64(8, session, true);
+    view.setUint32(16, mono ? 2 : 1, true);
+    view.setUint32(20, seq, true);
+    view.setBigUint64(24, BigInt(seq) * 120n, true);
+    view.setUint16(32, 120, true);
+    view.setUint16(34, mono ? 240 : 720, true);
+    view.setUint32(36, mono ? 2 : 1, true);
+    view.setUint32(40, 1, true);
+    view.setUint32(44, 1, true);
+    for (let frame = 0; frame < 120; ++frame) {
+      if (mono) view.setInt16(48 + frame * 2, (seq * 997 + frame * 131) % 65536 - 32768, true);
+      else {
+        const left = (seq * 7919 + frame * 104729) % 16777216 - 8388608;
+        const right = 8388607 - (seq * 3571 + frame * 65537) % 16777216;
+        for (let byte = 0; byte < 3; ++byte) {
+          bytes[48 + frame * 6 + byte] = (left >>> (8 * byte)) & 255;
+          bytes[51 + frame * 6 + byte] = (right >>> (8 * byte)) & 255;
+        }
+      }
+    }
+    return bytes;
+  }
+  async function sendPackets() {
+    try {
+      for (let seq = 0; seq < options.packets; ++seq) {
+        if (channel.bufferedAmount + 288 > 8 * 288) throw new Error("browser send backlog exceeded 20ms");
+        channel.send(packet(true, seq));
+        ++stats.sent;
+        await delay(10);
+      }
+      stats.sendDone = true;
+    } catch (error) { fail(error); }
+  }
+  window.probe = {
+    start(config) {
+      options = config;
+      stats = {sent: 0, received: 0, mismatches: 0, sendDone: false, errors: [],
+        negotiation: null, path: "main-thread answerer", localCandidates: [], remoteCandidates: [],
+        generation: config.generation, iceState: "new", gatheringComplete: 0};
+      pc = new RTCPeerConnection({iceServers: []});
+      pc.onicecandidate = event => {
+        if (!event.candidate) {
+          ++stats.gatheringComplete;
+          void signal({type: "endOfCandidates"});
+        } else {
+          stats.localCandidates.push(event.candidate.type);
+          void signal({type: "candidate", candidate: event.candidate.candidate,
+            mid: event.candidate.sdpMid, mLineIndex: event.candidate.sdpMLineIndex});
+        }
+      };
+      pc.oniceconnectionstatechange = () => {
+        stats.iceState = pc.iceConnectionState;
+        if (pc.iceConnectionState === "failed") fail("browser ICE failed");
+      };
+      // The browser never creates its own channel. DCEP from the host supplies it.
+      pc.ondatachannel = event => {
+        if (channel) { fail("unexpected second channel"); return; }
+        channel = event.channel;
+        channel.binaryType = "arraybuffer";
+        channel.onerror = event => fail(event.error || "channel error");
+        channel.onmessage = event => {
+          if (!(event.data instanceof ArrayBuffer) || event.data.byteLength !== 768) {
+            ++stats.mismatches; return;
+          }
+          const actual = new Uint8Array(event.data);
+          const seq = new DataView(event.data).getUint32(20, true);
+          const expected = packet(false, seq);
+          if (seq >= options.packets || seen.has(seq) || actual.some((byte, index) => byte !== expected[index]))
+            ++stats.mismatches;
+          else { seen.add(seq); ++stats.received; }
+        };
+        const opened = () => {
+          stats.negotiation = {label: channel.label, protocol: channel.protocol, ordered: channel.ordered,
+            maxRetransmits: channel.maxRetransmits, maxPacketLifeTime: channel.maxPacketLifeTime,
+            negotiated: channel.negotiated, id: channel.id};
+          if (channel.label !== "livemix-audio-v2" || channel.protocol !== "livemix-pcm-v2"
+              || channel.ordered || channel.maxRetransmits !== 0 || channel.maxPacketLifeTime !== null
+              || channel.negotiated) { fail("channel negotiation mismatch"); return; }
+          void sendPackets();
+        };
+        if (channel.readyState === "open") opened(); else channel.onopen = opened;
+      };
+    },
+    async signal(message) {
+      if (message.generation !== options.generation) { fail("signal generation mismatch"); return; }
+      if (message.type === "description") {
+        if (message.sdpType !== "offer") throw new Error("host must offer");
+        const media = message.sdp.split(/\r?\n/).filter(line => line.startsWith("m="));
+        if (media.length !== 1 || !media[0].startsWith("m=application ")) throw new Error("expected SCTP-only offer");
+        await pc.setRemoteDescription({type: "offer", sdp: message.sdp});
+        remoteReady = true;
+        for (const candidate of pending) await pc.addIceCandidate(candidate);
+        pending = [];
+        await pc.setLocalDescription(await pc.createAnswer());
+        await signal({type: "description", sdpType: "answer", sdp: pc.localDescription.sdp});
+      } else {
+        const candidate = message.type === "endOfCandidates" ? null : {
+          candidate: message.candidate, sdpMid: message.mid, sdpMLineIndex: message.mLineIndex};
+        if (candidate) stats.remoteCandidates.push(candidate.candidate.includes(" typ host") ? "host" : "other");
+        if (remoteReady) await pc.addIceCandidate(candidate); else pending.push(candidate);
+      }
+    },
+    status() { return {...stats, bufferedAmount: channel?.bufferedAmount ?? 0}; },
+    close() { channel?.close(); pc?.close(); }
+  };
+})();
+</script>

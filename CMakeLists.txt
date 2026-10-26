@@ -403,6 +403,7 @@ set_property(TARGET LiveMixCollabProbe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThrea
 set_target_properties(LiveMixCollabProbe PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 # LiveMix 0.17 rounds add their sources/probes in their own optional fragment (cmake/livemix017/Rn.cmake).
+include(cmake/LiveMixWebRTC.cmake)
 foreach(_livemix017_round RANGE 2 11)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/livemix017/R${_livemix017_round}.cmake" OPTIONAL)
 endforeach()

@@ -44,6 +44,8 @@ target_sources(
     src/livemix-filter.c
     src/receiver.h
     src/receiver.c
+    src/ring-names.h
+    src/ring-names.c
     ../livemix/shared/lm_asrc.c
 )
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src ../livemix/shared)
@@ -52,8 +54,15 @@ set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_nam
 
 if(LIVEMIX_OBS_TESTS)
   enable_testing()
-  add_executable(livemix-obs-core-tests src/receiver.c ../livemix/shared/lm_asrc.c tests/core_tests.c)
+  add_executable(livemix-obs-core-tests src/receiver.c src/ring-names.c ../livemix/shared/lm_asrc.c tests/core_tests.c)
   target_include_directories(livemix-obs-core-tests PRIVATE src ../livemix/shared)
   target_link_libraries(livemix-obs-core-tests PRIVATE advapi32)
   add_test(NAME livemix-obs-core-tests COMMAND livemix-obs-core-tests)
+
+  # Load the real plugin in libobs, without launching the OBS application.
+  add_executable(livemix-obs-peer-source-tests ../tests/livemix017/r7/ObsPeerSources.c)
+  target_include_directories(livemix-obs-peer-source-tests PRIVATE ../livemix/shared)
+  target_link_libraries(livemix-obs-peer-source-tests PRIVATE OBS::libobs)
+  target_compile_options(livemix-obs-peer-source-tests PRIVATE $<$<C_COMPILER_ID:MSVC>:/utf-8>)
+  add_dependencies(livemix-obs-peer-source-tests ${CMAKE_PROJECT_NAME})
 endif()

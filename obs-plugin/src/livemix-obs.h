@@ -13,9 +13,10 @@
 #include "receiver.h"
 
 lm_connection *livemix_obs_connection(void);
-lm_connection *livemix_obs_peer_connection(void);
+lm_connection *livemix_obs_peer_connection(unsigned slot);
 extern struct obs_source_info livemix_master_source;
 extern struct obs_source_info livemix_master_filter;
 extern struct obs_source_info livemix_peer_source;
+extern struct obs_source_info livemix_peer2_source;
 
 #endif

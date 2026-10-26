@@ -54,7 +54,7 @@ typedef struct lm_diagnostic_event {
 
 struct lm_connection {
 	lm_connection_config config;
-	wchar_t *ring_name, *readers_name;
+	wchar_t *ring_name, *readers_name, *metadata_name;
 	int64_t frequency, next_probe;
 	HANDLE thread, stop_event;
 	SRWLOCK receivers_lock;
@@ -193,6 +193,45 @@ static bool live_header(const lm_connection *c, const lm_obs_ring_header *h, int
 						      : now - heartbeat <= c->frequency / 2);
 	return fresh &&
 	       rate >= LM_MIN_RATE && rate <= LM_MAX_RATE && lm_obs_load_acquire(&h->write_frames) >= 0;
+}
+
+bool lm_connection_read_metadata(const lm_connection *c, unsigned slot, lm_obs_metadata *snapshot)
+{
+	memset(snapshot, 0, sizeof(*snapshot));
+	if (!c || slot < 1 || slot > 2)
+		return false;
+	const lm_view *audio = current_view(c);
+	if (!audio || !live_header(c, audio->header, connection_now(c)))
+		return false;
+	int64_t writer = lm_obs_load_acquire(&audio->header->writer_pid);
+	if (writer <= 0 || writer > UINT32_MAX)
+		return false;
+	HANDLE mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, c->metadata_name);
+	if (!mapping)
+		return false;
+	const lm_obs_metadata *view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, LM_OBS_METADATA_BYTES);
+	bool valid = false;
+	lm_obs_metadata copy = {0};
+	if (view) {
+		int64_t sequence = lm_obs_load_acquire(&view->sequence);
+		if (!(sequence & 1)) {
+			memcpy(&copy, view, sizeof(copy));
+			MemoryBarrier();
+			int64_t after = lm_obs_load_acquire(&view->sequence);
+			valid = sequence == after && !(after & 1) && copy.sequence == sequence;
+		}
+		UnmapViewOfFile(view);
+	}
+	CloseHandle(mapping);
+	if (!valid || copy.magic != LM_OBS_METADATA_MAGIC || copy.version != LM_OBS_METADATA_VERSION ||
+	    copy.mapping_bytes != LM_OBS_METADATA_BYTES || copy.slot != slot || copy.writer_pid != (uint32_t)writer ||
+	    copy.state > LM_OBS_PARTICIPANT_DISCONNECTED || copy.kind > LM_OBS_PARTICIPANT_WEB ||
+	    copy.nickname_bytes > LM_OBS_METADATA_NICK_BYTES || copy.nickname_utf8[copy.nickname_bytes] != '\0' ||
+	    memchr(copy.nickname_utf8, '\0', copy.nickname_bytes) != NULL ||
+	    lm_obs_load_acquire(&audio->header->writer_pid) != writer || !live_header(c, audio->header, connection_now(c)))
+		return false;
+	*snapshot = copy;
+	return true;
 }
 
 static void open_ring(lm_connection *c)
@@ -489,6 +528,12 @@ lm_connection *lm_connection_create(const lm_connection_config *config)
 	}
 	c->frequency = c->config.qpc_frequency;
 	c->ring_name = _wcsdup(c->config.ring_name ? c->config.ring_name : LM_OBS_RING_NAME);
+	if (c->ring_name) {
+		size_t count = wcslen(c->ring_name) + wcslen(LM_OBS_METADATA_SUFFIX) + 1;
+		c->metadata_name = calloc(count, sizeof(wchar_t));
+		if (c->metadata_name)
+			swprintf(c->metadata_name, count, L"%ls%ls", c->ring_name, LM_OBS_METADATA_SUFFIX);
+	}
 	if (c->config.readers_name) {
 		c->readers_name = _wcsdup(c->config.readers_name);
 	} else if (c->ring_name) {
@@ -498,7 +543,7 @@ lm_connection *lm_connection_create(const lm_connection_config *config)
 			swprintf(c->readers_name, count, L"%ls.Readers", c->ring_name);
 	}
 	c->stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
-	if (!c->ring_name || !c->readers_name || !c->stop_event || c->frequency <= 0 ||
+	if (!c->ring_name || !c->readers_name || !c->metadata_name || !c->stop_event || c->frequency <= 0 ||
 	    c->frequency > INT64_C(1000000000000)) {
 		lm_connection_destroy(c);
 		return NULL;
@@ -550,6 +595,7 @@ void lm_connection_destroy(lm_connection *c)
 		CloseHandle(c->stop_event);
 	free(c->ring_name);
 	free(c->readers_name);
+	free(c->metadata_name);
 	free(c);
 }
 
