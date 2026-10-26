@@ -85,6 +85,20 @@ bool CollabPlayout::push (const Header& h, const uint8_t* payload, uint64_t arri
 {
     if (! slots || payload == nullptr || h.kind != Kind::audio || h.frames != framesPerPacket
         || h.payloadBytes != audioBytes || h.firstFrame % framesPerPacket != 0) return false;
+    return pushPacket (h, payload, arrivalNs, false);
+}
+
+bool CollabPlayout::pushV2 (const contracts::HeaderV2& h, const uint8_t* payload, uint64_t arrivalNs) noexcept
+{
+    if (! slots || payload == nullptr || h.kind != contracts::Kind::audio || ! validHeaderV2 (h)) return false;
+    Header packetHeader;
+    packetHeader.sender = h.origin; packetHeader.seq = h.seq; packetHeader.firstFrame = h.firstFrame;
+    packetHeader.frames = h.frames; packetHeader.payloadBytes = h.payloadBytes;
+    return pushPacket (packetHeader, payload, arrivalNs, h.flags == contracts::Flags::monoPcm16);
+}
+
+bool CollabPlayout::pushPacket (const Header& h, const uint8_t* payload, uint64_t arrivalNs, bool mono) noexcept
+{
     if (producerEpoch == 0 || sender != h.sender)
     {
         sender = h.sender; ++producerEpoch;
@@ -105,7 +119,13 @@ bool CollabPlayout::push (const Header& h, const uint8_t* payload, uint64_t arri
         readyFrames.fetch_sub (framesPerPacket);
     }
     slot.frame = h.firstFrame; slot.epoch = producerEpoch;
-    unpackPcm24 (payload, slot.pcm.data(), framesPerPacket);
+    if (mono)
+    {
+        std::array<float, framesPerPacket> samples;
+        unpackPcm16 (payload, samples.data(), framesPerPacket);
+        for (size_t i = 0; i < samples.size(); ++i) slot.pcm[i * 2] = slot.pcm[i * 2 + 1] = samples[i];
+    }
+    else unpackPcm24 (payload, slot.pcm.data(), framesPerPacket);
     readyFrames.fetch_add (framesPerPacket);
     slot.state.store (2, std::memory_order_release);
     publishedEpoch.store (producerEpoch);

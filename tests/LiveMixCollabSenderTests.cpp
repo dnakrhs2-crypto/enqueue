@@ -26,6 +26,26 @@ public:
             expect (packets >= 9 && numbering); expect (sender.getOverruns() == 0);
         }
 
+        beginTest ("an explicit new stream epoch resets packet sequence and frame clock, discarding partial old audio");
+        {
+            CollabSender sender; sender.prepare (48000, 256);
+            std::array<float, 256> old; old.fill (0.5f);
+            sender.push (old.data(), old.data(), 256);
+            sender.drain ([] (const Header&, const uint8_t*) {});
+            expectEquals (sender.getNextFrame(), uint64_t (240));
+            sender.resetSession();
+            uint64_t frame = 0; uint32_t sequence = 0; bool numbered = true, silent = true;
+            sender.push (nullptr, nullptr, 256);
+            sender.drain ([&] (const Header& h, const uint8_t* data)
+            {
+                numbered = numbered && h.firstFrame == frame && h.seq == sequence;
+                frame += framesPerPacket; ++sequence;
+                std::array<float, 240> pcm; unpackPcm24 (data, pcm.data(), 120);
+                silent = silent && std::all_of (pcm.begin(), pcm.end(), [] (float v) { return v == 0; });
+            });
+            expect (numbered && silent); expectEquals (sequence, uint32_t (2));
+        }
+
         beginTest ("44.1 kHz capture -> 48 kHz packets -> 96 kHz playout: pitch and images");
         {
             CollabSender sender; sender.prepare (44100, 441);

@@ -79,6 +79,7 @@ void CollabSender::drain (const Sink& sink)
             std::array<uint8_t, audioBytes> payload;
             packPcm24 (payload.data(), packetL.data(), packetR.data(), framesPerPacket);
             Header h; h.firstFrame = nextFrame; h.frames = framesPerPacket; h.payloadBytes = audioBytes;
+            h.seq = (uint32_t) (nextFrame / framesPerPacket);
             sink (h, payload.data());
             nextFrame += framesPerPacket; publishedFrame.store (nextFrame, std::memory_order_relaxed);
             packetFill = 0;

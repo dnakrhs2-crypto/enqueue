@@ -19,6 +19,8 @@ public:
     };
     void prepare (double deviceRate, int maxBlock, uint32_t roomRate = defaultWireRate); // lifecycle: both users excluded
     bool push (const Header&, const uint8_t* payload, uint64_t arrivalNs) noexcept; // receiver only
+    // CollabAudio supplies one instance per roster origin/epoch; the packet cannot adopt a new epoch.
+    bool pushV2 (const contracts::HeaderV2&, const uint8_t* payload, uint64_t arrivalNs) noexcept;
     void pull (float* left, float* right, int frames) noexcept; // audio only
     void rebuffer() noexcept { rebufferRequest.fetch_add (1); }
     Stats getStats() const noexcept;
@@ -33,6 +35,7 @@ private:
         std::array<float, framesPerPacket * channels> pcm {};
     };
     void measure (const Header&, uint64_t arrivalNs) noexcept;
+    bool pushPacket (const Header&, const uint8_t*, uint64_t arrivalNs, bool mono) noexcept;
     void resetPlayback (uint64_t epoch, bool newSender) noexcept;
     bool startPlayback (int frames) noexcept;
     bool loadPacket() noexcept;
