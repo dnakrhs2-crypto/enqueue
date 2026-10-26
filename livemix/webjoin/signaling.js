@@ -10,7 +10,8 @@ export function cursorValue(value) {
 }
 export class Signaling {
   constructor({ apiBase = API_BASE, fetchImpl = globalThis.fetch, timeoutMs = 30000, onEvent = () => {}, onError = () => {} } = {}) {
-    this.base = apiBase; this.fetch = fetchImpl; this.timeout = timeoutMs;
+    // Browsers throw "Illegal invocation" when the global fetch runs with this = Signaling, so never call it as a method.
+    this.base = apiBase; this.fetch = (url, init) => fetchImpl(url, init); this.timeout = timeoutMs;
     this.onEvent = onEvent; this.onError = onError;
     this.pending = new Set(); this.stopped = false; this.polling = false;
     this.code = null; this.auth = null; this.cursor = "0"; this.generation = 0;

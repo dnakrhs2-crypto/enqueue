@@ -15,10 +15,13 @@ function observe(context,node) {
 }
 function amplitude(pcm,channel,center,rate) {
   let maximum=0;
-  // Windowed tone search tolerates the injected clock drift and device timing.
+  // Windowed tone search tolerates the injected clock drift and device timing. Flat-top window (SRS coefficients):
+  // under 0.1 % amplitude error when the drifted tone falls between the 0.5 Hz search steps, where a Hann window
+  // loses up to 15 % and made the per-person volume ratios flaky (Edge 156, 10/26).
+  const frames=pcm.length/2,c=[0.21557895,0.41663158,0.277263158,0.083578947,0.006947368];
   for(let frequency=center-3;frequency<=center+3;frequency+=0.5) {
-    let x=0,y=0,weight=0;const frames=pcm.length/2;
-    for(let i=0;i<frames;i++) {const w=0.5-0.5*Math.cos(2*Math.PI*i/(frames-1)),a=2*Math.PI*frequency*i/rate;
+    let x=0,y=0,weight=0;
+    for(let i=0;i<frames;i++) {const p=2*Math.PI*i/(frames-1),w=c[0]-c[1]*Math.cos(p)+c[2]*Math.cos(2*p)-c[3]*Math.cos(3*p)+c[4]*Math.cos(4*p),a=2*Math.PI*frequency*i/rate;
       x+=pcm[i*2+channel]*w*Math.cos(a);y+=pcm[i*2+channel]*w*Math.sin(a);weight+=w;}
     maximum=Math.max(maximum,2*Math.hypot(x,y)/weight);
   }
@@ -108,7 +111,7 @@ async function connectionTest(config) {
     const h={session:accepted.room.session,origin:1,linkSender:1,seq:0,firstFrame:0n,streamEpoch:1,rosterRevision:1};
     const rosterMembers=accepted.room.members.map(m=>({...m,capabilities:31,deviceRate:accepted.room.wireRate}));
     const sendRoster=()=>{if(channel.readyState==='open')channel.send(encodeRoster(h,accepted.room.wireRate,rosterMembers));};
-    channel.onopen=()=>{sendRoster();rosterTimer=setInterval(()=>{if(!ack)sendRoster();},200);const data=new Float32Array(240);timer=setInterval(()=>{if(!ack)return;for(let f=0;f<120;f++){data[f*2]=0.15*Math.sin(2*Math.PI*700*(seq*120+f)/accepted.room.wireRate);data[f*2+1]=0.15*Math.sin(2*Math.PI*1100*(seq*120+f)/accepted.room.wireRate);}channel.send(encodeAudio({...h,seq,firstFrame:BigInt(seq++)*120n},data,false));stereoSent++;},3);};
+    channel.onopen=()=>{sendRoster();rosterTimer=setInterval(()=>{if(!ack)sendRoster();},200);const data=new Float32Array(240);timer=setInterval(()=>{if(!ack||channel.readyState!=='open')return;for(let f=0;f<120;f++){data[f*2]=0.15*Math.sin(2*Math.PI*700*(seq*120+f)/accepted.room.wireRate);data[f*2+1]=0.15*Math.sin(2*Math.PI*1100*(seq*120+f)/accepted.room.wireRate);}channel.send(encodeAudio({...h,seq,firstFrame:BigInt(seq++)*120n},data,false));stereoSent++;},3);};
     await pc.setLocalDescription(await pc.createOffer());await send({type:'offer',sdp:pc.localDescription.sdp});for(const s of candidateQueue)await send(s);
     await deadline(()=>evidence.states.some(s=>s.state==='connected')&&captures>100&&stereoSent>100);
     await sleep(2000);

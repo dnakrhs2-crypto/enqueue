@@ -262,7 +262,9 @@ await test('capture pools bound stalls, sample clock never rewinds', () => {
 await test('HTTP text/plain, stable signalId retry and accepted cursor switch', async () => {
   const calls=[];let failSignal=true; let s;
   const response=body=>({ok:true,status:200,json:async()=>({apiVersion:2,...body})});
-  const fetchImpl=async(url,options)=>{
+  const fetchImpl=async function(url,options){
+    // Like a browser's global fetch: called with this = another object it throws "Illegal invocation" (10/26 Chrome 156).
+    if(this!==undefined&&this!==globalThis)throw new TypeError('Illegal invocation');
     const b=JSON.parse(options.body);calls.push({path:url.pathname,options,body:b});
     assert.equal(options.credentials,'omit');assert.deepEqual(options.headers,{'Content-Type':'text/plain'});
     assert.equal(b.apiVersion,2);
