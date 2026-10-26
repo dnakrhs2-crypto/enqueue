@@ -612,6 +612,7 @@ def _native(action, body, h, now, v2):
         if not isinstance(states, list) or len(states) > 2:
             raise Fail(400, "bad")
         seen = set()
+        current = []
         for state in states:
             if not isinstance(state, dict):
                 raise Fail(400, "bad")
@@ -623,11 +624,17 @@ def _native(action, body, h, now, v2):
             seen.add(pid)
             member = room["members"].get(pid)
             if member is None or member["connectionGeneration"] != generation:
-                raise Fail(409, "generation")
+                # Issued earlier but already ended (a web guest that never connected and left, an expired reservation,
+                # a rejoin under a new generation): the host's view is stale. Skip it so this reply's room corrects
+                # the host; a 409 here would keep refusing every heartbeat and end the room. Never issued stays 409.
+                if pid >= room["nextId"] or generation >= room["nextGeneration"]:
+                    raise Fail(409, "generation")
+                continue
             if state["streamEpoch"] < member["streamEpoch"]:
                 raise Fail(409, "generation")
+            current.append(state)
         room["seen"], room["connected"] = now, body["connected"]
-        for state in states:
+        for state in current:
             pid = state["participantId"]
             if state["state"] == "left":
                 _end_member(room, pid, "left")

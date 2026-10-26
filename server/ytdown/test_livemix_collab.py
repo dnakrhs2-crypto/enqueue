@@ -619,6 +619,19 @@ class CollabV2Test(unittest.TestCase):
         self.assertEqual(beat["members"][1]["streamEpoch"], 2)
         self.host("heartbeat", room, 409, connected=True, memberStates=[self.state(host)])
 
+    def test_heartbeat_skips_a_member_that_already_ended(self):
+        # A web guest whose connection never forms leaves while the host still lists it as connecting: the host's next
+        # heartbeat succeeds and its room snapshot drops the guest, instead of a 409 that ends the host's room.
+        room = self.open()
+        _, host, web = self.web_pair(room)
+        self.post("web/leave", dict(apiVersion=2, code=room["code"], connectionToken=web["connectionToken"],
+                                    connectionGeneration=web["connectionGeneration"]))
+        beat = self.beat(room, [self.state(host, state="connecting")])
+        self.assertNotIn(host["participantId"], [m["participantId"] for m in beat["members"]])
+        # An ID/generation the server never issued is still refused.
+        self.host("heartbeat", room, 409, connected=False,
+                  memberStates=[dict(participantId=9, connectionGeneration=99, state="connecting", streamEpoch=1)])
+
     def test_role_tokens_and_signals_are_private_and_deduplicated(self):
         room = self.open()
         req, host, web = self.web_pair(room)
