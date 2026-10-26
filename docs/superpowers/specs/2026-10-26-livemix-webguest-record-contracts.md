@@ -278,7 +278,8 @@ pendingWebRequests는 자리를 소비하지 않는다. `expiresAtMs`는 UTC Uni
 | close | apiVersion | `ok:true,apiVersion:2` |
 
 heartbeat의 memberStates는 방장 외 승인된 사람의 **완전한** 상태 목록(최대 2), state는
-`connecting|connected|left`. 서버가 발급하지 않은 ID/generation은 409 generation.
+`connecting|connected|left`. 서버가 발급하지 않은 ID/generation은 409 generation. 발급했지만 이미 끝난 사람(연결 전에 나간 웹,
+만료된 예약, 새 generation으로 다시 들어온 사람)의 상태는 409 없이 건너뛰고, 응답 Room이 방장의 명단을 바로잡는다(10/27 — 409가 매 heartbeat를 막아 방이 닫히던 것).
 아직 방장이 보지 못한 예약을 배열에서 빠졌다는 이유로 지우지 않는다. 삭제는 명시적 left 또는 예약 만료다.
 기존 connected는 구 경로용으로 보내되 v2 인원 판단에 단일 bool을 쓰지 않는다.
 streamEpoch는 방장 roster에 반영된 값을 알리는 용도이고 서버가 독자 증가시키지 않는다.
