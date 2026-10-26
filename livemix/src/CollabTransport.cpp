@@ -159,6 +159,7 @@ struct CollabTransport::Impl
         c::ConnectionGeneration generation = 0;
         bool enabled = false, web = false, bound = false, offered = false, offerAccepted = false;
         bool txV2 = false, rxV2 = false;
+        bool rosterAckPending = false;
         State state = State::off;
         sockaddr_in address {};
         std::vector<sockaddr_in> candidates;
@@ -323,8 +324,24 @@ struct CollabTransport::Impl
         std::array<uint8_t, 16> data {}; writeOfferV2 (data.data(), data.size(), l.offer);
         sendV2Control (l, h, data.data()); l.lastOffer = now;
     }
+    bool rosterReady (const RosterSnapshot& value) const
+    {
+        return ! callbacks.isRosterInstalled || callbacks.isRosterInstalled (value);
+    }
+    void acknowledgeInstalledRoster (Link& l)
+    {
+        if (! l.rosterAckPending || ! rosterReady (l.pendingRoster)) return;
+        auto ack = controlHeader (c::Kind::rosterAck);
+        ack.seq = l.rosterSeq; ack.rosterRevision = l.pendingRoster.revision;
+        sendV2Control (l, ack);
+        l.acknowledged = l.pendingRoster; l.rosterAckPending = false;
+        l.txV2 = l.rxV2 = true; publishLink (l); linkState (l, State::connected);
+    }
     void sendRoster (Link& l, uint64_t now)
     {
+        // A guest can start sending at the advertised revision as soon as it ACKs.
+        // Keep every existing link on its last ACK until our own audio table is installed too.
+        if (! rosterReady (roster)) return;
         if (l.pendingRoster.revision != roster.revision)
         {
             l.pendingRoster = roster; l.rosterSeq = ++controlSeq;
@@ -564,9 +581,8 @@ struct CollabTransport::Impl
                 if (restartEpoch == epoch) restartEpoch = 0;
                 notifyRoster();
             }
-            auto ack = controlHeader (c::Kind::rosterAck); ack.seq = h.seq; ack.rosterRevision = h.rosterRevision;
-            sendV2Control (l, ack);
-            l.acknowledged = roster; l.txV2 = l.rxV2 = true; publishLink (l); linkState (l, State::connected);
+            l.pendingRoster = roster; l.rosterSeq = h.seq; l.rosterAckPending = true;
+            acknowledgeInstalledRoster (l);
         }
         else if (h.kind == c::Kind::rosterAck)
         {
@@ -659,6 +675,7 @@ struct CollabTransport::Impl
         for (auto& l : links)
         {
             if (! l.enabled) continue;
+            if (! starHost) acknowledgeInstalledRoster (l);
             if ((! l.txV2 && now - l.started >= 10000000000ULL)
                 || (l.txV2 && l.lastReceived != 0 && now - l.lastReceived >= 3000000000ULL))
             { leaveLink (l, State::disconnected); continue; }

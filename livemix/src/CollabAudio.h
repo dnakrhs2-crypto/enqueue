@@ -43,6 +43,8 @@ public:
     ObsSender& getPeerObs (unsigned slotIndex) noexcept;
     CollabPlayout::Stats getStats() const noexcept { return getStats (0); }
     CollabPlayout::Stats getStats (unsigned slotIndex) const noexcept;
+    // Cumulative valid-session packets rejected before their roster was installed.
+    uint64_t getFutureRevisionDrops() const noexcept { return futureRevisionDrops.load(); }
     void rebuffer() noexcept;
     double getDeviceRate() const noexcept { return publishedRate.load(); }
     struct Meter { float left = 0, right = 0; };
@@ -56,6 +58,7 @@ public:
     void receive (const Header&, const uint8_t*, uint64_t arrivalNs) noexcept;
     void receiveV2 (const contracts::HeaderV2&, const uint8_t*, uint64_t arrivalNs) noexcept;
     void applyRoster (const RosterSnapshot&, contracts::ParticipantId selfId); // control thread; already validated by R3
+    bool hasInstalledRoster (uint64_t session, contracts::Revision) const noexcept;
     void drain (const CollabSender::Sink&);
     void setConnected (bool value) noexcept;
     void* getSendEvent() const noexcept { return sender.getEvent(); }
@@ -73,6 +76,7 @@ private:
                         bool alreadyRouted, int offset) noexcept;
     CollabTransport* transport = nullptr; // lifecycle only
     std::atomic<bool> ready { false }, attached { false }, connected { false };
+    std::atomic<uint64_t> futureRevisionDrops { 0 };
     mutable std::atomic<unsigned> readers { 0 };
     juce::CriticalSection lifecycle;
     CollabSender sender;

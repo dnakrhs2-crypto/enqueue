@@ -355,6 +355,7 @@ int drive (const juce::File& configFile)
             root->setProperty ("frame", (juce::int64) clock.frame.load());
             root->setProperty ("lateBlocks", clock.lateBlocks.load()); root->setProperty ("ringReadErrors", clock.ringErrors.load());
             root->setProperty ("commandId", commandId); root->setProperty ("takes", takes);
+            root->setProperty ("futureRevisionDrops", (juce::int64) engine.getCollab().getFutureRevisionDrops());
             save (output.getChildFile ("status.json"), result);
         }
         if (! stopping) { code = 3; root->setProperty ("error", "driver deadline"); }

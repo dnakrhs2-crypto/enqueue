@@ -72,6 +72,9 @@ public:
         std::function<void(const contracts::HeaderV2&, const uint8_t*, uint64_t)> onAudio;
         std::function<void(const RosterSnapshot&)> onRoster;
         std::function<void(contracts::ParticipantId, State)> onPeerState;
+        // An asynchronous onRoster consumer supplies this nonblocking publication check.
+        // Without it, onRoster completes installation before returning.
+        std::function<bool(const RosterSnapshot&)> isRosterInstalled;
     };
     void configureV2 (contracts::ParticipantId self, const RosterSnapshot&,
                       const std::vector<V2Peer>&, V2Callbacks); // before startHost/startGuest
