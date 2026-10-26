@@ -34,6 +34,10 @@ main 769d1b7d = LiveMix 0.16.0에서 분기).
     같은 방식(사람마다)으로 맞춘다(결정 5 갱신, gom DM post g1zrnonp1pgazgcwy16bxyqcie로 알림 → 원문 21로 확정).
 21. "웹참여 페이지 : A 라이브믹스 합방 창도 A로 해" — 위치 비교 `mock\webvol2.png`에서 웹·합방 창 모두 **A안(사람 줄 안에
     슬라이더·%)**. 합방 창도 사람별 음량으로 확정.
+22. "ㅇㅇ 다좋아 근데 도메인을 곰튀김.com 이런걸로 쓰지말고 영문만 나오게해" — 웹 참여 주소(합방 창 초대 주소·QR·웹 페이지
+    주소창)는 **영문 도메인만**. 퓨니코드(xn--jb0byyo90f.com)로 열어도 크롬 주소창엔 곰튀김.com이 보이므로 진짜 영문 도메인이 필요 →
+    gom DM post r1srh7s58tft5yaojf6ywk8efo: ① livemix.kr 구매(추천, 10/26 RDAP·DNS 조회 미등록) ② 퓨니코드 ③ github.io 기본 주소.
+    답 전 ①번 기준 준비(결정 10의 페이지 위치·계약 §4 주소·방 서버 허용 출처를 결정 뒤 함께 바꾼다). 곰튀김.com 사이트 자체는 그대로.
 
 ## 결정 (gom 승인 — 바꾸지 말 것)
 
@@ -60,7 +64,8 @@ main 769d1b7d = LiveMix 0.16.0에서 분기).
    LiveMix 3명 방(약 10.2Mbps)보다 적은 약 9.1Mbps). 웹 사용자 모노 목소리는 다른 사람에게 가운데(좌우 같게)로 들린다.
 9. **전송 = WebRTC 데이터 채널(순서 무시·재전송 없음) + 무압축 PCM.** 브라우저 기본 통화 기능(오디오 트랙·Opus)은 쓰지 않는다
    (크롬·엣지가 스테레오를 모노로 받는 문제). 방장 LiveMix 쪽 라이브러리 = libdatachannel(MPL-2.0, 미디어 기능 없이).
-10. **웹 페이지는 곰튀김.com(LiveMix 공식 사이트, 저장소 `site/`, GitHub Pages HTTPS)의 `/livemix/join/`** 에 둔다
+10. (원문 22로 바뀜 — 웹 참여 주소는 영문 도메인, 결정 대기. 아래는 그 전 결정)
+    **웹 페이지는 곰튀김.com(LiveMix 공식 사이트, 저장소 `site/`, GitHub Pages HTTPS)의 `/livemix/join/`** 에 둔다
     (브라우저 마이크는 보안 주소에서만 켜짐, gom 원문 15). 초대 링크 = `https://곰튀김.com/livemix/join/#…`(QR은 퓨니코드
     `xn--jb0byyo90f.com`). 시그널링 API는 유튜브다운.com 방 서버 그대로 — 페이지가 뒤에서 다른 출처로 부르므로 CORS 허용(곰튀김.com
     출처만). GitHub Pages는 응답 헤더를 못 정하므로 교차 출처 격리(SharedArrayBuffer)는 기대하지 않는다. 소리는 방장 PC로 직접.
