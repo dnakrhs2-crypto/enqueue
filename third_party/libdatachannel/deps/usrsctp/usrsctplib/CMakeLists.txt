@@ -216,5 +216,9 @@ install(FILES usrsctp.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 # GENERATE AND INSTALL PKG-CONFIG FILE
 #################################################
 
-configure_file("${PROJECT_SOURCE_DIR}/usrsctp.pc.in" "${CMAKE_CURRENT_BINARY_DIR}/usrsctp.pc" @ONLY)
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/usrsctp.pc" DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+# LiveMix vendors the library sources only; the pkg-config template is omitted.
+# This metadata is not needed by the in-tree Windows static-library consumer.
+if(EXISTS "${PROJECT_SOURCE_DIR}/usrsctp.pc.in")
+    configure_file("${PROJECT_SOURCE_DIR}/usrsctp.pc.in" "${CMAKE_CURRENT_BINARY_DIR}/usrsctp.pc" @ONLY)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/usrsctp.pc" DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+endif()
