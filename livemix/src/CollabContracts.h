@@ -106,8 +106,9 @@ struct WebConnection
     std::uint32_t wireRate = defaultWireRate;
 };
 
-inline constexpr char webOrigin[] = "https://xn--jb0byyo90f.com";
-inline constexpr char joinPath[] = "/livemix/join/";
+// Web join page: GitHub Pages default address, English only (gom 10/26). Repo dnakrhs2-crypto/livemix-join, no CNAME.
+inline constexpr char webOrigin[] = "https://dnakrhs2-crypto.github.io";
+inline constexpr char joinPath[] = "/livemix-join/";
 inline constexpr char apiBase[] = "https://xn--2j1bo5s81gjmag88b.com/api/livemix/collab/";
 inline constexpr char dataChannelLabel[] = "livemix-audio-v2";
 inline constexpr char dataChannelProtocol[] = "livemix-pcm-v2";
