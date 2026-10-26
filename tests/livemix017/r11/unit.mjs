@@ -95,7 +95,8 @@ await test("error codes map to the few approved sentences", () => {
   const groups = [
     [ERROR_TEXT, ["invite", "closed", "invalidated", "expired", "ended", "error", "token", "bad_response",
       "audio", "worker", "unknown", undefined]],
-    ["마이크를 쓸 수 없습니다.", ["microphone_denied", "microphone_missing", "microphone_busy",
+    ["마이크 권한이 없습니다.", ["microphone_denied"]],
+    ["마이크를 쓸 수 없습니다.", ["microphone_missing", "microphone_busy",
       "microphone_constraints", "microphone", "microphone_ended", "microphone_required"]],
     ["방이 꽉 찼습니다.", ["full", "web_full"]],
     ["방장이 거절했습니다.", ["rejected"]],

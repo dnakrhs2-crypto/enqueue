@@ -31,7 +31,8 @@ export function createPreferences(storage = () => window.localStorage) {
 // Only failures people hit in normal use get their own sentence; everything else keeps the §10 sentence.
 // Never display Error.message, transport data or a server-provided explanation.
 const ERROR_GROUPS = [
-  ["마이크를 쓸 수 없습니다.", ["microphone_denied", "microphone_missing", "microphone_busy", "microphone_constraints",
+  ["마이크 권한이 없습니다.", ["microphone_denied"]],
+  ["마이크를 쓸 수 없습니다.", ["microphone_missing", "microphone_busy", "microphone_constraints",
     "microphone", "microphone_ended", "microphone_required"]],
   ["방이 꽉 찼습니다.", ["full", "web_full"]],
   ["방장이 거절했습니다.", ["rejected"]],

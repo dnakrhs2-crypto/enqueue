@@ -21,7 +21,8 @@ MOCK = Path(r"C:\Users\claude\tools\claude_harness\lm_webrec\mock\webguest.html"
 ERROR = "초대 주소가 바뀌었거나 방이 닫혔습니다."
 MIC_ERROR, FULL_ERROR, REJECTED_ERROR, CONNECTION_ERROR = ("마이크를 쓸 수 없습니다.", "방이 꽉 찼습니다.",
                                                            "방장이 거절했습니다.", "연결하지 못했습니다.")
-ERROR_FOR = {"network": CONNECTION_ERROR, "microphone_denied": MIC_ERROR, "microphone_missing": MIC_ERROR,
+PERMISSION_ERROR = "마이크 권한이 없습니다."
+ERROR_FOR = {"network": CONNECTION_ERROR, "microphone_denied": PERMISSION_ERROR, "microphone_missing": MIC_ERROR,
              "microphone_busy": MIC_ERROR, "web_full": FULL_ERROR, "full": FULL_ERROR, "rejected": REJECTED_ERROR}
 NICKNAME_KEY = "livemix.webjoin.nickname"
 VOLUME_PREFIX = "livemix.webjoin.volume."
@@ -30,7 +31,7 @@ STATES = ("entry", "waiting", "connected", "error")
 SIZES = {"phone": (390, 760), "pc": (960, 600)}
 COPY = ["ON", "LiveMix", "닉네임", "마이크", "헤드폰을 쓰고 들어오세요.", "들어가기",
         "방장이 수락하면 연결됩니다", "취소", "연결됨", "마이크 ON", "마이크 OFF", "나가기", ERROR,
-        MIC_ERROR, FULL_ERROR, REJECTED_ERROR, CONNECTION_ERROR]
+        MIC_ERROR, FULL_ERROR, REJECTED_ERROR, CONNECTION_ERROR, PERMISSION_ERROR]
 
 
 class Handler(SimpleHTTPRequestHandler):
