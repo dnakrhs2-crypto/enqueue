@@ -3,6 +3,7 @@
 #include <juce_core/juce_core.h>
 #include <array>
 #include <cstdint>
+#include "CollabContracts.h"
 
 namespace gocue::livemix::collab
 {
@@ -52,4 +53,25 @@ size_t writePeerInfo (uint8_t* destination, const PeerInfo&);
 bool readPeerInfo (const uint8_t* source, size_t bytes, PeerInfo&);
 void writeTimestamp (uint8_t* destination, uint64_t ns) noexcept;
 uint64_t readTimestamp (const uint8_t* source) noexcept;
+
+// v2 is deliberately separate: the v1 codec and hello/welcome bytes are unchanged.
+bool validHeaderV2 (const contracts::HeaderV2&) noexcept;
+size_t writePacketV2 (uint8_t*, size_t capacity, const contracts::HeaderV2&, const void* payload) noexcept;
+bool readPacketV2 (const void*, size_t bytes, contracts::HeaderV2&, const uint8_t*& payload) noexcept;
+void packPcm16 (uint8_t*, const float* mono, int frames) noexcept;
+void unpackPcm16 (const uint8_t*, float* mono, int frames) noexcept;
+struct OfferV2
+{
+    uint32_t capabilities = 0, wireRate = defaultWireRate;
+    contracts::ParticipantId peerParticipantId = 0;
+    contracts::ConnectionGeneration connectionGeneration = 0;
+};
+struct StreamRestartV2
+{
+    uint32_t deviceRate = defaultWireRate, inputLatencyUs = 0, outputLatencyUs = 0;
+};
+size_t writeOfferV2 (uint8_t*, size_t capacity, const OfferV2&) noexcept;
+bool readOfferV2 (const uint8_t*, size_t bytes, OfferV2&) noexcept;
+size_t writeStreamRestartV2 (uint8_t*, size_t capacity, const StreamRestartV2&) noexcept;
+bool readStreamRestartV2 (const uint8_t*, size_t bytes, StreamRestartV2&) noexcept;
 }

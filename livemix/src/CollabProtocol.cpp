@@ -119,4 +119,104 @@ bool readPeerInfo (const uint8_t* p, size_t bytes, PeerInfo& info)
 }
 void writeTimestamp (uint8_t* p, uint64_t ns) noexcept { put (p, ns, 8); }
 uint64_t readTimestamp (const uint8_t* p) noexcept { return get (p, 8); }
+
+bool validHeaderV2 (const contracts::HeaderV2& h) noexcept
+{
+    using K = contracts::Kind;
+    using F = contracts::Flags;
+    if (h.session == 0 || h.origin == 0 || h.linkSender == 0
+        || h.payloadBytes > contracts::maxPacketBytes - contracts::v2HeaderBytes) return false;
+    if (h.kind == K::audio)
+        return h.frames == framesPerPacket && h.firstFrame % framesPerPacket == 0 && h.streamEpoch != 0 && h.rosterRevision != 0
+            && ((h.flags == F::stereoPcm24 && h.payloadBytes == contracts::stereoPcm24Bytes)
+                || (h.flags == F::monoPcm16 && h.payloadBytes == contracts::monoPcm16Bytes));
+    if (h.flags != F::none || h.frames != 0 || h.firstFrame != 0 || h.origin != h.linkSender) return false;
+    if (h.kind == K::streamRestart) return h.streamEpoch > 1 && h.payloadBytes == 12 && h.rosterRevision != 0;
+    if (h.streamEpoch != 0) return false;
+    switch (h.kind)
+    {
+        case K::ping: case K::pong: return h.payloadBytes == 8;
+        // A peer may cancel or ping before its first roster is installed (revision 0).
+        case K::bye: case K::punch: return h.payloadBytes == 0;
+        case K::rosterAck: return h.payloadBytes == 0 && h.rosterRevision != 0;
+        case K::offer: case K::offerAck: return h.payloadBytes == 16 && h.rosterRevision != 0;
+        case K::roster: return h.payloadBytes >= 39 && h.payloadBytes <= 674 && h.rosterRevision != 0;
+        default: return false;
+    }
+}
+
+size_t writePacketV2 (uint8_t* p, size_t capacity, const contracts::HeaderV2& h, const void* payload) noexcept
+{
+    const size_t bytes = contracts::v2HeaderBytes + h.payloadBytes;
+    if (p == nullptr || capacity < bytes || ! validHeaderV2 (h) || (h.payloadBytes != 0 && payload == nullptr)) return 0;
+    put (p, magic, 4); p[4] = 2; p[5] = (uint8_t) h.kind;
+    put (p + 6, (uint16_t) h.flags, 2); put (p + 8, h.session, 8); put (p + 16, h.origin, 4);
+    put (p + 20, h.seq, 4); put (p + 24, h.firstFrame, 8); put (p + 32, h.frames, 2); put (p + 34, h.payloadBytes, 2);
+    put (p + 36, h.linkSender, 4); put (p + 40, h.streamEpoch, 4); put (p + 44, h.rosterRevision, 4);
+    if (h.payloadBytes != 0) std::memcpy (p + contracts::v2HeaderBytes, payload, h.payloadBytes);
+    return bytes;
+}
+
+bool readPacketV2 (const void* data, size_t bytes, contracts::HeaderV2& result, const uint8_t*& payload) noexcept
+{
+    payload = nullptr;
+    if (data == nullptr || bytes < contracts::v2HeaderBytes || bytes > contracts::maxPacketBytes) return false;
+    const auto* p = static_cast<const uint8_t*> (data);
+    if (get (p, 4) != magic || p[4] != 2) return false;
+    contracts::HeaderV2 h;
+    h.kind = (contracts::Kind) p[5]; h.flags = (contracts::Flags) get (p + 6, 2); h.session = get (p + 8, 8);
+    h.origin = (uint32_t) get (p + 16, 4); h.seq = (uint32_t) get (p + 20, 4); h.firstFrame = get (p + 24, 8);
+    h.frames = (uint16_t) get (p + 32, 2); h.payloadBytes = (uint16_t) get (p + 34, 2);
+    h.linkSender = (uint32_t) get (p + 36, 4); h.streamEpoch = (uint32_t) get (p + 40, 4);
+    h.rosterRevision = (uint32_t) get (p + 44, 4);
+    if (! validHeaderV2 (h) || bytes != contracts::v2HeaderBytes + h.payloadBytes) return false;
+    result = h; payload = p + contracts::v2HeaderBytes;
+    return true;
+}
+
+void packPcm16 (uint8_t* p, const float* mono, int frames) noexcept
+{
+    for (int i = 0; i < frames; ++i, p += 2)
+    {
+        const double sample = mono != nullptr ? mono[i] : 0.0;
+        const auto value = (int32_t) std::llround (std::clamp (std::isfinite (sample) ? sample : 0.0, -1.0, 32767.0 / 32768.0) * 32768.0);
+        put (p, (uint32_t) value, 2);
+    }
+}
+void unpackPcm16 (const uint8_t* p, float* mono, int frames) noexcept
+{
+    for (int i = 0; i < frames; ++i, p += 2)
+    {
+        const auto u = (uint32_t) get (p, 2);
+        mono[i] = (float) ((int32_t) (u & 0x7fff) - (int32_t) (u & 0x8000)) / 32768.0f;
+    }
+}
+size_t writeOfferV2 (uint8_t* p, size_t capacity, const OfferV2& offer) noexcept
+{
+    if (p == nullptr || capacity < 16 || ! isValidWireRate (offer.wireRate)
+        || offer.peerParticipantId == 0 || offer.connectionGeneration == 0) return 0;
+    put (p, offer.capabilities & contracts::allCapabilities, 4); put (p + 4, offer.wireRate, 4);
+    put (p + 8, offer.peerParticipantId, 4); put (p + 12, offer.connectionGeneration, 4);
+    return 16;
+}
+bool readOfferV2 (const uint8_t* p, size_t bytes, OfferV2& result) noexcept
+{
+    if (p == nullptr || bytes != 16) return false;
+    OfferV2 offer { (uint32_t) get (p, 4) & contracts::allCapabilities, (uint32_t) get (p + 4, 4),
+                    (uint32_t) get (p + 8, 4), (uint32_t) get (p + 12, 4) };
+    if (! isValidWireRate (offer.wireRate) || offer.peerParticipantId == 0 || offer.connectionGeneration == 0) return false;
+    result = offer; return true;
+}
+size_t writeStreamRestartV2 (uint8_t* p, size_t capacity, const StreamRestartV2& restart) noexcept
+{
+    if (p == nullptr || capacity < 12 || restart.deviceRate == 0) return 0;
+    put (p, restart.deviceRate, 4); put (p + 4, restart.inputLatencyUs, 4); put (p + 8, restart.outputLatencyUs, 4);
+    return 12;
+}
+bool readStreamRestartV2 (const uint8_t* p, size_t bytes, StreamRestartV2& result) noexcept
+{
+    if (p == nullptr || bytes != 12 || get (p, 4) == 0) return false;
+    result = { (uint32_t) get (p, 4), (uint32_t) get (p + 4, 4), (uint32_t) get (p + 8, 4) };
+    return true;
+}
 }
