@@ -6,7 +6,8 @@
 아스트라 기술 설계 `C:/Users/claude/tools/claude_harness/lm_collab/webrec_design_OUT.md`는 근거이며,
 그 안의 유튜브다운 정적 페이지·COOP/COEP·SharedArrayBuffer·단일 합본 녹음 제안은 적용하지 않는다.
 화면 기준은 `C:/Users/claude/tools/claude_harness/lm_webrec/mock/`의 네 HTML/PNG와 `webrec.css`다.
-시안의 옛 URL만 최종 대표 결정의 곰튀김.com으로 대체한다. R0는 기능 구현이나 버전 상승을 하지 않는다.
+웹 참여 주소는 최종 대표 결정(설계서 원문 23)의 `https://dnakrhs2-crypto.github.io/livemix-join/`이다(시안 글자도 이 주소).
+R0는 기능 구현이나 버전 상승을 하지 않는다.
 
 이 문서의 수치·식별자·함수 모양은 후속 회차의 연결 기준이다. 계획에 없던 세부 선택은
 끝의 **클로드 확인 필요**에 모았다. 변경이 필요하면 자기 회차에서 상대 회차 파일까지 고치지 말고
@@ -416,9 +417,10 @@ legacy 요청이 사용하던 오류의 status/body/순서를 유지한다. 새 
 브라우저 요청은 `fetch(api, {method:"POST",headers:{"Content-Type":"text/plain"},
 body:JSON.stringify(body),credentials:"omit"})`다. application/json, Authorization,
 사용자 정의 header를 추가하지 않는다. **OPTIONS 사전 요청은 필요하지 않으며 web_server.py 변경도 없다.**
-모든 성공/오류 응답에서 요청 `Origin`이 정확히 `https://xn--jb0byyo90f.com`일 때만
-`Access-Control-Allow-Origin: https://xn--jb0byyo90f.com`을 붙인다.
-와일드카드, 접미사 비교, 유니코드 도메인 비교, http, 다른 포트, `null`은 허용하지 않는다.
+모든 성공/오류 응답에서 요청 `Origin`이 정확히 `https://dnakrhs2-crypto.github.io`일 때만
+`Access-Control-Allow-Origin: https://dnakrhs2-crypto.github.io`를 붙인다(설계서 원문 23 — 웹 참여 페이지가 GitHub Pages 기본 주소).
+와일드카드, 접미사 비교, http, 다른 포트, `null`은 허용하지 않는다. 이 출처는 같은 계정의 다른 Pages 프로젝트와 같으며,
+CORS는 인증이 아니므로 그대로 둔다(막는 것은 역할별 토큰 검사).
 허용 Origin에는 `Vary: Origin`도 붙일 수 있다. Origin 없음/다른 값에는 ACAO와 credentials 허용 헤더를
 붙이지 않는다. Origin 없는 기존 네이티브 응답은 기존 헤더 그대로다.
 웹 요청은 IPv4/IPv6 모두 받고 `_public_ip()` IPv4 강제를 공유하지 않는다.
@@ -457,8 +459,8 @@ R0는 이 CMake 연결을 하지 않는다.
 초대 URL은 아래 fragment 파라미터를 고정한다. code/token은 API 본문에서만 전송하고 페이지 경로/query에는 넣지 않는다.
 
 ```text
-표시·복사: https://곰튀김.com/livemix/join/#v=2&code=4827&invite=<hex64>&generation=1
-QR payload: https://xn--jb0byyo90f.com/livemix/join/#v=2&code=4827&invite=<hex64>&generation=1
+표시·복사·QR payload(모두 같은 영문 주소, 설계서 원문 22·23):
+https://dnakrhs2-crypto.github.io/livemix-join/#v=2&code=4827&invite=<hex64>&generation=1
 ```
 
 URL을 열 때만 v=2, code ASCII4, invite hex64, generation 양의 u32를 파싱한다.
@@ -472,7 +474,9 @@ R1/R6는 실제 Chrome/Edge에서 협상값과 경로를 기록해야 하며 R0�
 
 ## 5. 웹 파일과 스레드 경계
 
-사이트 root는 `site/livemix/join/`. 외부 CDN·별도 시험용 버즈 페이지를 추가하지 않는다.
+웹 참여 페이지 소스 root는 이 저장소의 `livemix/webjoin/`이다(설계서 원문 23). 배포는 공개 저장소 `dnakrhs2-crypto/livemix-join`의
+main 루트를 GitHub Pages로(CNAME 없음) = `https://dnakrhs2-crypto.github.io/livemix-join/`, 배포 도구는 R13. 곰튀김.com 사이트(`site/`)에는
+두지 않는다. 외부 CDN·별도 시험용 버즈 페이지를 추가하지 않는다.
 파일 import는 상대 URL, JS는 ES module, Worker는 `{type:"module"}`.
 
 | 파일(이 prefix 아래) | 소유 | 역할 |
@@ -1044,12 +1048,12 @@ R8은 앱, R7은 플러그인, R9는 두 쪽에 같은 resolved name을 주는 �
 | R3 | `livemix/src/CollabProtocol.{h,cpp}`, `livemix/src/CollabTransport.{h,cpp}`, `livemix/src/CollabRoster.{h,cpp}` | 기존 `tests/LiveMixCollabProtocolTests.cpp`, `tests/LiveMixCollabTransportTests.cpp`; 새 `tests/LiveMixCollabRosterTests.cpp`, `tests/LiveMixCollabV2Tests.cpp`; `tests/livemix017/R3.cmake` | `cmake/livemix017/R3.cmake` |
 | R4 | `livemix/src/CollabAudio.{h,cpp}`, `livemix/src/CollabPlayout.{h,cpp}`, `livemix/src/CollabSender.{h,cpp}` | 기존 `tests/LiveMixCollabPlayoutTests.cpp`, `tests/LiveMixCollabSenderTests.cpp`; 새 `tests/LiveMixCollabSourcesTests.cpp`; `tests/livemix017/R4.cmake` | `cmake/livemix017/R4.cmake` |
 | R5 | `livemix/src/recording/Recorder.{h,cpp}`, `RecordingQueue.{h,cpp}`, `WavSink.{h,cpp}`, `MfMp3Sink.{h,cpp}`, `RecordingRecovery.{h,cpp}`(모두 같은 recording/ 안); `livemix/tools/RecorderProbe.cpp` | `tests/LiveMixRecorderTests.cpp`, `tests/LiveMixWavSinkTests.cpp`, `tests/LiveMixMp3SinkTests.cpp`; `tests/livemix017/r5/` 전체(파일 fixture/검사); `tests/livemix017/R5.cmake` | `cmake/livemix017/R5.cmake` |
-| R6 | §5의 `site/livemix/join/guest-client.js`, `signaling.js`, `audio/` 전체 | `tests/livemix017/r6/` 전체(JS codec/ASRC/브라우저 오디오 시험과 진입 HTML); `tests/livemix017/R6.cmake` | `cmake/livemix017/R6.cmake` |
+| R6 | §5의 `livemix/webjoin/guest-client.js`, `signaling.js`, `audio/` 전체 | `tests/livemix017/r6/` 전체(JS codec/ASRC/브라우저 오디오 시험과 진입 HTML); `tests/livemix017/R6.cmake` | `cmake/livemix017/R6.cmake` |
 | R7 | `obs-plugin/src/` 전체; `obs-plugin/data/locale/ko-KR.ini`, `en-US.ini`; `obs-plugin/CMakeLists.txt`, `obs-plugin/buildspec.json`; `livemix/src/ObsMetadata.{h,cpp}` | `tests/LiveMixObsMetadataTests.cpp`; `tests/livemix017/r7/` 전체(플러그인 2자리 검사); `tests/livemix017/R7.cmake` | `cmake/livemix017/R7.cmake` + OBS 자체 CMake |
 | R8 | `livemix/src/MixEngine.{h,cpp}`, `CollabSession.{h,cpp}`, `Main.cpp`, `LiveMixSettings.{h,cpp}`(모두 livemix/src/ 안) | 기존 `tests/LiveMixCollabSessionTests.cpp`, `tests/LiveMixCollabEngineTests.cpp`, `tests/LiveMixCollabTestHelpers.h`; 새 `tests/LiveMixRecordingEngineTests.cpp`, `tests/LiveMixRecordingSettingsTests.cpp`; `tests/livemix017/R8.cmake` | `cmake/livemix017/R8.cmake` |
 | R9 | `tools/lm_collab017/` 전체(오디오 행렬 runner·브라우저 구동·파일 검사·CPU 측정·fixture·README); `livemix/tools/CollabProbe.cpp` | 기존 `tests/LiveMixTransportProbeTests.cpp`; `tests/livemix017/r9/` 전체; `tests/livemix017/R9.cmake` | `cmake/livemix017/R9.cmake` |
 | R10 | `livemix/src/ui/MasterCard.{h,cpp}`, `CollabWindow.{h,cpp}`, `MainComponent.{h,cpp}`, `RecordingWindow.{h,cpp}`(모두 ui/ 안) | 기존 `tests/MasterCardTests.cpp`, `tests/LiveMixCollabWindowTests.cpp`; 새 `tests/LiveMixRecordingWindowTests.cpp`; `tests/livemix017/R10.cmake` | `cmake/livemix017/R10.cmake` |
-| R11 | `site/livemix/join/index.html`, `join.css`, `app.js` | `tests/livemix017/r11/` 전체(화면·접속 흐름 시험); `tests/livemix017/R11.cmake` | `cmake/livemix017/R11.cmake` |
+| R11 | `livemix/webjoin/index.html`, `join.css`, `app.js` | `tests/livemix017/r11/` 전체(화면·접속 흐름 시험); `tests/livemix017/R11.cmake` | `cmake/livemix017/R11.cmake` |
 
 R0 고정 파일: 이 계약, `livemix/src/CollabContracts.h`, `livemix/shared/lm_obs_metadata.h`,
 `livemix/src/recording/RecordingTypes.h`, `tests/CMakeLists.txt`의 dispatcher,
@@ -1168,3 +1172,7 @@ R9 이후 실제 다른 PC 연결은 갱신된 설계/계획에 따라 **이 PC 
    방장 쪽은 R3 `setWebLink`, R4 `setSlotMonitorVolume`, R8 `setPersonMonitorVolume`·`collabPersonVolumes`(§6, §7 설정 표).
    방장 합방 창도 사람별(설계서 결정 5)이며 위치는 웹·합방 창 모두 A안(원문 21 "웹참여 페이지 : A 라이브믹스 합방 창도 A로 해").
    이미 돌고 있는 R1·R2·R5는 이 변경과 겹치는 소유 파일이 없다(R1 채널·검사 도구는 패킷 내용과 무관, R2 서버·R5 녹음 그대로).
+5. **웹 참여 주소 = 영문(설계서 원문 22·23):** `https://dnakrhs2-crypto.github.io/livemix-join/`(공개 저장소 `dnakrhs2-crypto/livemix-join`,
+   Pages main 루트, CNAME 없음 — 10/26 확인: 계정 사용자 사이트가 없어 그 주소로 서빙됨). `CollabContracts.h` webOrigin/joinPath,
+   §3 CORS 허용 출처, §4 초대 주소, §5 소스 root `livemix/webjoin/`, §9 R6·R11 경로를 바꿨다. 표시·복사·QR이 같은 ASCII 주소라
+   퓨니코드 변환이 없다. 돌고 있던 R2의 방 서버 `WEB_ORIGIN`·시험의 옛 출처 문자열은 클로드가 합칠 때 이 값으로 바꾼다.

@@ -26,11 +26,13 @@
    발화자 ID로 전달. ~~방장의 웹용 믹스 = 내 마스터 + 다른 LiveMix 참가자 재생 결과(헤드폰 음량 전).~~ **(10/26 gom 원문 20
    "사람별 조절로 확정")** 웹용 믹스는 없애고 방장 자기 패킷 + 다른 LiveMix 원본 전달을 LiveMix 참가자와 똑같이 웹에도 보낸다
    → 웹이 사람마다 재생·음량·섞기(계약 §2.4·§4·§5). 방장 합방 창 '상대방 음량'도 사람마다(설계서 결정 5, 계약 §6.1·§6.2).
-4. **★클로드 조정 — 웹 페이지 위치(gom 원문 15):** 페이지는 **곰튀김.com `/livemix/join/`** = 저장소 `site/livemix/join/`
-   (GitHub Pages, 앱과 같은 배포). 아스트라 설계의 유튜브다운 정적 경로·COOP/COEP·SharedArrayBuffer는 **쓰지 않는다**(GitHub Pages는
+4. **★웹 페이지 위치(gom 원문 15 → 10/26 원문 22·23 "영문만", "3번으로 가자 깃허브아이디 보여도 됨"):** 페이지는
+   **`https://dnakrhs2-crypto.github.io/livemix-join/`** = 공개 저장소 `dnakrhs2-crypto/livemix-join`(GitHub Pages main 루트, CNAME 없음),
+   소스는 이 저장소 `livemix/webjoin/`, 배포는 앱과 같은 때 R13 도구로(곰튀김.com `site/`에는 두지 않음).
+   아스트라 설계의 유튜브다운 정적 경로·COOP/COEP·SharedArrayBuffer는 **쓰지 않는다**(GitHub Pages는
    헤더를 못 정함). 대신: AudioWorklet ↔ Worker는 `MessageChannel` 포트를 넘겨 직접 연결(메인 스레드를 거치지 않음), 데이터 채널은 Worker로
    넘길 수 있으면 넘기고 아니면 메인 스레드 중계. 시그널링 API(유튜브다운.com)는 **`Content-Type: text/plain`의 POST**(사전 요청 없는 단순
-   요청)로 부르고, 서버는 `Origin`이 `https://xn--jb0byyo90f.com`일 때만 `Access-Control-Allow-Origin`을 붙인다(→ `web_server.py`
+   요청)로 부르고, 서버는 `Origin`이 `https://dnakrhs2-crypto.github.io`일 때만 `Access-Control-Allow-Origin`을 붙인다(→ `web_server.py`
    변경 불필요). 웹 요청은 IPv6여도 막지 않는다(네이티브 주소 교환 규칙과 분리).
 5. **★클로드 조정 — 녹음 사람별 파일(gom 원문 16):** 합방 중 녹음 시작이면 폴더 하나(`LiveMix 녹음\2026-10-26_14-05-33\`)에
    `A_<내 닉네임>`, `B_<합방 상대 1 닉네임>`, `C_<합방 상대 2 닉네임>`, `D_전체` (자리가 비었으면 `B_합방상대1`처럼), 확장자 .wav/.mp3.
@@ -71,13 +73,13 @@
 | R2 | 방 서버(`server/ytdown/livemix_collab.py`·시험) + CORS(곰튀김 출처) + `CollabRoom.*` 확장 + `WebGuestSignaling.*` | R0 뒤, R1·R5와 동시 | 3~4 |
 | R5 | `livemix/src/recording/*` + `livemix/tools/RecorderProbe.cpp` + 시험 | R0 뒤, R1·R2와 동시 | 3~4 |
 | R3 | 네이티브 v2·별 연결: `CollabProtocol.*`·`CollabTransport.*`·roster + 웹 링크(`setWebLink`: 방장 자기 패킷·native 원본을 웹에도, 원문 20) | R2 연동 뒤, R6·R7과 동시 | 3~4 |
-| R6 | 웹 오디오 엔진 `site/livemix/join/` 의 audio·worker·worklet·packet 코드 + 시험 진입점 — 받는 사람마다 재생기·ASRC, `setPeerVolume(participantId, gain)`(원문 20) | R1/R2 연동, R3·R7과 동시 | 3~4 |
+| R6 | 웹 오디오 엔진 `livemix/webjoin/` 의 audio·worker·worklet·packet 코드 + 시험 진입점 — 받는 사람마다 재생기·ASRC, `setPeerVolume(participantId, gain)`(원문 20) | R1/R2 연동, R3·R7과 동시 | 3~4 |
 | R7 | OBS 두 자리·메타데이터 `obs-plugin/src/*`·locale·`lm_obs_metadata.h`·작성기 | R0 뒤, R3·R6과 동시 | 1~2 |
 | R4 | 사람별 오디오 `CollabAudio.*`·`CollabPlayout.*`·`CollabSender.*` + 자리마다 헤드폰 음량(`setSlotMonitorVolume`) | R3 뒤 | 2~3 |
 | R8 | 앱 통합 `MixEngine.*`·`CollabSession.*`·`Main.cpp`·`LiveMixSettings.*`·공통 CMake + 사람별 상대 음량(`setPersonMonitorVolume`, 닉네임별 기억)·웹 링크 연결 | R1~R7 뒤 단독 | 2~3 |
 | R9 | 자동 종단 도구 `tools/lm_collab017/*`·`CollabProbe.cpp` 확장·파일 검사기 | R8 뒤, R10·R11과 동시 | 2~3 |
 | R10 | 앱 화면(시안 확정됨): `MasterCard.*`(녹음 버튼 A안)·`CollabWindow.*`·`MainComponent.*`·새 녹음 창 + 합방 창 **사람별 상대방 음량**(원문 20·21, A안: 사람 줄마다 아래 줄에 슬라이더·% — 확정 시안 `collab3.html` ③④) | R8 뒤, R9·R11과 동시 | 2~3 |
-| R11 | 웹 화면(시안 확정됨): `site/livemix/join/index.html`·CSS·접속 흐름 + **사람별 상대방 음량**(gom 10/26 원문 18·20·21, A안: 사람 줄마다 둘째 줄에 슬라이더·% — 확정 시안 `webguest.html` ③, 닉네임별 기기에 기억) | R2/R6 뒤, R9·R10과 동시 | 1~2 |
+| R11 | 웹 화면(시안 확정됨): `livemix/webjoin/index.html`·CSS·접속 흐름 + **사람별 상대방 음량**(gom 10/26 원문 18·20·21, A안: 사람 줄마다 둘째 줄에 슬라이더·% — 확정 시안 `webguest.html` ③, 닉네임별 기기에 기억) | R2/R6 뒤, R9·R10과 동시 | 1~2 |
 | R12 | 최종 통합·실물 결과 수정 — 실물 시험 PC = **이 PC ↔ roomc**(gom 10/26 "다른 pc랑 연결테스트가 필요하면 roomc pc 쓰면됨": 강남 망, SSH `rbuild.py` 연결 그대로, 빌드 서버 작업과 겹치지 않게) + 이 PC·roomc 브라우저 | 단독 | 2~3 |
 | R13 | 배포 준비: 버전 0.17.0(앱·OBS)·설치기·release 도구(OBS 빌드도 rb.py)·노트·서버 배포 명세 | 단독, 클로드 공개 배포 | 1 |
 

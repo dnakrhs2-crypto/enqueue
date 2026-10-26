@@ -38,6 +38,8 @@ main 769d1b7d = LiveMix 0.16.0에서 분기).
     주소창)는 **영문 도메인만**. 퓨니코드(xn--jb0byyo90f.com)로 열어도 크롬 주소창엔 곰튀김.com이 보이므로 진짜 영문 도메인이 필요 →
     gom DM post r1srh7s58tft5yaojf6ywk8efo: ① livemix.kr 구매(추천, 10/26 RDAP·DNS 조회 미등록) ② 퓨니코드 ③ github.io 기본 주소.
     답 전 ①번 기준 준비(결정 10의 페이지 위치·계약 §4 주소·방 서버 허용 출처를 결정 뒤 함께 바꾼다). 곰튀김.com 사이트 자체는 그대로.
+23. "3번으로 가자 깃허브아이디 보여도 됨" — 웹 참여 주소 = **`https://dnakrhs2-crypto.github.io/livemix-join/`**(GitHub Pages 기본
+    주소, 도메인 구매 없음, 깃허브 아이디가 주소에 보여도 됨). 아래 결정 10·19 갱신.
 
 ## 결정 (gom 승인 — 바꾸지 말 것)
 
@@ -64,8 +66,10 @@ main 769d1b7d = LiveMix 0.16.0에서 분기).
    LiveMix 3명 방(약 10.2Mbps)보다 적은 약 9.1Mbps). 웹 사용자 모노 목소리는 다른 사람에게 가운데(좌우 같게)로 들린다.
 9. **전송 = WebRTC 데이터 채널(순서 무시·재전송 없음) + 무압축 PCM.** 브라우저 기본 통화 기능(오디오 트랙·Opus)은 쓰지 않는다
    (크롬·엣지가 스테레오를 모노로 받는 문제). 방장 LiveMix 쪽 라이브러리 = libdatachannel(MPL-2.0, 미디어 기능 없이).
-10. (원문 22로 바뀜 — 웹 참여 주소는 영문 도메인, 결정 대기. 아래는 그 전 결정)
-    **웹 페이지는 곰튀김.com(LiveMix 공식 사이트, 저장소 `site/`, GitHub Pages HTTPS)의 `/livemix/join/`** 에 둔다
+10. **(원문 22·23으로 바뀜) 웹 페이지 = `https://dnakrhs2-crypto.github.io/livemix-join/`** — 공개 저장소
+    `dnakrhs2-crypto/livemix-join`(GitHub Pages, CNAME 없음)에 배포, 소스는 이 저장소 `livemix/webjoin/`. 초대 주소·QR·주소창 모두
+    이 영문 주소. 방 서버 CORS 허용 출처 = `https://dnakrhs2-crypto.github.io`. 마이크·HTTPS·SharedArrayBuffer 없음 조건은 아래와 같다.
+    (그 전 결정:) **웹 페이지는 곰튀김.com(LiveMix 공식 사이트, 저장소 `site/`, GitHub Pages HTTPS)의 `/livemix/join/`** 에 둔다
     (브라우저 마이크는 보안 주소에서만 켜짐, gom 원문 15). 초대 링크 = `https://곰튀김.com/livemix/join/#…`(QR은 퓨니코드
     `xn--jb0byyo90f.com`). 시그널링 API는 유튜브다운.com 방 서버 그대로 — 페이지가 뒤에서 다른 출처로 부르므로 CORS 허용(곰튀김.com
     출처만). GitHub Pages는 응답 헤더를 못 정하므로 교차 출처 격리(SharedArrayBuffer)는 기대하지 않는다. 소리는 방장 PC로 직접.
@@ -104,7 +108,8 @@ main 769d1b7d = LiveMix 0.16.0에서 분기).
     마무리하고 끈다.
 
 ### D. 배포
-19. **한 번에 배포:** LiveMix 0.17.0(앱 + OBS 플러그인 '합방 상대 2') + 곰튀김.com 웹 참여 페이지(사이트, 앱과 같은 배포) +
+19. **한 번에 배포:** LiveMix 0.17.0(앱 + OBS 플러그인 '합방 상대 2') + 웹 참여 페이지(`dnakrhs2-crypto.github.io/livemix-join/`,
+    앱과 같은 배포 — 원문 23) +
     유튜브다운 방 서버.
 20. 0.16.x 이하와 섞이면: 지금처럼 2명 합방만(그쪽이 방장이든 참가자든). 웹 초대·3명은 방장과 참가자 모두 0.17.0 이상일 때.
     갱신한 방 서버는 0.15.x·0.16.x 앱 요청을 그대로 처리해야 한다.
