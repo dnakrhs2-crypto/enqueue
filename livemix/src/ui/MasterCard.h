@@ -3,6 +3,7 @@
 #include "MixDocument.h"
 #include "ObsPluginInstaller.h"
 #include "Widgets.h"
+#include "RecordingWindow.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -18,6 +19,7 @@ public:
     void refresh();
     void setDeviceChannels (const juce::StringArray& outputNames);
     void setLatency (double ms, int bufferSize, double sampleRate);
+    void setRecordingSnapshot (const recording::Snapshot&);
     void pushMeter (MixEngine::Meter meter) { meter_.push (meter); }
     enum class ObsStatus { waiting, connected, audioStopped, installNeeded, restartObs, sendFailed, addSource, updateObs, portableObs };
     struct ObsAdvice { ObsStatus status; juce::String text, reason; };
@@ -34,6 +36,7 @@ public:
     std::function<void()> onAddPlugin;
     /** The LUFS button: the loudness meter window. */
     std::function<void()> onOpenLoudness;
+    std::function<void()> onOpenRecording;
     /** The '+ 추가' button: the plugin menu opens next to it. */
     juce::Component& getAddPluginButton() noexcept { return addPluginButton; }
     std::function<void (int slotIndex)> onOpenPluginEditor;
@@ -76,6 +79,7 @@ private:
     juce::Label badge, title, note, chainCaption, latencyCaption, latencyValue, latencyNote, compactLatency, outputCaption, meterCaption;
     std::vector<std::unique_ptr<juce::TextButton>> chips;
     juce::TextButton openChainButton, addPluginButton, lufsButton;
+    RecordingButton recordingButton;
     juce::ComboBox outputCombo;
     juce::ToggleButton obsToggle;
     juce::Label obsStatusLabel, obsSourceHint;

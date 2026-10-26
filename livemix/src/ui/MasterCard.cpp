@@ -5,6 +5,12 @@
 namespace gocue::livemix
 {
 
+// The record button's slot beside LUFS fits the longest elapsed time, so LUFS stays put when a recording starts.
+static int recordSlotWidth()
+{
+    return juce::jmax (76, juce::GlyphArrangement::getStringWidthInt (titleFont (15), "00:00:00") + 46);
+}
+
 MasterCard::MasterCard (MixDocument& doc) : document (doc)
 {
     badge.setText ("M", juce::dontSendNotification);
@@ -35,6 +41,11 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     lufsButton.setWantsKeyboardFocus (false);
     lufsButton.onClick = [this] { if (onOpenLoudness) onOpenLoudness(); };
     addAndMakeVisible (lufsButton);
+    recordingButton.setComponentID ("recording");
+    recordingButton.setButtonText (ko ("녹음"));
+    recordingButton.setWantsKeyboardFocus (false);
+    recordingButton.onClick = [this] { if (onOpenRecording) onOpenRecording(); };
+    addAndMakeVisible (recordingButton);
 
     styleCaption (latencyCaption, ko ("지연"));
     addAndMakeVisible (latencyCaption);
@@ -112,6 +123,16 @@ void MasterCard::setStrip (bool folded)
     refreshObsToggle();
     refreshObsStatus();
     resized();
+}
+
+void MasterCard::setRecordingSnapshot (const recording::Snapshot& snapshot)
+{
+    const bool live = snapshot.state == recording::State::recording || snapshot.state == recording::State::stopping;
+    const auto text = live ? recordingElapsedText (snapshot.elapsedSeconds) : ko ("녹음");
+    if (recordingButton.red == live && recordingButton.getButtonText() == text) return;
+    recordingButton.red = live;
+    recordingButton.setButtonText (text);
+    resized(); recordingButton.repaint();
 }
 
 int MasterCard::obsToggleWidth() const
@@ -274,8 +295,8 @@ int MasterCard::obsControlsHeight (int width, int hintGap) const
 
 bool MasterCard::mediumLatencyFitsBesideChain (int width)
 {
-    // One minimum-width chip and both actions, an 18 px gap, then latency + LUFS.
-    return width - 418 >= ChipFlow::minWidth + 8 + 92 + 8 + 76 + 18 + 134 + 8 + 56;
+    // One minimum-width chip and both actions, an 18 px gap, then latency + LUFS + the record button's slot.
+    return width - 418 >= ChipFlow::minWidth + 8 + 92 + 8 + 76 + 18 + 134 + 8 + 56 + 8 + recordSlotWidth();
 }
 
 MasterCard::ChainLayout MasterCard::measureChain (int width) const
@@ -286,7 +307,8 @@ MasterCard::ChainLayout MasterCard::measureChain (int width) const
     const int left = narrow ? 14 : 404;
     const int top = narrow ? 54 : 12;
     const int columnWidth = juce::jmax (1, narrow ? width - 28 : medium ? juce::jmin (361, width - 418) : 361);
-    const int flowWidth = medium && mediumLatencyFitsBesideChain (width) ? juce::jmin (columnWidth, width - 418 - 216) : columnWidth;
+    const int flowWidth = medium && mediumLatencyFitsBesideChain (width)
+                              ? juce::jmin (columnWidth, width - 418 - 216 - 8 - recordSlotWidth()) : columnWidth;
     result.caption = { left, top + (narrow ? 1 : 0), narrow ? 70 : columnWidth, narrow ? 30 : 26 };
     int x = narrow ? 78 : 0;
     int y = top + (narrow ? 0 : 27);
@@ -335,6 +357,8 @@ void MasterCard::resized()
 {
     auto area = getLocalBounds().reduced (14, 12);
     const bool stacked = ! strip && getWidth() < wideBelow;
+    const int recordWidth = juce::jmax (76, juce::GlyphArrangement::getStringWidthInt (titleFont (15), recordingButton.getButtonText()) + 46);
+    openChainButton.setVisible (true);
 
     // Keep the existing visibility rules: compact forms use the single latency label; the strip keeps its controls.
     note.setVisible (! strip && ! stacked);
@@ -364,9 +388,17 @@ void MasterCard::resized()
         row.removeFromRight (4);
         obsToggle.setBounds (row.removeFromRight (obsToggleWidth()).withSizeKeepingCentre (obsToggleWidth(), obsRowHeight));
         row.removeFromRight (8);
-        openChainButton.setBounds (row.removeFromRight (88));
-        row.removeFromRight (8);
         constexpr int meterMinimum = 64;
+        // Approved A: the always-shown record button sits right beside LUFS; the chain button gives way first.
+        const bool withChain = row.getWidth() >= meterMinimum + recordWidth + 8 + 88 + 8;
+        openChainButton.setVisible (withChain);
+        if (withChain)
+        {
+            openChainButton.setBounds (row.removeFromRight (88));
+            row.removeFromRight (8);
+        }
+        recordingButton.setBounds (row.removeFromRight (recordWidth));
+        row.removeFromRight (8);
         const bool withLufs = row.getWidth() >= meterMinimum + 56 + 8;
         lufsButton.setVisible (withLufs);
         if (withLufs)
@@ -428,6 +460,8 @@ void MasterCard::resized()
         compactLatency.setBounds (latency.removeFromLeft (134));
         latency.removeFromLeft (8);
         lufsButton.setBounds (latency.removeFromLeft (56));
+        latency.removeFromLeft (8);
+        recordingButton.setBounds (latency.removeFromLeft (recordWidth));
         area.removeFromTop (8);
         auto output = area.removeFromTop (30);
         outputCaption.setBounds (output.removeFromLeft (60));
@@ -454,6 +488,9 @@ void MasterCard::resized()
         const bool inlineLatency = mediumLatencyFitsBesideChain (getWidth());
         auto latency = content.withHeight (30);
         latency.setY (inlineLatency ? 40 : chain.bottom + 8);
+        // Approved A: the record button right beside LUFS, as in the wide and narrow forms.
+        recordingButton.setBounds (latency.removeFromRight (recordSlotWidth()).withWidth (recordWidth));
+        latency.removeFromRight (8);
         lufsButton.setBounds (latency.removeFromRight (56));
         latency.removeFromRight (8);
         compactLatency.setBounds (latency.removeFromRight (134));
@@ -476,6 +513,7 @@ void MasterCard::resized()
     latencyValue.setBounds (783, 38, 104, 34);
     latencyNote.setBounds (783, 72, 168, 20);
     lufsButton.setBounds (895, 40, 56, 30);
+    recordingButton.setBounds (959, 40, recordWidth, 30);
 
     auto out = content.withLeft (getWidth() - 264);   // under the cards' 250 px output column
     auto outputRow = out.removeFromTop (26);

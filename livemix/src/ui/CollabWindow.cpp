@@ -1,4 +1,5 @@
 #include "CollabWindow.h"
+#include "qrcodegen.hpp"
 #include <cmath>
 
 namespace gocue::livemix
@@ -40,6 +41,60 @@ juce::TextLayout messageLayout (const juce::String& text, int width, float size,
     return layout;
 }
 }
+
+struct CollabPanel::RequestCard : juce::Component
+{
+    RequestCard (CollabPanel& p, const collab::CollabSession::WebRequestSnapshot& request) : owner (p), value (request)
+    {
+        setComponentID ("request-" + value.requestId);
+        for (auto* l : { &caption, &name, &web })
+        {
+            l->setBorderSize (juce::BorderSize<int> (0)); l->setMinimumHorizontalScale (1.0f); addAndMakeVisible (*l);
+        }
+        caption.setText (ko ("들어오기 요청"), juce::dontSendNotification); caption.setFont (captionFont());
+        caption.setColour (juce::Label::textColourId, Palette::dimText);
+        name.setFont (titleFont()); name.setTooltip (value.nickname);
+        web.setFont (titleFont (12)); web.setText (ko ("웹"), juce::dontSendNotification);
+        web.setJustificationType (juce::Justification::centred); web.setColour (juce::Label::textColourId, Palette::accent);
+        accept.setComponentID ("accept"); accept.setButtonText (ko ("수락"));
+        reject.setComponentID ("reject"); reject.setButtonText (ko ("거절"));
+        accept.setToggleState (true, juce::dontSendNotification);
+        for (auto* button : { &accept, &reject }) { button->setWantsKeyboardFocus (false); addAndMakeVisible (*button); }
+        accept.onClick = [this] { if (value.canAccept && owner.actions.acceptWebRequest) owner.actions.acceptWebRequest (value.requestId); };
+        reject.onClick = [this] { if (value.canReject && owner.actions.rejectWebRequest) owner.actions.rejectWebRequest (value.requestId); };
+        update (request);
+    }
+    void update (const collab::CollabSession::WebRequestSnapshot& request)
+    {
+        value = request;
+        accept.setEnabled (value.canAccept); reject.setEnabled (value.canReject);
+        accept.setAlpha (value.canAccept ? 1.0f : 0.45f); reject.setAlpha (value.canReject ? 1.0f : 0.45f);
+        resized();
+    }
+    void resized() override
+    {
+        auto inner = getLocalBounds().reduced (14);
+        caption.setBounds (inner.removeFromTop (15)); inner.removeFromTop (10);
+        auto row = inner.removeFromTop (21);
+        const int width = juce::jmin (row.getWidth() - 32, juce::GlyphArrangement::getStringWidthInt (name.getFont(), value.nickname));
+        name.setBounds (row.removeFromLeft (juce::jmax (0, width)));
+        name.setText (ellipsisedText (name.getFont(), value.nickname, name.getWidth()), juce::dontSendNotification);
+        row.removeFromLeft (8); web.setBounds (row.removeFromLeft (24));
+        inner.removeFromTop (10); row = inner.removeFromTop (36);
+        accept.setBounds (row.removeFromLeft ((row.getWidth() - 8) / 2)); row.removeFromLeft (8); reject.setBounds (row);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        card (g, getLocalBounds(), Palette::accent);
+        g.setColour (Palette::accent.withAlpha (0.5f));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), Palette::cardRadius - 1, 1.0f);
+        g.drawRoundedRectangle (web.getBounds().toFloat().reduced (0.5f, 2.5f), 6, 1);
+    }
+    CollabPanel& owner;
+    collab::CollabSession::WebRequestSnapshot value;
+    juce::Label caption, name, web;
+    juce::TextButton accept, reject;
+};
 
 CollabField::CollabField()
 {
@@ -199,9 +254,25 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     label (notice, "notice", {}, bodyFont (14.0f), Palette::danger);
     label (peerNick, "peer-nick", {}, titleFont(), Palette::text);
     label (connection, "connection", {}, titleFont (14.0f), Palette::lampOn);
-    label (volumeCaption, "volume-caption", ko ("상대방 음량"), captionFont(), Palette::dimText);
+    label (volumeCaption, "volume-caption", {}, captionFont(), Palette::dimText);
     label (volumeValue, "volume-value", {}, captionFont(), Palette::text);
     volumeValue.setJustificationType (juce::Justification::centredRight);
+    label (roomCode, "room-code", {}, captionFont(), Palette::dimText);
+    label (secondNick, "peer-nick-2", {}, titleFont (15), Palette::text);
+    label (secondVolumeValue, "volume-value-2", {}, titleFont (14), Palette::text);
+    secondVolumeValue.setJustificationType (juce::Justification::centredRight);
+    peerNick.setFont (titleFont (15)); volumeValue.setFont (titleFont (14));
+    for (size_t i = 0; i < 2; ++i)
+    {
+        label (seatLabels[i], "", ko ("자리 ") + juce::String ((int) i + 1), titleFont (12), Palette::dimText);
+        seatLabels[i].setComponentID ("seat-" + juce::String ((int) i + 1));
+        seatLabels[i].setJustificationType (juce::Justification::centred);
+        label (webLabels[i], "", ko ("웹"), titleFont (12), Palette::accent);
+        webLabels[i].setJustificationType (juce::Justification::centred);
+        webLabels[i].setComponentID ("web-" + juce::String ((int) i + 1));
+        label (delays[i], "", {}, titleFont (14), Palette::text);
+        delays[i].setComponentID ("delay-" + juce::String ((int) i + 1));
+    }
     for (int i = 0; i < 4; ++i)
     {
         auto& digit = roomDigits[(size_t) i];
@@ -239,6 +310,24 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     button (dismissButton, "dismiss", ko ("닫기"), actions.leave);
     button (leaveButton, "leave", ko ("방 닫기"), actions.leave);
     button (rebufferButton, "rebuffer", ko ("다시 맞추기"), actions.rebuffer);
+    for (size_t i = 0; i < 2; ++i)
+    {
+        button (kickButtons[i], "", ko ("내보내기"), [this, i]
+        {
+            if (kickButtons[i].isEnabled() && actions.kickWebGuest) actions.kickWebGuest (people[i].participantId);
+        });
+        kickButtons[i].setComponentID ("kick-" + juce::String ((int) i + 1));
+    }
+    label (inviteCaption, "invite-caption", ko ("웹 초대"), captionFont(), Palette::dimText);
+    label (inviteUrl, "invite-url", {}, bodyFont (14), Palette::dimText);
+    button (copyInvite, "copy-invite", ko ("주소 복사"), [this] { juce::SystemClipboard::copyTextToClipboard (snapshot.webInviteUrl); });
+    button (renewInvite, "renew-invite", ko ("새 주소"), [this]
+    {
+        if (snapshot.canCreateWebInvite && actions.createWebInvite) actions.createWebInvite();
+    });
+    requestViewport.setComponentID ("web-requests");
+    requestViewport.setViewedComponent (&requestHolder, false); requestViewport.setScrollBarsShown (true, false);
+    requestViewport.setScrollBarThickness (8); addAndMakeVisible (requestViewport);
     nickname.setComponentID ("nickname"); nickname.setInputRestrictions (40);
     nickname.setText (settings.getCollabNick(), false);
     nickname.onTextChange = [this]
@@ -256,7 +345,7 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     headphones.setTexts (ko ("상대방 목소리 ON"), ko ("상대방 목소리 OFF"), {});
     headphones.onClick = [this]
     {
-        if (actions.monitor) actions.monitor ((float) volume.getValue() / 100.0f, ! headphones.isOn());
+        if (actions.monitor) actions.monitor (snapshot.monitorVolume, ! headphones.isOn());
     };
     addAndMakeVisible (headphones);
     volume.setComponentID ("volume"); volume.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -265,9 +354,20 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     volume.onValueChange = [this]
     {
         volumeValue.setText (juce::String ((int) volume.getValue()) + "%", juce::dontSendNotification);
-        if (actions.monitor) actions.monitor ((float) volume.getValue() / 100.0f, headphones.isOn());
+        if (people[0].participantId != 0 && actions.personMonitorVolume)
+            actions.personMonitorVolume (people[0].participantId, (float) volume.getValue() / 100.0f);
+        else if (actions.monitor) actions.monitor ((float) volume.getValue() / 100.0f, headphones.isOn());
     };
     addAndMakeVisible (volume);
+    secondVolume.setComponentID ("volume-2"); secondVolume.setSliderStyle (juce::Slider::LinearHorizontal);
+    secondVolume.setRange (0, 100, 1); secondVolume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    secondVolume.setScrollWheelEnabled (false); secondVolume.setWantsKeyboardFocus (false);
+    secondVolume.onValueChange = [this]
+    {
+        secondVolumeValue.setText (juce::String ((int) secondVolume.getValue()) + "%", juce::dontSendNotification);
+        if (actions.personMonitorVolume) actions.personMonitorVolume (people[1].participantId, (float) secondVolume.getValue() / 100.0f);
+    };
+    addAndMakeVisible (secondVolume);
     // the partner's output, as a channel card's 출력 row: 마스터, a direct pair, or OBS monitoring only
     label (routeCaption, "route-caption", ko ("출력"), captionFont(), Palette::dimText);
     const juce::String routeTexts[] { ko ("마스터"), ko ("직접 출력"), ko ("OBS에서 듣기") };
@@ -302,6 +402,7 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     setSize (440, 430);
     setSnapshot ({});
 }
+CollabPanel::~CollabPanel() { requestViewport.setViewedComponent (nullptr, false); }
 
 void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
 {
@@ -315,7 +416,7 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
     createButton.setVisible (entry && ! failed); joinButton.setVisible (entry);
     rateCaption.setVisible (entry && ! failed);
     for (auto& chip : rateChips) chip.setVisible (entry && ! failed);
-    roomRate.setVisible (host);
+    roomRate.setVisible (host && snapshot.roomMode == collab::contracts::RoomMode::legacy2);
     roomRate.setText (rateNumber (snapshot.wireRate) + " kHz", juce::dontSendNotification);
     for (auto& digit : roomDigits) digit.setVisible (host);
     waiting.setVisible (host); leaveButton.setVisible (host || call);
@@ -332,7 +433,7 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
     for (auto* c : std::initializer_list<juce::Component*> { &peerNick, &connection, &headphones, &volumeCaption,
                                                            &volumeValue, &volume, &meter, &rebufferButton, &routePair, &routeCaption })
         c->setVisible (call);
-    for (auto& stat : stats) stat.setVisible (call);
+    for (auto& stat : stats) stat.setVisible (call && snapshot.roomMode == collab::contracts::RoomMode::legacy2);
     for (auto& chip : routeChips) chip.setVisible (call);
     for (int i = 0; i < 3; ++i) routeChips[(size_t) i].setToggleState ((int) snapshot.route == i, juce::dontSendNotification);
     const auto outputs = actions.outputs ? actions.outputs() : OutputPairs {};
@@ -362,7 +463,135 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
     stats[1].value = juce::String (juce::roundToInt (snapshot.bufferMs));   // whole ms, as the delay beside it
     stats[2].value = juce::String (snapshot.lossPercent, 1);
     stats[3].value = rateNumber (snapshot.wireRate);
+    updatePeople(); updateWeb();
     updateEnabled(); resized(); repaint();
+}
+
+void CollabPanel::updatePeople()
+{
+    people = {};
+    personVisible = {};
+    for (size_t n = 0; n < juce::jmin (snapshot.personCount, snapshot.people.size()); ++n)
+    {
+        const auto& p = snapshot.people[n];
+        if (! p.isSelf && p.slot >= 1 && p.slot <= 2)
+        {
+            const auto i = (size_t) p.slot - 1;
+            people[i] = p; personVisible[i] = inCall (snapshot.state);
+        }
+    }
+    // Preserve the original slot-one projection for legacy snapshots without a roster.
+    if (snapshot.personCount == 0 && inCall (snapshot.state))
+    {
+        personVisible[0] = true;
+        people[0].slot = 1; people[0].nickname = snapshot.peerNick;
+        people[0].monitorVolume = snapshot.monitorVolume;
+        people[0].estimatedOneWayMs = snapshot.estimatedOneWayMs;
+    }
+    const bool audible = snapshot.route != collab::CollabAudio::Route::obs;
+    volumeCaption.setVisible (false);
+    roomCode.setVisible (inCall (snapshot.state));
+    roomCode.setText (ko ("방 코드 ") + snapshot.code, juce::dontSendNotification);
+    for (size_t i = 0; i < 2; ++i)
+    {
+        auto& name = i == 0 ? peerNick : secondNick;
+        auto& slider = i == 0 ? volume : secondVolume;
+        auto& percent = i == 0 ? volumeValue : secondVolumeValue;
+        for (auto* component : std::initializer_list<juce::Component*> { &name, &slider, &percent, &seatLabels[i], &delays[i] })
+            component->setVisible (personVisible[i]);
+        webLabels[i].setVisible (personVisible[i] && people[i].kind == collab::contracts::ParticipantKind::web);
+        kickButtons[i].setVisible (webLabels[i].isVisible() && snapshot.isHost && people[i].participantId != 0
+                                  && people[i].participantId == snapshot.kickableWebId
+                                  && people[i].state == collab::contracts::ConnectionState::connected);
+        kickButtons[i].setEnabled (snapshot.signalingConnected);
+        kickButtons[i].setAlpha (snapshot.signalingConnected ? 1.0f : 0.45f);
+        slider.setEnabled (audible); slider.setAlpha (audible ? 1.0f : 0.4f); percent.setAlpha (slider.getAlpha());
+        if (! slider.isMouseButtonDown()) slider.setValue (std::lround (people[i].monitorVolume * 100.0f), juce::dontSendNotification);
+        percent.setText (juce::String ((int) slider.getValue()) + "%", juce::dontSendNotification);
+        name.setTooltip (people[i].nickname);
+        delays[i].setText (juce::String ((int) std::lround (people[i].estimatedOneWayMs)) + " ms", juce::dontSendNotification);
+    }
+}
+
+void CollabPanel::updateWeb()
+{
+    const size_t count = snapshot.isHost ? juce::jmin (snapshot.webRequestCount, snapshot.webRequests.size()) : 0;
+    bool changed = count != requests.size();
+    for (size_t i = 0; ! changed && i < count; ++i)
+        changed = requests[i]->value.requestId != snapshot.webRequests[i].requestId;
+    if (changed)
+    {
+        requests.clear();
+        for (size_t i = 0; i < count; ++i)
+        {
+            auto request = std::make_unique<RequestCard> (*this, snapshot.webRequests[i]);
+            requestHolder.addAndMakeVisible (*request); requests.push_back (std::move (request));
+        }
+    }
+    else for (size_t i = 0; i < count; ++i) requests[i]->update (snapshot.webRequests[i]);
+    requestViewport.setVisible (count != 0);
+    const bool invite = snapshot.isHost && snapshot.canCreateWebInvite && requests.empty();
+    for (auto* component : std::initializer_list<juce::Component*> { &inviteCaption, &inviteUrl, &copyInvite, &renewInvite })
+        component->setVisible (invite);
+    copyInvite.setEnabled (invite && snapshot.webInviteUrl.isNotEmpty());
+    copyInvite.setAlpha (copyInvite.isEnabled() ? 1.0f : 0.45f);
+    renewInvite.setEnabled (invite);
+    if (qrUrl != snapshot.webInviteQrUrl)
+    {
+        qrUrl = snapshot.webInviteQrUrl; qrImage = {};
+        if (qrUrl.isNotEmpty())
+        {
+            const auto qr = qrcodegen::QrCode::encodeText (qrUrl.toRawUTF8(), qrcodegen::QrCode::Ecc::MEDIUM);
+            const int size = qr.getSize() + 8; // four-module quiet zone
+            qrImage = juce::Image (juce::Image::RGB, size, size, false);
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x)
+                    qrImage.setPixelAt (x, y, qr.getModule (x - 4, y - 4) ? juce::Colours::black : juce::Colours::white);
+        }
+    }
+    inviteUrl.setTooltip (snapshot.webInviteUrl);
+}
+
+void CollabPanel::layoutPerson (size_t i, juce::Rectangle<int> bounds)
+{
+    personBounds[i] = bounds;
+    auto inner = bounds.reduced (10, 0);
+    auto row = inner.removeFromTop (44);
+    seatLabels[i].setBounds (row.removeFromLeft (52).withSizeKeepingCentre (52, 22)); row.removeFromLeft (10);
+    if (kickButtons[i].isVisible())
+    {
+        kickButtons[i].setBounds (row.removeFromRight (70).withSizeKeepingCentre (70, 28)); row.removeFromRight (10);
+    }
+    const int delayWidth = labelWidthForText (delays[i], delays[i].getText());
+    delays[i].setBounds (row.removeFromRight (delayWidth)); row.removeFromRight (10);
+    auto& name = i == 0 ? peerNick : secondNick;
+    if (webLabels[i].isVisible())
+    {
+        const int nameWidth = juce::jmin (juce::GlyphArrangement::getStringWidthInt (name.getFont(), people[i].nickname), row.getWidth() - 32);
+        name.setBounds (row.removeFromLeft (juce::jmax (0, nameWidth)));
+        row.removeFromLeft (8); webLabels[i].setBounds (row.removeFromLeft (24).withSizeKeepingCentre (24, 18));
+    }
+    else name.setBounds (row);
+    name.setText (ellipsisedText (name.getFont(), people[i].nickname, name.getWidth()), juce::dontSendNotification);
+    row = inner.removeFromTop (28);
+    (i == 0 ? volumeValue : secondVolumeValue).setBounds (row.removeFromRight (44)); row.removeFromRight (6);
+    (i == 0 ? volume : secondVolume).setBounds (row);
+}
+
+void CollabPanel::layoutInvite (juce::Rectangle<int> bounds)
+{
+    inviteCard = bounds;
+    auto inner = bounds.reduced (14);
+    inviteCaption.setBounds (inner.removeFromTop (15)); inner.removeFromTop (10);
+    qrBounds = inner.removeFromLeft (116).withHeight (116); inner.removeFromLeft (12);
+    inviteField = inner.removeFromTop (36);
+    inviteUrl.setBounds (inviteField.reduced (10, 0));
+    // Shown like the approved mock (no scheme) so more of the address fits; [주소 복사] still copies the full URL.
+    const auto shownUrl = snapshot.webInviteUrl.contains ("://") ? snapshot.webInviteUrl.fromFirstOccurrenceOf ("://", false, false)
+                                                                 : snapshot.webInviteUrl;
+    inviteUrl.setText (ellipsisedText (inviteUrl.getFont(), shownUrl, inviteUrl.getWidth()), juce::dontSendNotification);
+    inner.removeFromTop (8); copyInvite.setBounds (inner.removeFromTop (36));
+    inner.removeFromTop (8); renewInvite.setBounds (inner.removeFromTop (36));
 }
 void CollabPanel::updateEnabled()
 {
@@ -394,7 +623,8 @@ bool CollabPanel::keyPressed (const juce::KeyPress& key)
 void CollabPanel::resized()
 {
     auto area = getLocalBounds().reduced (16);
-    firstCard = joinCard = {};
+    firstCard = joinCard = inviteCard = qrBounds = {};
+    personBounds = {};
     const auto state = snapshot.state;
     const bool failed = state == State::hostUnavailable;
     // roomy height of the cause layout: margins, nickname row, the cause card and the join card; a long cause
@@ -407,17 +637,39 @@ void CollabPanel::resized()
     const int padding = compact ? 10 : 14;
     const int gap = compact ? 6 : 10;
     const int outerGap = compact ? 6 : 12;
+    const auto layoutRequests = [&]
+    {
+        if (! requestViewport.isVisible()) return;
+        // One request remains fully visible; a long pending list scrolls within the same card area.
+        const int count = (int) personVisible[0] + (int) personVisible[1];
+        const int callHeight = 28 + 15 + 76 * count + juce::jmax (0, count - 1) * 8 + 32 + 40 + 46 + 4 * gap;
+        const int remaining = inCall (state) ? callHeight + (stats[0].isVisible() ? 58 + outerGap : 0) : 154;
+        const int available = juce::jmax (120, area.getHeight() - remaining - 36 - 2 * outerGap);
+        const int height = juce::jmin (available, (int) requests.size() * 132 - 12);
+        requestViewport.setBounds (area.removeFromTop (height)); area.removeFromTop (outerGap);
+        const int width = requestViewport.getWidth() - ((int) requests.size() * 132 - 12 > height ? 8 : 0);
+        requestHolder.setSize (width, (int) requests.size() * 132 - 12);
+        for (size_t i = 0; i < requests.size(); ++i) requests[i]->setBounds (0, (int) i * 132, width, 120);
+    };
     if (inCall (state))
     {
+        layoutRequests();
         // the 출력 row keeps every control at its size: the 400 px window only tightens the gaps
         const int callGap = compact ? 6 : 10;
-        firstCard = area.removeFromTop (28 + 21 + 32 + 40 + 15 + 32 + 46 + 5 * callGap);
+        const int count = (int) personVisible[0] + (int) personVisible[1];
+        firstCard = area.removeFromTop (28 + 15 + 76 * count + juce::jmax (0, count - 1) * 8 + 32 + 40 + 46 + 4 * callGap);
         auto inner = firstCard.reduced (14);
-        auto row = inner.removeFromTop (21);
+        auto row = inner.removeFromTop (15);
         connection.setBounds (row.removeFromRight (labelWidthForText (connection, connection.getText())));
-        row.removeFromRight (10); peerNick.setBounds (row);
-        peerNick.setText (ellipsisedText (peerNick.getFont(), snapshot.peerNick, row.getWidth()), juce::dontSendNotification);
-        peerNick.setTooltip (snapshot.peerNick);
+        row.removeFromRight (10); roomCode.setBounds (row);
+        inner.removeFromTop (callGap);
+        bool first = true;
+        for (size_t i = 0; i < 2; ++i)
+            if (personVisible[i])
+            {
+                if (! first) inner.removeFromTop (8);
+                layoutPerson (i, inner.removeFromTop (76)); first = false;
+            }
         inner.removeFromTop (callGap); row = inner.removeFromTop (32);
         // 마스터 58, 직접 출력 74, OBS에서 듣기 100; the pair keeps the 88 px of a channel card's direct output, where
         // '31-32 …' reads in full; the caption shows only when it fits too
@@ -429,17 +681,20 @@ void CollabPanel::resized()
         routeChips[2].setBounds (row.removeFromRight (100)); row.removeFromRight (6);
         routePair.setBounds (row);
         inner.removeFromTop (callGap); headphones.setBounds (inner.removeFromTop (40));
-        inner.removeFromTop (callGap); row = inner.removeFromTop (15);
-        volumeValue.setBounds (row.removeFromRight (60)); volumeCaption.setBounds (row);
-        inner.removeFromTop (callGap); volume.setBounds (inner.removeFromTop (32));
         inner.removeFromTop (callGap); meter.setBounds (inner.removeFromTop (46));
-        area.removeFromTop (outerGap);
-        row = area.removeFromTop (58);
-        const int statWidth = (row.getWidth() - 24) / 4;
-        for (int i = 0; i < 4; ++i)
+        if (stats[0].isVisible())
         {
-            stats[(size_t) i].setBounds (i == 3 ? row : row.removeFromLeft (statWidth));
-            if (i < 3) row.removeFromLeft (8);
+            area.removeFromTop (outerGap); row = area.removeFromTop (58);
+            const int statWidth = (row.getWidth() - 24) / 4;
+            for (int i = 0; i < 4; ++i)
+            {
+                stats[(size_t) i].setBounds (i == 3 ? row : row.removeFromLeft (statWidth));
+                if (i < 3) row.removeFromLeft (8);
+            }
+        }
+        if (inviteCaption.isVisible())
+        {
+            area.removeFromTop (outerGap); layoutInvite (area.removeFromTop (177));
         }
         area.removeFromTop (outerGap); row = area.removeFromTop (36);
         rebufferButton.setBounds (row.removeFromLeft ((row.getWidth() - 8) / 2));
@@ -448,17 +703,27 @@ void CollabPanel::resized()
     }
     nickCaption.setBounds (area.removeFromTop (15)); area.removeFromTop (outerGap);
     nickname.setBounds (area.removeFromTop (36)); area.removeFromTop (outerGap);
+    layoutRequests();
     if (state == State::hostWaiting)
     {
-        firstCard = area.removeFromTop (202);
+        const bool webRoom = snapshot.roomMode == collab::contracts::RoomMode::v2;
+        firstCard = area.removeFromTop (webRoom ? 154 : 202);
         auto inner = firstCard.reduced (14);
         auto caption = inner.removeFromTop (17);
-        roomRate.setBounds (caption.removeFromRight (labelWidthForText (roomRate, roomRate.getText())));
+        if (roomRate.isVisible()) roomRate.setBounds (caption.removeFromRight (labelWidthForText (roomRate, roomRate.getText())));
         codeCaption.setBounds (caption); inner.removeFromTop (10);
         const auto row = inner.removeFromTop (74);
         for (int i = 0; i < 4; ++i) roomDigits[(size_t) i].setBounds (row.getX() + i * 76, row.getY(), 66, 74);
         inner.removeFromTop (10); waiting.setBounds (inner.removeFromTop (17));
-        inner.removeFromTop (10); leaveButton.setBounds (inner.removeFromTop (36));
+        if (webRoom)
+        {
+            if (inviteCaption.isVisible())
+            {
+                area.removeFromTop (outerGap); layoutInvite (area.removeFromTop (177));
+            }
+            area.removeFromTop (outerGap); leaveButton.setBounds (area.removeFromTop (36));
+        }
+        else { inner.removeFromTop (10); leaveButton.setBounds (inner.removeFromTop (36)); }
         return;
     }
     if (failed)
@@ -496,6 +761,29 @@ void CollabPanel::paint (juce::Graphics& g)
     g.fillAll (Palette::background);
     card (g, firstCard, snapshot.state == State::hostUnavailable ? Palette::danger : Palette::line);
     card (g, joinCard);
+    card (g, inviteCard);
+    for (size_t i = 0; i < personBounds.size(); ++i)
+    {
+        if (personBounds[i].isEmpty()) continue;
+        g.setColour (Palette::card2); g.fillRoundedRectangle (personBounds[i].toFloat(), Palette::controlRadius);
+        g.setColour (Palette::line); g.drawRoundedRectangle (personBounds[i].toFloat().reduced (0.5f), Palette::controlRadius, 1);
+        g.setColour (Palette::background); g.fillRoundedRectangle (seatLabels[i].getBounds().toFloat(), 6);
+        if (webLabels[i].isVisible())
+        {
+            g.setColour (Palette::accent.withAlpha (0.5f));
+            g.drawRoundedRectangle (webLabels[i].getBounds().toFloat().reduced (0.5f), 6, 1);
+        }
+    }
+    if (! inviteCard.isEmpty())
+    {
+        g.setColour (Palette::card2); g.fillRoundedRectangle (inviteField.toFloat(), Palette::controlRadius);
+        g.setColour (Palette::line); g.drawRoundedRectangle (inviteField.toFloat().reduced (0.5f), Palette::controlRadius, 1);
+        if (qrImage.isValid())
+        {
+            g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
+            g.drawImageWithin (qrImage, qrBounds.getX(), qrBounds.getY(), qrBounds.getWidth(), qrBounds.getHeight(), juce::RectanglePlacement::stretchToFit);
+        }
+    }
     if (snapshot.state == State::hostWaiting)
         for (const auto& digit : roomDigits)
         {
@@ -516,6 +804,11 @@ CollabWindow::CollabWindow (collab::CollabSession& collab, LiveMixSettings& sett
     actions.leave = [this] { session.leave(); timerCallback(); };
     actions.rebuffer = [this] { session.rebuffer(); timerCallback(); };
     actions.monitor = [this] (float value, bool on) { session.setMonitor (value, on); timerCallback(); };
+    actions.personMonitorVolume = [this] (auto id, float value) { session.setPersonMonitorVolume (id, value); timerCallback(); };
+    actions.createWebInvite = [this] { session.createWebInvite(); };
+    actions.acceptWebRequest = [this] (const auto& id) { session.acceptWebRequest (id); };
+    actions.rejectWebRequest = [this] (const auto& id) { session.rejectWebRequest (id); };
+    actions.kickWebGuest = [this] (auto id) { session.kickWebGuest (id); };
     actions.hide = [this] { closeButtonPressed(); };
     content = new CollabPanel (settings, std::move (actions));
     setContentOwned (content, true);
@@ -532,5 +825,25 @@ bool CollabWindow::keyPressed (const juce::KeyPress& key)
     if (key == juce::KeyPress::escapeKey) { closeButtonPressed(); return true; }
     return false;
 }
-void CollabWindow::timerCallback() { content->setSnapshot (session.getSnapshot()); }
+void CollabWindow::timerCallback()
+{
+    const auto snapshot = session.getSnapshot();
+    const bool webRoom = snapshot.roomMode == collab::contracts::RoomMode::v2 && snapshot.state != State::off;
+    if (webRoom && ! expandedForRoom)
+    {
+        const auto border = getContentComponentBorder();
+        const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getBounds());
+        const int height = display != nullptr ? juce::jlimit (640, 800, display->userArea.getHeight() - border.getTopAndBottom()) : 800;
+        content->setSize (440, height);
+        setResizeLimits (400 + border.getLeftAndRight(), 640 + border.getTopAndBottom(), 10000, 10000);
+        expandedForRoom = true;
+    }
+    if (roomCode != snapshot.code || ! snapshot.canCreateWebInvite) inviteRequested = false;
+    roomCode = snapshot.code;
+    if (snapshot.isHost && snapshot.canCreateWebInvite && snapshot.webInviteUrl.isEmpty() && ! inviteRequested)
+    {
+        inviteRequested = true; session.createWebInvite();
+    }
+    content->setSnapshot (snapshot);
+}
 }
