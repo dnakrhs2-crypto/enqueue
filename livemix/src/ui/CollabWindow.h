@@ -60,8 +60,13 @@ public:
         std::function<void (float, bool)> monitor;
         std::function<void (collab::CollabAudio::Route, int)> route;
         std::function<OutputPairs()> outputs;
+        std::function<void()> createWebInvite;
+        std::function<void (const juce::String&)> acceptWebRequest, rejectWebRequest;
+        std::function<void (collab::contracts::ParticipantId)> kickWebGuest;
+        std::function<void (collab::contracts::ParticipantId, float)> personMonitorVolume;
     };
     CollabPanel (LiveMixSettings&, Actions);
+    ~CollabPanel() override;
     void setSnapshot (const collab::CollabSession::Snapshot&);
     void pushMeter (collab::CollabAudio::Meter m, bool repaint) { meter.push ({ m.left, m.right }, repaint); }
     void resized() override;
@@ -88,6 +93,11 @@ private:
     };
     void updateEnabled();
     void join();
+    void updatePeople();
+    void updateWeb();
+    void layoutPerson (size_t index, juce::Rectangle<int>);
+    void layoutInvite (juce::Rectangle<int>);
+    struct RequestCard;
     LiveMixSettings& settings;
     Actions actions;
     collab::CollabSession::Snapshot snapshot;
@@ -107,6 +117,20 @@ private:
     Message message, reason;
     std::array<Statistic, 4> stats;
     juce::Rectangle<int> firstCard, joinCard;
+    juce::Label roomCode, secondNick, secondVolumeValue, inviteCaption, inviteUrl;
+    juce::Slider secondVolume;
+    std::array<juce::Label, 2> seatLabels, webLabels, delays;
+    std::array<juce::TextButton, 2> kickButtons;
+    std::array<collab::CollabSession::PersonSnapshot, 2> people;
+    std::array<bool, 2> personVisible {};
+    std::array<juce::Rectangle<int>, 2> personBounds;
+    juce::TextButton copyInvite, renewInvite;
+    juce::Rectangle<int> inviteCard, qrBounds, inviteField;
+    juce::String qrUrl;
+    juce::Image qrImage;
+    juce::Component requestHolder;
+    juce::Viewport requestViewport;
+    std::vector<std::unique_ptr<RequestCard>> requests;
 };
 
 class CollabWindow : public juce::DocumentWindow, private juce::Timer
@@ -119,10 +143,17 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     void pushMeter (collab::CollabAudio::Meter m) { content->pushMeter (m, isVisible()); }
 
+    /** The content bounds (screen coordinates) a web room grows to: up to 800 px tall, with the native frame
+        (title bar, borders) and the whole window inside the work area, moved up rather than left hanging below it. */
+    static juce::Rectangle<int> grownBounds (juce::Rectangle<int> current, juce::Rectangle<int> workArea,
+                                             juce::BorderSize<int> frame);
+
 private:
     void timerCallback() override;
     collab::CollabSession& session;
     CollabPanel* content = nullptr;
+    bool inviteRequested = false, expandedForRoom = false;
+    juce::String roomCode;
     juce::TooltipWindow tooltips { this, 700 };   // LiveMix has no app-wide one: the full peer name and the pair note
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CollabWindow)
 };

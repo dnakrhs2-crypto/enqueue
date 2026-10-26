@@ -46,6 +46,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     masterCard.onOpenChain = [this] { openChainFor (&engine.getMasterChain(), ko ("마스터")); };
     masterCard.onAddPlugin = [this] { addPluginTo (&engine.getMasterChain(), ko ("마스터"), &masterCard.getAddPluginButton()); };
     masterCard.onOpenLoudness = [this] { showLoudnessWindow(); };
+    masterCard.onOpenRecording = [this] { showRecordingWindow(); };
     masterCard.onObsEnabled = [this] { startObsPluginCheck (true, true); };
     masterCard.onObsInstallRequested = [this] { startObsPluginCheck (true, true); };
     masterCard.onOpenPluginEditor = [this] (int slot)
@@ -210,6 +211,7 @@ MainComponent::~MainComponent()
     pluginManagerWindow.reset();
     loudnessWindow.reset();
     collabWindow.reset();
+    recordingWindow.reset();
     pluginGroupsWindow.reset();
     juce::ModalComponentManager::getInstance()->cancelAllModalComponents();   // open alerts refer to this window and its document
     windows.closeAll();
@@ -762,6 +764,16 @@ void MainComponent::showLoudnessWindow()
     loudnessWindow->open();
 }
 
+void MainComponent::showRecordingWindow()
+{
+    if (recordingWindow == nullptr)
+    {
+        recordingWindow = std::make_unique<RecordingWindow> (engine, settings);
+        recordingWindow->centreAroundComponent (this, recordingWindow->getWidth(), recordingWindow->getHeight());
+    }
+    recordingWindow->open();
+}
+
 //==============================================================================
 static constexpr int maxDeviceChannelsShown = MixSession::maxDeviceChannels;
 
@@ -865,6 +877,7 @@ void MainComponent::deviceChosen()
 //==============================================================================
 void MainComponent::timerCallback()
 {
+    masterCard.setRecordingSnapshot (engine.getRecorder().snapshot());
     const auto peerMeter = engine.getCollab().readRemoteMeter();
     if (collabWindow != nullptr) collabWindow->pushMeter (peerMeter);
     engine.getLoudnessMeter().poll();   // the LUFS numbers keep up whether or not their window is open (an hour-long stream reads whole)

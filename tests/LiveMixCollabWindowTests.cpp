@@ -228,7 +228,14 @@ public:
         second.keyPressed (juce::KeyPress (juce::KeyPress::backspaceKey));
         expect (code.getCode().isEmpty()); expect (first.hasKeyboardFocus (false));
         const auto clipboard = juce::SystemClipboard::getTextFromClipboard();
-        juce::SystemClipboard::copyTextToClipboard ("4827"); first.pasteFromClipboard();
+        // RustDesk on this PC syncs the clipboard and holds it for a moment after each change: retry until the paste lands.
+        for (int attempt = 0; attempt < 40 && code.getCode() != "4827"; ++attempt)
+        {
+            if (attempt > 0) juce::Thread::sleep (25);
+            for (const char* id : { "digit-0", "digit-1", "digit-2", "digit-3" }) child<juce::TextEditor> (code, id).clear();
+            first.grabKeyboardFocus();
+            juce::SystemClipboard::copyTextToClipboard ("4827"); first.pasteFromClipboard();
+        }
         juce::SystemClipboard::copyTextToClipboard (clipboard);
         expectEquals (code.getCode(), juce::String ("4827")); expect (code.complete());
         auto& last = child<juce::TextEditor> (code, "digit-3");

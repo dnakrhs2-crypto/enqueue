@@ -142,7 +142,9 @@ public:
         for (int width : { 1400, 960, 428 })
         {
             const bool wide = width == 1400, narrow = width == 428;
-            expectEquals (card.getPreferredHeight (width), wide ? 192 : narrow ? 310 : 202);
+            // The middle tier's latency row drops below the chain at 960: the record button joined LUFS (approved A, 10/26).
+            const int recordSlot = juce::jmax (76, juce::GlyphArrangement::getStringWidthInt (titleFont (15), "00:00:00") + 46);
+            expectEquals (card.getPreferredHeight (width), wide ? 192 : narrow ? 310 : 240);
             card.setSize (width, card.getPreferredHeight (width));
             rect (withText ("M"), { 14, 14, 32, 30 });
             rect (withText (ko ("마스터")), { 56, 12, narrow ? 160 : 152, 34 });
@@ -150,7 +152,7 @@ public:
             rect (withText ("1  TestGain"), { narrow ? 92 : 404, narrow ? 54 : 39, 110, 32 });
             rect (withText (ko ("체인 열기")), { narrow ? 210 : 522, narrow ? 55 : 40, 92, 30 });
             rect (withText (ko ("+ 추가")), { narrow ? 310 : 622, narrow ? 55 : 40, 76, 30 });
-            rect (withText ("LUFS"), { wide ? 895 : narrow ? 156 : 890, narrow ? 94 : 40, 56, 30 });
+            rect (withText ("LUFS"), { wide ? 895 : narrow ? 156 : 882 - recordSlot, narrow ? 94 : wide ? 40 : 79, 56, 30 });
             if (wide)
             {
                 rect (withText (ko ("지연")), { 783, 12, 168, 26 });
@@ -158,21 +160,21 @@ public:
                 rect (withText (ko ("480 샘플") + " · 48.0 kHz"), { 783, 72, 168, 20 });
             }
             else
-                rect (withText (ko ("지연 53.0 ms · 480 샘플")), { narrow ? 14 : 748, narrow ? 94 : 40, 134, 30 });
-            rect (withText (ko ("메인 출력")), { wide ? 1136 : 14, wide ? 12 : narrow ? 132 : 88, 60, wide ? 26 : 30 });
-            rect (withText (ko ("출력 미터 L / R")), { wide ? 1136 : 14, wide ? 46 : narrow ? 170 : 126, wide ? 250 : narrow ? 400 : 372, 18 });
-            rect (withText (ko ("OBS로 보내기")), { wide ? 1136 : narrow ? 14 : 404, wide ? 118 : narrow ? 242 : 89, 117, 28 });
-            rect (card.findChildWithID ("obs-status"), { wide ? 1261 : narrow ? 139 : 529, wide ? 118 : narrow ? 242 : 89, 78, 28 });
+                rect (withText (ko ("지연 53.0 ms · 480 샘플")), { narrow ? 14 : 740 - recordSlot, narrow ? 94 : 79, 134, 30 });
+            rect (withText (ko ("메인 출력")), { wide ? 1136 : 14, wide ? 12 : narrow ? 132 : 126, 60, wide ? 26 : 30 });
+            rect (withText (ko ("출력 미터 L / R")), { wide ? 1136 : 14, wide ? 46 : narrow ? 170 : 164, wide ? 250 : narrow ? 400 : 372, 18 });
+            rect (withText (ko ("OBS로 보내기")), { wide ? 1136 : narrow ? 14 : 404, wide ? 118 : narrow ? 242 : 127, 117, 28 });
+            rect (card.findChildWithID ("obs-status"), { wide ? 1261 : narrow ? 139 : 529, wide ? 118 : narrow ? 242 : 127, 78, 28 });
             // Preserve obsHintHeight's native font measurement: 37 px fits with a 7 px bottom inset.
-            rect (card.findChildWithID ("obs-source-hint"), { wide ? 1136 : narrow ? 14 : 404, wide ? 148 : narrow ? 270 : 121, wide ? 250 : narrow ? 400 : 542, wide ? 37 : 28 });
+            rect (card.findChildWithID ("obs-source-hint"), { wide ? 1136 : narrow ? 14 : 404, wide ? 148 : narrow ? 270 : 159, wide ? 250 : narrow ? 400 : 542, wide ? 37 : 28 });
             for (auto* child : card.getChildren())
             {
                 if (dynamic_cast<juce::ComboBox*> (child) != nullptr)
                     rect (child, wide ? juce::Rectangle<int> { 1202, 10, 184, 30 }
-                                     : narrow ? juce::Rectangle<int> { 80, 132, 334, 30 } : juce::Rectangle<int> { 80, 88, 306, 30 });
+                                     : narrow ? juce::Rectangle<int> { 80, 132, 334, 30 } : juce::Rectangle<int> { 80, 126, 306, 30 });
                 if (dynamic_cast<MeterBar*> (child) != nullptr)
                     rect (child, wide ? juce::Rectangle<int> { 1136, 64, 250, 46 }
-                                     : narrow ? juce::Rectangle<int> { 14, 188, 400, 46 } : juce::Rectangle<int> { 14, 144, 372, 46 });
+                                     : narrow ? juce::Rectangle<int> { 14, 188, 400, 46 } : juce::Rectangle<int> { 14, 182, 372, 46 });
             }
         }
         engine.getMasterChain().clear();
@@ -395,8 +397,9 @@ public:
             {
                 if (fx) top->onFxPanel();
                 else first->onOpenChain (first->getChannelId());
-                rect (*master, { 16, 660, 960, 202 });
-                rect (*viewport, { 16, 106, 968, 534 });
+                // A (10/26): the record button joined LUFS, so the 960 px middle tier's latency row sits below the chain.
+                rect (*master, { 16, 622, 960, 240 });
+                rect (*viewport, { 16, 106, 968, 496 });
                 rect (*first, { 0, 0, 960, 272 });
                 rect (*add, { 0, 852, 960, 56 });
                 expectEquals (viewport->getViewedComponent()->getHeight(), 908);
