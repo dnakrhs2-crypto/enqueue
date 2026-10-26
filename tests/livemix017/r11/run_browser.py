@@ -364,6 +364,22 @@ class Suite:
         finally:
             await context.close()
 
+    async def reissued_invite(self):
+        from playwright.async_api import expect
+        context = await self.context()
+        try:
+            page = await self.page(context, {"inspectError": "invite"})
+            await expect(page.locator("#error-message")).to_have_text(ERROR)
+            # The host's new address differs only in the fragment, so pasting it into this tab does not reload the page.
+            await page.evaluate("delete r11.config.inspectError")
+            await page.evaluate("hash => { location.hash = hash; }", "#v=2&code=5931&invite=" + "cd" * 32 + "&generation=2")
+            await expect(page.locator("#entry")).to_be_visible()
+            await expect(page.locator("#room-title")).to_have_text("하람 님의 합방")
+            assert [c["code"] for c in await self.calls(page, "inspect")] == ["4827", "5931"]
+            await self.copy(page)
+        finally:
+            await context.close()
+
     async def storage_flow(self, failure):
         from playwright.async_api import expect
         context = await self.context(failure=failure)
@@ -498,6 +514,7 @@ class Suite:
                             ("joinError", "full"), ("state", "rejected"), ("state", "ended")]:
             await self.case(f"approved error copy: {stage}/{code}", lambda s=stage, c=code: self.error_flow(s, c))
         await self.case("invalid fragment stops before inspect", self.invalid_invite)
+        await self.case("a reissued invite pasted into the same tab opens its room", self.reissued_invite)
         for failure in ("getter", "read", "write"):
             await self.case(f"localStorage {failure} failure keeps UI usable", lambda f=failure: self.storage_flow(f))
         await self.case("pagehide calls dispose", self.disposal)

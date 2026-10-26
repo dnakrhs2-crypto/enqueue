@@ -257,6 +257,16 @@ export function startApp(doc = document, win = window) {
     } catch (error) { fail({ code: error.code }); }
   }
 
+  // A reissued invite differs only in the fragment, so pasting it into this tab never reloads the page.
+  async function reopen() {
+    localEnding = true;
+    closeDevices();
+    try { await client?.dispose(); } catch { /* the dropped attempt has nothing left to show */ }
+    clearConnection();
+    localEnding = false;
+    await begin();
+  }
+
   async function finish(action) {
     localEnding = true;
     $("cancel").disabled = $("leave").disabled = true;
@@ -314,6 +324,7 @@ export function startApp(doc = document, win = window) {
   $("cancel").addEventListener("click", () => void finish("cancel"));
   $("leave").addEventListener("click", () => void finish("leave"));
   win.addEventListener("pagehide", () => { localEnding = true; void client?.dispose().catch(() => {}); });
+  win.addEventListener("hashchange", () => void reopen());
   void begin();
 }
 
