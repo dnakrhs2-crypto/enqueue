@@ -254,3 +254,10 @@ set_property(TARGET EnqueueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$
 add_test(NAME EnqueueUnitTests COMMAND EnqueueTests)
 add_test(NAME EnqueueMidiLoadTests COMMAND EnqueueTests --midi-load)
 set_tests_properties(EnqueueMidiLoadTests PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE LABELS "midi;load")
+
+# LiveMix 0.17 rounds own their fragment; this shared registration stays unchanged.
+# OPTIONAL permits a round to be absent. Empty fragments are valid as well.
+foreach(_livemix017_round RANGE 1 11)
+    include("${CMAKE_CURRENT_LIST_DIR}/livemix017/R${_livemix017_round}.cmake" OPTIONAL)
+endforeach()
+unset(_livemix017_round)

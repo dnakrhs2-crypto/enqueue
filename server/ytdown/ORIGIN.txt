@@ -1,0 +1,7 @@
+LiveMix room server working copy for 0.17.0 R0
+Copied-at: 2026-10-26T14:11:19.2077962+09:00
+Source-directory: C:/Users/claude/Desktop/유튜브다운
+Original files are read-only inputs; deployment is owned by Claude.
+
+e49481e01fc039ddfb0363e12dc1489e0c8a56ea2c1dff809fd126136d1fbf73  livemix_collab.py
+76c3555480b3eab2f889fd6fb0b3a76e9162f57a957c51594025603489e857ab  test_livemix_collab.py

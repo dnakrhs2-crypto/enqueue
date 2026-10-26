@@ -1,0 +1,95 @@
+LiveMix 0.17.0 R0 기존 시험 기준 / 반입 기록
+기준 HEAD: a03d904b77706efe3daf0da05dd2f8b3e9aca77f
+브랜치: livemix-webguest-record
+작업 폴더: C:\Users\claude\gocue-webrec
+측정일: 2026-10-26 (Asia/Seoul)
+
+기준과 실행 방법
+- 제품 구현 파일과 루트 CMake는 수정하지 않았다.
+- 원격 검증 스크립트는 a03d904b의 tests/CMakeLists.txt를 잠시 사용하여
+  변경 전 등록 상태로 빌드/합방 시험을 실행하고, finally에서 R0 등록 틀을 복원한다.
+- 서버 두 Python 파일은 운영 원본과 byte 단위로 같은 작업본이다.
+- 모든 구성/컴파일/시험은 rb.py를 통해 roomc에서만 실행했다.
+- EnqueueTests 첫 인자 'LiveMix Collab'은 이름 부분 문자열 필터다.
+  EnqueueTests의 passed/failed는 JUCE assertion 수이며 unittest 메서드 수와 다르다.
+
+결과
+- 서버: python -m unittest test_livemix_collab -v
+  26 tests, 통과 26, 실패 0, 오류 0, 1.456초.
+  roomc 작업: 20261026-143323-9e7081
+- 공통 헤더: C17 및 C++17 컴파일 성공.
+  lm_obs_metadata.h의 크기 256B / 오프셋 static_assert와 C/C++ enum 호환 확인.
+  MSVC 19.44.35229.0, Windows SDK 10.0.26100.0, x64 Release.
+- LiveMix / EnqueueTests / LiveMixCollabProbe: 세 대상 모두 x64 Release 빌드 성공.
+- LiveMix Collab 통과/실패: 16,874 passed, 0 failed (JUCE assertion 기준), 종료 0.
+- R0 시험 등록 틀 복원 후 구성/빌드: 구성 및 같은 세 대상 빌드 성공.
+  R1~R11의 빈 시험 조각 11개를 포함한 상태다.
+- 최종 검증 작업: 20261026-145003-b9ba06, rb.py 종료 0, 로그 fetch 성공.
+  시작 2026-10-26T15:04:55.5790673+09:00 / 완료 2026-10-26T15:13:48.4852470+09:00.
+  기존 소스의 shadow/deprecated/unused 경고는 있었으며 이 회차에서 변경하지 않았다.
+
+환경 준비와 실행 이력
+- 처음 요청한 빌드는 roomc 자리 대기 중이었고 아직 실행되지 않았다.
+  미구성 작업 폴더/누락된 build preset을 확인하여 그 대기 작업만 취소했다
+  (20261026-141059-e146c5, wrapper 종료 99; 제품 빌드 실패로 세지 않음).
+- 자동 복사되는 기본 CMakeUserPresets.json에는 configure preset local과
+  build preset local-release/local-debug만 있었다. 이 작업 폴더의 Git 제외된
+  CMakeUserPresets.json에 local = configurePreset local, configuration Release를 추가했다.
+- 첫 검증 작업은 서버 26개 통과 후 roomc PATH에 cmake가 없어 컴파일 시작 전에 중단됐다
+  (20261026-143323-9e7081, 종료 1). 제품 소스 오류가 아니다.
+- 다음 검증은 C:/Users/claude/tools/cmake/bin/cmake.exe를 명시하고 이미 통과한 서버 시험은 생략했다.
+  roomc 작업: 20261026-145003-b9ba06
+  rb.py --fetch build/r0-baseline C:/Users/claude/gocue-webrec -- '& ./r0_verify.tmp.ps1 -SkipServer'
+  임시 스크립트 내부의 핵심 명령:
+    cmake --preset local
+    cmake --build --preset local --target LiveMix EnqueueTests LiveMixCollabProbe
+    & ./build/vs2022/tests/EnqueueTests_artefacts/Release/EnqueueTests.exe 'LiveMix Collab'
+  각 네이티브 명령 다음 if ($LASTEXITCODE) { throw '...' }로 실패를 전파했다. exit는 사용하지 않았다.
+  추가 헤더 검사는 build/r0-headercheck의 임시 C17/C++17 object 대상이다.
+  임시 실행 스크립트/헤더 검사 소스는 제품이나 회차 시험에 등록하지 않는다.
+
+서버 반입
+- 원본 폴더: C:\Users\claude\Desktop\유튜브다운
+- 복사 시각: 2026-10-26T14:11:19.2077962+09:00
+- livemix_collab.py SHA-256:
+  e49481e01fc039ddfb0363e12dc1489e0c8a56ea2c1dff809fd126136d1fbf73
+- test_livemix_collab.py SHA-256:
+  76c3555480b3eab2f889fd6fb0b3a76e9162f57a957c51594025603489e857ab
+- 원본/작업본 해시가 일치하며 운영 원본은 수정하지 않았다.
+- server/ytdown/.gitattributes의 -text는 Git 줄바꿈 변환으로 원본 바이트가 달라지는 것을 막는다.
+
+R0 파일 목록 (이 보고서 포함 21개)
+docs/superpowers/specs/2026-10-26-livemix-webguest-record-contracts.md
+docs/superpowers/reports/2026-10-26-livemix-webguest-record-r0-baseline.txt
+livemix/src/CollabContracts.h
+livemix/shared/lm_obs_metadata.h
+livemix/src/recording/RecordingTypes.h
+tests/CMakeLists.txt
+tests/livemix017/R1.cmake
+tests/livemix017/R2.cmake
+tests/livemix017/R3.cmake
+tests/livemix017/R4.cmake
+tests/livemix017/R5.cmake
+tests/livemix017/R6.cmake
+tests/livemix017/R7.cmake
+tests/livemix017/R8.cmake
+tests/livemix017/R9.cmake
+tests/livemix017/R10.cmake
+tests/livemix017/R11.cmake
+server/ytdown/.gitattributes
+server/ytdown/ORIGIN.txt
+server/ytdown/livemix_collab.py
+server/ytdown/test_livemix_collab.py
+
+범위/인계
+- 작업 중 외부에서 수정된 원 설계서와 구현 계획의 roomc 실물 시험 변경은 보존했다.
+  이 두 파일은 R0 커밋에 포함하지 않는다.
+- 클로드 확인 필요: 계약 11절의 녹음 도중 자리 추가/mono-stereo 교체 경계와 접합 세부 권장값.
+- 원 작업 폴더의 Git 인덱스는 쓰기 허용 범위 밖인
+  C:/Users/claude/gocue/.git/worktrees/gocue-webrec/index에 있어 git add가 Permission denied로 실패했다.
+  쓰기 허용 폴더 안 build/r0-commit-worktree에서 같은 기준 HEAD로 별도 커밋을 만들고
+  build/r0-delivery/livemix-017-r0.bundle로 전달한다. 원 작업 폴더의 브랜치 ref는 변경하지 않는다.
+  영어 커밋 메시지 마지막 두 줄은 요청한 Co-Authored-By 및 Claude-Session이다.
+- 상세 로그: build/r0-baseline/ (Git 제외, rb.py --fetch로 가져옴).
+  server.txt, headers-configure.txt, headers-build.txt, baseline-configure.txt,
+  baseline-build.txt, collab.txt, r0-configure.txt, r0-build.txt, result.json.
