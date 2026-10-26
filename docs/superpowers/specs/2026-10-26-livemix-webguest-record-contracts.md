@@ -758,7 +758,8 @@ Recorder는 앱 수명, 세션 파일 새로 만들기/열기로 파괴·정지�
 prepareFormat는 callback 중지 상태에서 새 선할당 버퍼를 준비하고 이전 큐를 쓰기 스레드가 끝낸 뒤
 전체 파일 묶음을 다음 part로 연다. FIFO 부족/저장 실패는 녹음만 error이며 방송은 계속한다.
 
-MixEngine의 R8 공개 추가는 `recording::Recorder& getRecorder() noexcept`다.
+MixEngine의 R8 공개 추가는 `recording::Recorder& getRecorder() noexcept`와 `startRecording(const recording::Options&)`다(R8이 더함, 검토
+SHIP — 녹음 시작 때 합방 여부·자리 이름을 엔진이 고정해 §7의 시작 시 파일 구성 고정을 지킨다. R10은 시작에 이 함수를, 상태 조회·정지에 getRecorder()를 쓴다).
 `LiveMixSettings`는 `getRecordingOptions()/setRecordingOptions(const recording::Options&)`를 제공한다.
 R10은 두 API를 사용하며 MixEngine·설정 파일을 직접 고치지 않는다.
 
