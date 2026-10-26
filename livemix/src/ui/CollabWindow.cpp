@@ -818,6 +818,14 @@ CollabWindow::CollabWindow (collab::CollabSession& collab, LiveMixSettings& sett
     timerCallback(); startTimer (200);
 }
 CollabWindow::~CollabWindow() { stopTimer(); clearContentComponent(); }
+juce::Rectangle<int> CollabWindow::grownBounds (juce::Rectangle<int> current, juce::Rectangle<int> workArea, juce::BorderSize<int> frame)
+{
+    const int room = workArea.getHeight() - frame.getTopAndBottom();
+    const int height = juce::jlimit (juce::jmin (400, room), 800, room);
+    const int top = workArea.getY() + frame.getTop();
+    const int lowest = juce::jmax (top, workArea.getBottom() - frame.getBottom() - height);
+    return { current.getX(), juce::jlimit (top, lowest, current.getY()), current.getWidth(), height };
+}
 void CollabWindow::open() { timerCallback(); setVisible (true); toFront (true); }
 void CollabWindow::closeButtonPressed() { setVisible (false); }
 bool CollabWindow::keyPressed (const juce::KeyPress& key)
@@ -831,11 +839,14 @@ void CollabWindow::timerCallback()
     const bool webRoom = snapshot.roomMode == collab::contracts::RoomMode::v2 && snapshot.state != State::off;
     if (webRoom && ! expandedForRoom)
     {
-        const auto border = getContentComponentBorder();
+        // The native title bar and borders sit outside these bounds: fit the whole window in the work area and move it up
+        // rather than leaving [다시 맞추기]·[방 닫기] below a 1080p-at-150 % or 768p screen.
+        const auto frame = getPeer() != nullptr ? getPeer()->getFrameSize() : juce::BorderSize<int>();
         const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getBounds());
-        const int height = display != nullptr ? juce::jlimit (640, 800, display->userArea.getHeight() - border.getTopAndBottom()) : 800;
-        content->setSize (440, height);
-        setResizeLimits (400 + border.getLeftAndRight(), 640 + border.getTopAndBottom(), 10000, 10000);
+        const auto grown = display != nullptr ? grownBounds (getBounds(), display->userArea, frame) : getBounds().withHeight (800);
+        const auto border = getContentComponentBorder();
+        setResizeLimits (400 + border.getLeftAndRight(), juce::jmin (640, grown.getHeight()), 10000, 10000);
+        setBounds (grown);
         expandedForRoom = true;
     }
     if (roomCode != snapshot.code || ! snapshot.canCreateWebInvite) inviteRequested = false;

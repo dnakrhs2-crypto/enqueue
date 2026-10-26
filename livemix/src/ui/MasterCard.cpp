@@ -389,17 +389,19 @@ void MasterCard::resized()
         obsToggle.setBounds (row.removeFromRight (obsToggleWidth()).withSizeKeepingCentre (obsToggleWidth(), obsRowHeight));
         row.removeFromRight (8);
         constexpr int meterMinimum = 64;
-        // Approved A: the always-shown record button sits right beside LUFS; the chain button gives way first.
-        const bool withChain = row.getWidth() >= meterMinimum + recordWidth + 8 + 88 + 8;
+        // Approved A: [LUFS][녹음] stay together and the chain button gives way first. The record slot fits the longest
+        // elapsed time, so a recording that starts or runs long never moves or hides the others.
+        const int slot = recordSlotWidth();
+        const bool withLufs = row.getWidth() >= meterMinimum + 56 + 8 + slot + 8;
+        const bool withChain = row.getWidth() >= meterMinimum + (withLufs ? 56 + 8 : 0) + slot + 8 + 88 + 8;
         openChainButton.setVisible (withChain);
         if (withChain)
         {
             openChainButton.setBounds (row.removeFromRight (88));
             row.removeFromRight (8);
         }
-        recordingButton.setBounds (row.removeFromRight (recordWidth));
+        recordingButton.setBounds (row.removeFromRight (slot).withWidth (recordWidth));
         row.removeFromRight (8);
-        const bool withLufs = row.getWidth() >= meterMinimum + 56 + 8;
         lufsButton.setVisible (withLufs);
         if (withLufs)
         {

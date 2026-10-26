@@ -143,6 +143,11 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     void pushMeter (collab::CollabAudio::Meter m) { content->pushMeter (m, isVisible()); }
 
+    /** The content bounds (screen coordinates) a web room grows to: up to 800 px tall, with the native frame
+        (title bar, borders) and the whole window inside the work area, moved up rather than left hanging below it. */
+    static juce::Rectangle<int> grownBounds (juce::Rectangle<int> current, juce::Rectangle<int> workArea,
+                                             juce::BorderSize<int> frame);
+
 private:
     void timerCallback() override;
     collab::CollabSession& session;

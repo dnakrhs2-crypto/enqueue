@@ -1,3 +1,4 @@
+#include <map>
 #include "ui/RecordingWindow.h"
 #include "ui/CollabWindow.h"
 #include "ui/MasterCard.h"
@@ -182,6 +183,7 @@ private:
         expectEquals (recordingElapsedText (65), juce::String ("01:05"));
         expectEquals (recordingElapsedText (3599), juce::String ("59:59"));
         expectEquals (recordingElapsedText (3600), juce::String ("01:00:00"));
+        std::map<juce::String, juce::String> idleLayout;
         for (bool live : { false, true })
         {
             recording::Snapshot s; s.state = live ? recording::State::recording : recording::State::idle; s.elapsedSeconds = 5025;
@@ -193,11 +195,24 @@ private:
                     master.setStrip (folded); master.setSize (width, master.getPreferredHeight (width));
                     expect (button.isVisible());
                     expect (master.getLocalBounds().contains (button.getBounds()));
-                    // Approved A: right beside LUFS in every form that shows LUFS.
+                    const auto key = juce::String (width) + (folded ? " strip" : "");
+                    juce::Button* lufs = nullptr; juce::Button* chain = nullptr;
                     for (auto* child : master.getChildren())
-                        if (auto* lufs = dynamic_cast<juce::Button*> (child); lufs != nullptr && lufs->getButtonText() == "LUFS" && lufs->isVisible())
-                            expect (button.getX() == lufs->getRight() + 8 && button.getY() == lufs->getY(),
-                                    "record beside LUFS at " + juce::String (width) + (folded ? " strip" : ""));
+                        if (auto* b = dynamic_cast<juce::Button*> (child))
+                        {
+                            if (b->getButtonText() == "LUFS") lufs = b;
+                            if (b->getButtonText() == ko ("체인 열기")) chain = b;
+                        }
+                    expect (lufs != nullptr && chain != nullptr); if (lufs == nullptr || chain == nullptr) continue;
+                    // Approved A: right beside LUFS in every form that shows LUFS; the chain button gives way first.
+                    if (lufs->isVisible())
+                        expect (button.getX() == lufs->getRight() + 8 && button.getY() == lufs->getY(), "record beside LUFS at " + key);
+                    if (chain->isVisible()) expect (lufs->isVisible(), "the chain button outlasts LUFS at " + key);
+                    // A running recording's longer time moves or hides nothing else.
+                    const auto layout = (lufs->isVisible() ? lufs->getBounds().toString() : juce::String ("-")) + " | "
+                                        + juce::String (button.getX()) + " | " + (chain->isVisible() ? chain->getBounds().toString() : juce::String ("-"));
+                    if (! live) idleLayout[key] = layout;
+                    else expectEquals (layout, idleLayout[key], key);
                     capture (master, "master-" + juce::String (width) + (folded ? "-strip" : "") + (live ? "-recording" : "-idle"));
                 }
         }
@@ -205,6 +220,27 @@ private:
     }
     void checkCollab (LiveMixSettings& settings)
     {
+        beginTest ("a web room's grown collab window keeps its frame and bottom buttons inside the work area");
+        {
+            const juce::BorderSize<int> frame (31, 8, 8, 8);   // a native title bar and borders
+            const auto onScreen = [&] (juce::Rectangle<int> b, juce::Rectangle<int> work, const juce::String& what)
+            {
+                expect (b.getY() - frame.getTop() >= work.getY() && b.getBottom() + frame.getBottom() <= work.getBottom(), what + " " + b.toString());
+            };
+            // 1920x1080 at 150 %: opened centred at 440x430, the room grows to the whole height the frame leaves and moves up.
+            auto grown = CollabWindow::grownBounds ({ 420, 121, 440, 430 }, { 0, 0, 1280, 672 }, frame);
+            expectEquals (grown.getHeight(), 672 - 39); expectEquals (grown.getX(), 420); expectEquals (grown.getWidth(), 440);
+            onScreen (grown, { 0, 0, 1280, 672 }, "1080p at 150 %");
+            // 1366x768 at 125 %: shorter than the layout likes, still wholly on screen.
+            grown = CollabWindow::grownBounds ({ 326, 73, 440, 430 }, { 0, 0, 1093, 576 }, frame);
+            expectEquals (grown.getHeight(), 576 - 39); onScreen (grown, { 0, 0, 1093, 576 }, "768p at 125 %");
+            // A tall screen: 800 px, staying where it was opened when that fits and moving up when it does not.
+            expectEquals (CollabWindow::grownBounds ({ 740, 100, 440, 430 }, { 0, 0, 1920, 1040 }, frame).toString(), juce::Rectangle<int> (740, 100, 440, 800).toString());
+            expectEquals (CollabWindow::grownBounds ({ 740, 300, 440, 430 }, { 0, 0, 1920, 1040 }, frame).toString(), juce::Rectangle<int> (740, 232, 440, 800).toString());
+            // A second monitor above the first keeps its own coordinates.
+            grown = CollabWindow::grownBounds ({ 300, -900, 440, 430 }, { 0, -1050, 1680, 1010 }, frame);
+            onScreen (grown, { 0, -1050, 1680, 1010 }, "second monitor");
+        }
         beginTest ("three people map by slot and participant ID; each volume, invite, request and kick uses its command");
         int invites = 0; c::ParticipantId volumeId = 0, kicked = 0; float gain = -1, monitorGain = -1; bool monitorOn = true;
         juce::String accepted, rejected;
