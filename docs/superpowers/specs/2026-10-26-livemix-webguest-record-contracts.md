@@ -99,7 +99,7 @@ streamEpoch=0. `streamRestart`만 머리에 **새** epoch를 넣는다.
 | `roster_ack` | 1 / `0x02` | roster revision과 ACK |
 | `star_3` | 2 / `0x04` | 세 사람 방·origin/linkSender 분리 |
 | `pcm16_mono` | 3 / `0x08` | 웹 모노 패킷 수신/전달 |
-| `web_guest` | 4 / `0x10` | 웹 참여/mix-minus |
+| `web_guest` | 4 / `0x10` | 웹 참여/웹에 사람별 하향 전달 |
 
 0.17 정상 구현은 다섯 개(`0x1f`) 모두 광고한다. 네이티브 v2 필수 교집합은 `0x07`,
 웹이 있는 방은 네이티브 전원과 웹 모두 `0x1f`가 필요하다. JSON은 이름 배열(중복 없음, 최대 5),
@@ -171,7 +171,7 @@ ACK payload는 0B, seq/revision은 받은 값. ACK 유실 시 방장 재전송�
 | 방장 UDP | session, 예약/연결 participantId, 성공한 hello의 IP+port, origin=linkSender=그 링크 ID, roster의 kind/epoch/PCM 형식 |
 | 네이티브 참가자 | 성공한 방장 주소 IP+port, linkSender=방장 ID, origin=roster의 자기 외 사람, 그 사람 epoch/형식 |
 | 방장 WebRTC | 수락된 PeerConnection과 connectionGeneration, origin=linkSender=그 웹 ID, mono16만, 현재 epoch |
-| 웹 | 현재 PeerConnection/generation, linkSender=origin=방장 ID, stereo24 mix-minus만, 방장 믹스 epoch |
+| 웹 | 현재 PeerConnection/generation, linkSender=방장 ID, origin=roster의 자기 외 사람(방장·native), 그 사람 epoch, stereo24만 |
 
 공통: 알려진 Kind/flags, 정확한 크기·frames·firstFrame 정렬·session을 먼저 검사한다.
 현재 설치 revision보다 높은 오디오는 거절한다. 이전 revision 오디오는 현재에도 같은 origin/epoch/형식이
@@ -180,13 +180,15 @@ ACK payload는 0B, seq/revision은 받은 값. ACK 유실 시 방장 재전송�
 주소 재바인딩은 새로운 연결 승인/handshake 경로에서만 한다. CORS나 UDP 주소 검사를 암호 인증으로 설명하지 않는다.
 
 재시작은 자기 링크의 `streamRestart`(현재 epoch+1) → 방장 roster 갱신 → ACK 후 새 epoch 오디오 순이다.
-방장 자체 장치 재시작은 로컬 스트림 및 웹 mix-minus 시계도 새 epoch로 바꾸어 roster로 알린다.
-웹 mix-minus는 방장 origin/epoch를 사용하되 별도 seq/firstFrame을 가진다(웹 수신자에게만 있는 한 스트림).
+방장 자체 장치 재시작은 로컬 스트림을 새 epoch로 바꾸어 roster로 알린다.
+웹 하향은 **사람별**이다(설계서 원문 20, 결정 8): 방장 자기 스트림(native에 보내는 것과 같은 패킷·같은 seq/firstFrame/epoch)과
+다른 native 참가자 원본 패킷 전달을 native 수신자와 똑같이 웹 링크에도 보낸다. 웹 전용 mix-minus 스트림은 만들지 않는다.
 로컬 장치 rate가 바뀌어도 이미 연 방의 wireRate는 유지하며 ASRC를 다시 준비한다.
 
 전달은 수신 검증 직후, **방장 CollabPlayout 투입 전** 분기한다. origin/seq/firstFrame/epoch/flags/payload는
 유지하고 linkSender만 방장으로, rosterRevision은 수신자 ACK 상태로 바꾼다. 자기 링크에 반송하지 않는다.
-내 송신 FIFO는 송신 스레드 하나가 한 번 drain하여 링크에 복제한다. UDP 수신·WebRTC 수신은 별도
+전달 대상은 native 링크와 웹 링크 모두다(native stereo24 → 다른 native·웹, 웹 mono16 → native만).
+내 송신 FIFO는 송신 스레드 하나가 한 번 drain하여 링크(웹 링크 포함)에 복제한다. UDP 수신·WebRTC 수신은 별도
 SPSC 입력을 사용한다. 전송 큐 포화는 그 링크의 오래된 오디오 폐기/통계 증가이며 다른 링크를 막지 않는다.
 
 ## 3. 방 서버 HTTP API
@@ -443,11 +445,12 @@ R0는 이 CMake 연결을 하지 않는다.
   웹의 public 페이지가 임의 쿼리로 외부 API base/STUN을 바꾸는 기능은 넣지 않는다.
 - 웹 전송은 §2 v2 바이너리 그대로, 120프레임 mono16 상향/stereo24 하향.
   DataChannel의 신뢰성 없음은 SCTP 혼잡 제어/내부 대기가 없다는 뜻이 아니다.
-  권장 송신 적체 한도는 오디오 **20ms**: 방향 packetBytes × ceil(wireRate×0.020/120).
+  권장 송신 적체 한도는 오디오 **20ms**: 그 방향 오디오 스트림 수 × packetBytes × ceil(wireRate×0.020/120)
+  (방장→웹은 3명 방이면 stereo24 두 줄, 웹→방장은 mono16 한 줄).
   bufferedAmount/앱 대기가 그 한도를 넘으면 오래된 오디오를 폐기하고 카운터를 올린다.
   작은 제어 패킷은 별도로 우선 송신/ACK 재시도하며 송신에서 오디오 콜백을 기다리게 하지 않는다.
-- 웹 하향은 방장 장치 시계에서 `내 마스터 + 웹 이외 native 상대의 재생 결과` 1배 합,
-  헤드폰 volume/on 적용 전, 웹 자신의 소리는 제외한다. PCM24 변환 때 포화/초과 수 기록.
+- 웹 하향은 §2.4의 사람별 전달이다: 방장 자기 스트림 + 다른 native 원본(그 사람 epoch·seq 그대로). 웹 자신의 소리는
+  반송하지 않는다. 섞기·사람별 음량은 웹(R6)이 한다. 3명 방 웹 하향은 계산값 약 5.5Mbps(861B×400×2), 상향 약 1.2Mbps.
 - 연결 generation은 모든 HTTP signal/event, PC 콜백, JS 내부 메시지의 필수 값이다.
   닫힌/교체된 generation은 데이터가 올바른 모양이어도 버린다. 한 세대의 close가 다른 세대를 닫지 않는다.
 
@@ -480,9 +483,9 @@ R1/R6는 실제 Chrome/Edge에서 협상값과 경로를 기록해야 하며 R0�
 | `guest-client.js` | R6 | UI용 API, PC·오디오 수명, Worker/Worklet 배선, 신호 전달 |
 | `signaling.js` | R6 | §3 text/plain fetch, 토큰/cursor/generation, 롱폴 |
 | `audio/worker.js` | R6 | packet codec·수신 시각·전송 큐·메트릭·시그널링 작업 |
-| `audio/worklet.js` | R6 | `livemix-guest` AudioWorkletProcessor, mono 캡처/스테레오 재생 |
+| `audio/worklet.js` | R6 | `livemix-guest` AudioWorkletProcessor, mono 캡처/사람별 스테레오 재생·음량·섞기 |
 | `audio/packet.js` | R6 | §2 LE codec, 형식 검증/roster ACK |
-| `audio/playout.js` | R6 | 재정렬·late 폐기·PLC·재버퍼·fade·독립 clock |
+| `audio/playout.js` | R6 | 재정렬·late 폐기·PLC·재버퍼·fade·독립 clock(받는 사람마다 한 개, 최대 2) |
 | `audio/asrc.js` | R6 | lm_asrc의 32탭/512위상 JS 이식 |
 | `audio/buffers.js` | R6 | 선할당 buffer pool, 120프레임 packet 경계 FIFO |
 
@@ -496,7 +499,7 @@ export function createGuestClient({ onState, onRoster, onMeter, onError }) {}
 // client.prepareMicrophone(deviceId = null) -> Promise<MediaDeviceInfo[]>
 // client.requestJoin(invite, nickname) -> Promise<void>
 // client.setMicEnabled(enabled) -> void
-// client.setPeerVolume(gain) -> void   // 0..1, playback only (설계서 13-1 '상대방 음량'); default 1
+// client.setPeerVolume(participantId, gain) -> void // 0..1, that person's playback only (설계서 13-1); default 1
 // client.cancel() / client.leave() -> Promise<void>
 // client.dispose() -> Promise<void> (tracks, PC, ports, context, worker close)
 // onState({state, generation})
@@ -509,9 +512,13 @@ export function createGuestClient({ onState, onRoster, onMeter, onError }) {}
 getUserMedia는 audio mono, echoCancellation/noiseSuppression/autoGainControl=false,
 선택 deviceId를 사용하며 실제 track settings와 AudioContext.sampleRate를 진단 결과에 남긴다.
 마이크 OFF는 캡처 값을 0으로 만들어 상향 시계를 계속 진행한다. 하향 재생은 유지한다.
-`setPeerVolume`(10/26 gom 원문 18)은 웹 사용자가 듣는 하향 재생에만 곱하는 음량이다(0~1, 화면 0~100%). 스테레오 출력
-노드 뒤 GainNode 등 main thread의 AudioParam으로 적용하고 바뀔 때 짧게 램프(약 20ms)해 딱 소리가 나지 않게 한다.
-상향(웹 마이크) 소리와 방장·다른 사람이 듣는 소리는 바꾸지 않는다. 기기별 기억(localStorage, 실패해도 기본 100%)은 R11 화면이 맡는다.
+`setPeerVolume(participantId, gain)`(10/26 gom 원문 18·20)은 웹 사용자가 듣는 **그 사람의** 하향 재생에만 곱하는 음량이다
+(0~1, 화면 0~100%). 웹은 받는 사람(origin)마다 재생기·ASRC를 따로 두고, Worklet이 사람마다 gain을 곱해 스테레오 출력 하나로 섞는다.
+gain은 main이 AudioWorkletNode `node.port`로 `{type:"peerGain",generation,participantId,gain}`을 보내고 Worklet이 사람마다
+약 20ms 선형 램프로 바꾼다(딱 소리 없음, process()에서 할당 없음, 사람 표는 최대 3칸 선할당). 아직 roster에 없는 사람의 gain도
+받아 두었다가 그 사람이 들어오면 처음부터 적용하고, 값이 없던 사람은 1이다. 같은 사람의 새 epoch(재시작)에도 gain은 유지한다.
+상향(웹 마이크) 소리와 방장·다른 사람이 듣는 소리는 바꾸지 않는다. 닉네임별 기억(localStorage, 실패해도 기본 100%)은 R11 화면이 맡고,
+onRoster로 사람이 보이면 R11이 기억값으로 `setPeerVolume`을 부른다.
 AudioContext/PC는 Window에 두고 stereo 출력 노드의 channelCount=2,
 channelCountMode=`explicit`, channelInterpretation=`discrete`를 사용한다.
 Worklet은 process()의 실제 배열 길이를 사용한다. 128을 네트워크 packet 크기로 바꾸지 않는다.
@@ -524,16 +531,18 @@ main이 MessageChannel 하나를 만들고 port1을 Worklet node.port를 통해,
 | 직접 port 메시지 | 필드 | 흐름 |
 |---|---|---|
 | capture | `generation,streamEpoch,firstFrame,frames,buffer` | Worklet→Worker, 방 rate mono Float32, frames=120 |
-| playback | `generation,streamEpoch,seq,firstFrame,frames,arrivalNs,buffer` | Worker→Worklet, 방 rate stereo Float32 interleaved, frames=120 |
+| playback | `generation,origin,streamEpoch,seq,firstFrame,frames,arrivalNs,buffer` | Worker→Worklet, origin=보낸 사람 ID, 방 rate stereo Float32 interleaved, frames=120 |
+| people | `generation,rosterRevision,members:[{participantId,streamEpoch}]` | Worker→Worklet, 재생할 사람(자기 제외, 최대 2) — 빠진 사람 재생기는 fade 후 비움 |
+| peerGain | `generation,participantId,gain` | main→Worklet(`node.port`), 0..1, 사람마다 약 20ms 램프 |
 | recycle | `generation,pool:"capture"|"playback",buffer` | 소비자→생산자, 버퍼 소유권 반환 |
 | configure | `generation,wireRate,deviceRate,streamEpoch,rosterRevision` | Worker→Worklet, 제어 경로에서 반영 |
 | mic | `generation,enabled` | Worker→Worklet |
-| stats | `generation,peak,underruns,late,dropped,bufferMs,driftPpm` | Worklet→Worker, UI 주기 집계 |
+| stats | `generation,peak,people:[{participantId,underruns,late,dropped,bufferMs,driftPpm}]` | Worklet→Worker, UI 주기 집계(사람마다) |
 | close | `generation` | 해당 세대 처리 종료 |
 
 firstFrame/arrivalNs는 JS 내부 BigInt, buffer는 transfer list로 이전한다. Float32 buffer의
 할당/TypedArray view 준비는 초기화·메시지 수신에서 하고 process()는 준비된 버퍼를 쓴다.
-capture pool은 권장 20ms, playback은 최대 200ms 분량, 초기 목표 재생 버퍼 20ms다.
+capture pool은 권장 20ms, playback은 사람마다 최대 200ms 분량(최대 2명), 초기 목표 재생 버퍼 20ms다.
 pool 고갈은 블로킹/추가 할당 대신 해당 오디오 폐기·계수 증가다. 늦은 데이터는 sample 위치로 버린다.
 이 권장값은 실측 조정 대상이며 지연 보장값이 아니다. SharedArrayBuffer 대체로 메인 오디오 중계를 넣지 않는다.
 
@@ -579,6 +588,7 @@ public:
         juce::String nickname, appVersion;
         double rttMs=0, estimatedOneWayMs=0, bufferMs=0, lossPercent=0;
         float peakLeft=0, peakRight=0;
+        float monitorVolume = 1.0f; // others only: this person's headphone volume 0..1 (설계서 결정 5, 원문 20)
     };
     struct WebRequestSnapshot {
         juce::String requestId, nickname;
@@ -603,8 +613,8 @@ public:
         uint32_t inviteGeneration = 0;
         bool canCreateWebInvite = false;
         c::ParticipantId kickableWebId = 0;
-        float monitorVolume = 1.0f;
-        bool monitorOn = true;
+        float monitorVolume = 1.0f; // start value for a person with no remembered volume (0.16 collabMonitorVolume)
+        bool monitorOn = true;      // shared by all others
         CollabAudio::Route route = CollabAudio::Route::master;
         int routeFirst = 0;
         // Legacy UI/test projections of slot 1, not an additional stream:
@@ -615,9 +625,16 @@ public:
     void acceptWebRequest(const juce::String& requestId);
     void rejectWebRequest(const juce::String& requestId);
     void kickWebGuest(c::ParticipantId);
+    void setPersonMonitorVolume(c::ParticipantId, float volume01); // one other person's headphone volume
     Snapshot getSnapshot() const;
 };
 ```
+
+상대 음량은 사람마다(설계서 결정 5, 원문 20)다. 기존 `setMonitor(volume,on)`은 on(모든 상대 공통)과 '처음 보는 사람 시작값'
+(`collabMonitorVolume`, 0.16 설정 그대로)을 정하는 호환 함수로 남는다. `setPersonMonitorVolume`은 그 사람의 PersonSnapshot·
+재생 음량만 바꾸고 닉네임별로 기억한다(`LiveMixSettings`, 최근 32명, 넘으면 가장 오래 안 쓴 이름부터 지움). 사람이 들어오면
+닉네임 기억값, 없으면 시작값으로 시작한다. 자리(slot)가 아니라 사람을 따라가므로 누가 나가 자리 번호가 남아도 남은 사람 음량은 그대로다.
+헤드폰 경로/ON·OFF는 지금처럼 공통이다. OBS 링·녹음 B/C/D에는 음량을 곱하지 않는다(헤드폰 전 원음).
 
 공개 명령/스냅샷/ChangeBroadcaster 알림은 메시지 스레드다. 명령은 비동기 큐에 넣고 즉시 반환한다.
 성공/실패는 Snapshot으로 알린다. people에는 자기 자신 포함 최대 3명, webRequests에는 pending만 있다.
@@ -632,12 +649,11 @@ CollabAudio(const juce::String& peer1Mapping, const juce::String& peer2Mapping);
 c::RenderedSources renderSources(int frames) noexcept;
 void renderMonitor(const c::RenderedSources&, float* const* outputs,
                    int numOutputs, int masterFirst) noexcept;
-void pushWebMix(c::AudioSourceView master, const c::RenderedSources&, int frames) noexcept;
+void setSlotMonitorVolume(unsigned slotIndex, float volume01) noexcept; // 0/1, per-person headphone volume
 void receiveV2(const c::HeaderV2&, const uint8_t* payload, uint64_t arrivalNs) noexcept;
 void applyRoster(const RosterSnapshot&, c::ParticipantId selfId); // lifecycle, R3 type
 ObsSender& getPeerObs(unsigned slotIndex) noexcept; // 0/1; existing no-arg returns 0
 CollabPlayout::Stats getStats(unsigned slotIndex) const noexcept;
-void drainWebMix(const CollabSender::Sink&); // one network sender, not audio callback
 ```
 
 renderSources는 콜백당 **한 번** 두 재생기를 pull하고 두 OBS 링에 헤드폰 전 원음을 기록한다.
@@ -645,12 +661,11 @@ renderSources는 콜백당 **한 번** 두 재생기를 pull하고 두 OBS 링�
 빈 자리는 null=무음, 웹은 채널 수 1이지만 L/R view가 같은 mono sample을 가리킨다.
 기존 renderRemote는 renderSources→renderMonitor wrapper로 남긴다. R8의 새 경로에서는
 renderSources 뒤에 이 wrapper를 다시 부르지 않는다.
-pushWebMix는 선할당 FIFO만 채운다. 세션 종료 때 그 FIFO의 transport 소비자를 해제한다.
+renderMonitor는 자리마다 `setSlotMonitorVolume` 음량 × 공통 on을 기존 gain 램프와 같은 방식으로 곱해 더한다.
+기존 `setMonitor(volume,on)`은 두 자리 음량을 같은 값으로 두는 호환 함수로 남는다(기존 시험·한 자리 호출자).
+웹 전용 하향 믹스(pushWebMix/drainWebMix)는 없다(원문 20 — 웹 하향은 §2.4 사람별 전달, 송신은 R3 전송 경로).
 두 자리 생성자는 R8이 해석한 두 링 이름을 받는다. 기존 한 자리 생성자/시험에서는
 자리 2 링을 임의로 생산 기본 이름에 연결하지 않고 비활성으로 둔다.
-drainWebMix의 기존 Sink는 PCM24 payload와 seq/firstFrame/frames를 전달하는 생산자 경계다.
-R8의 네트워크 송신 어댑터가 현재 session/방장 origin/linkSender/epoch/ACK revision을 넣은
-HeaderV2로 직렬화하여 WebGuestTransport::sendAudio에 보낸다. v1 packet을 채널에 보내지 않는다.
 
 R3는 `CollabRoster.{h,cpp}`에 다음 제어 자료형을 제공한다.
 
@@ -687,6 +702,12 @@ void configureV2(c::ParticipantId self, const RosterSnapshot&,
 void updateRoster(const RosterSnapshot&); // host control thread
 void updatePeers(const std::vector<V2Peer>&); // join/punch per link, not global
 void receiveWebPacket(const c::HeaderV2&, const uint8_t*, uint64_t arrivalNs);
+// Web link (원문 20): R8 binds WebGuestTransport::sendAudio/sendControl of the accepted generation; control thread.
+// Empty functions remove the link. Called only from R3's send/control threads, never from the audio callback.
+struct WebLinkSend {
+    std::function<bool(const uint8_t* packet, size_t bytes)> audio, control;
+};
+void setWebLink(c::ParticipantId webId, c::ConnectionGeneration, WebLinkSend);
 Stats getStats(c::ParticipantId linkedPeer) const; // physical native link stats
 ```
 
@@ -696,6 +717,10 @@ R8은 onAudio를 CollabAudio::receiveV2에, onRoster를 세션 제어 작업에 
 transport가 보낸 포인터는 콜백 동안만 유효하며 보관하려면 정해진 입력 큐에 복사한다.
 receiveWebPacket은 웹 수신 큐 전용 생산자 경계다. UDP 입력 큐와 공유하지 않는다.
 R3의 송신 스레드가 웹 원본 패킷을 native로 전달하고 R4 재생 입력에도 배분한다.
+같은 송신 스레드가 방장 자기 패킷과 native 원본 전달을 웹 링크에도 보낸다(§2.4 사람별 하향, 원문 20) —
+웹 링크는 native 링크와 같은 링크로 다룬다: roster 송신·200ms 재전송은 `setWebLink`의 control 함수로,
+웹의 rosterAck·ping·bye는 receiveWebPacket으로 받아 같은 규칙(§2.3·§2.4)으로 처리하고, 오디오는 audio 함수로
+그 링크가 ACK한 revision·20ms 적체 한도(§4)를 따져 보낸다. 세대가 바뀌면 R8이 새 세대로 다시 설정한다.
 R2의 서버 Member→RosterMember 변환은 R8이 맡아 R2가 미래의 R3 헤더를 요구하지 않는다.
 
 ### 6.3 Recorder — R5, 엔진/설정 연결 R8
@@ -906,24 +931,25 @@ R5는 세 비트레이트의 stereo 실제 출력을 각각 확인한다.
 
 MixEngine 정상/graph try-lock 실패 경로 모두 아래 순서를 지킨다.
 
-1. 내 마스터 결과(실패 경로는 무음)를 내 OBS/네이티브 송신에 전달.
+1. 내 마스터 결과(실패 경로는 무음)를 내 OBS/네이티브 송신에 전달(웹 링크 복제는 R3 송신 스레드, §2.4).
 2. `renderSources(n)` 한 번으로 상대별 원음과 상대 OBS 1/2 기록.
 3. 같은 view로 `Recorder::push(master, remote1, remote2, n)`.
-4. 방장 웹 연결이 있으면 `pushWebMix(master,sources,n)`(웹 자기 소리 제외).
-5. `renderMonitor(sources,...)`에서만 공통 헤드폰 gain/on/route 적용.
+4. `renderMonitor(sources,...)`에서만 헤드폰 gain(자리마다)/on/route 적용.
 
 기존 ScopedTryLock을 새 기능의 blocking lock으로 바꾸지 않는다. try-lock 실패해도
-상대 재생·녹음·웹 믹스의 샘플 수는 진행한다.
+상대 재생·녹음의 샘플 수는 진행한다.
 
-설정은 `%APPDATA%/LiveMix/LiveMix.settings`에 다음 **세 키만 추가**한다.
+설정은 `%APPDATA%/LiveMix/LiveMix.settings`에 다음 **네 키만 추가**한다.
 
 | 키 | 저장값 | 기본값 |
 |---|---|---|
 | recordingFormat | 문자열 `wav` / `mp3` | wav |
 | recordingMp3Kbps | 정수 128 / 256 / 320 | 320 |
 | recordingDirectory | 절대 경로 문자열 | 비어 있으면 문서/LiveMix 녹음 |
+| collabPersonVolumes | 닉네임별 상대 음량 0..1, 최근 32명(§6.1, 원문 20). 저장 형식은 R8 재량(JUCE var/XML) | 비어 있음 |
 
-collabNick/Port/Rate/MonitorVolume/MonitorOn/Route/RouteFirst/InstallId의 기존 키/기본값은 보존한다.
+collabNick/Port/Rate/MonitorVolume/MonitorOn/Route/RouteFirst/InstallId의 기존 키/기본값은 보존한다
+(MonitorVolume = 처음 보는 사람 시작값).
 토큰·사람 ID·초대·녹음 진행 상태·파일 집합은 설정에 저장하지 않는다. 앱 재실행 때 자동 녹음하지 않는다.
 
 ## 8. OBS 링과 메타데이터 ABI
@@ -1040,7 +1066,7 @@ R7의 metadata 구현 범위에 공통 ABI 헤더는 포함하지 않는다. R5�
 | 루트 CMake 연결 | R1 | 아래 optional `cmake/livemix017/Rn.cmake` |
 | tests/CMakeLists | R0 동결 | 이미 포함된 `tests/livemix017/Rn.cmake` |
 | CollabSession / 방·자리 관리 | R8 | R1 transport, R2 room/signaling, R3 roster/packet, R4 audio API; R10 Snapshot |
-| MixEngine / 콜백 | R8 | R4 renderSources/renderMonitor/pushWebMix, R5 Recorder |
+| MixEngine / 콜백 | R8 | R4 renderSources/renderMonitor/setSlotMonitorVolume, R5 Recorder |
 | 앱 수명·종료 / 설정 | R8 | R5 start/stop/finish/Options, R10 getRecorder/getRecordingOptions |
 | OBS metadata 정의 | R0 동결 | R7 writer/reader, R8 publish 호출; R4는 음성 링만 |
 | 웹 audio와 화면 | R6 / R11 각각 독립 | guest-client.js API; index/CSS/app은 R11만 |
@@ -1080,11 +1106,15 @@ R8은 R1~R7 뒤 단독 → (R9/R10/R11). 최대 세 회차.
 창은 420×304, 녹음 성공 후 닫고 다시 열어 `녹음 중지`.
 `형식`, `비트레이트`, `저장 위치`, `변경`, `WAV`, `MP3`, `128/256/320 kbps`, `녹음 중`은 시안 그대로다.
 합방 창은 440×800, 두 자리 행, 방장만 `웹 초대`/`주소 복사`/`새 주소`/
-`들어오기 요청`/`수락`/`거절`/`내보내기`를 다룬다.
+`들어오기 요청`/`수락`/`거절`/`내보내기`를 다룬다. 합방 창 상대 음량은 사람마다(원문 20·21, **A안**): 사람 목록의 사람 줄마다
+아래 줄에 슬라이더(28px)·`0%`~`100%`(오른쪽), 예전 `상대방 음량` 글자·슬라이더 하나는 없앤다(확정 시안 `collab3.html` ③④,
+비교 `webvol2.html` 아래 A, 2명 방이면 한 사람 줄). 경로가 `OBS에서 듣기`면 지금처럼 슬라이더를 끈다(사람 줄 모두).
 웹은 `닉네임`, `마이크`, `헤드폰을 쓰고 들어오세요.`, `들어가기`,
-`방장이 수락하면 연결됩니다`, `취소`, `연결됨`, `마이크 ON/OFF`, `상대방 음량`(+ `0%`~`100%` 값), `나가기`,
-`초대 주소가 바뀌었거나 방이 닫혔습니다.`를 사용한다. `상대방 음량`은 '연결됨' 화면의 사람 목록 칸 아래(시안 `webguest.html` ③,
-비교 `webvol.html` B안), LiveMix 슬라이더 부품과 같은 모양, 기본 100%, 기기에 기억. 새 오류 코드에 맞춰 설명 문구를 임의로 늘리지 않는다.
+`방장이 수락하면 연결됩니다`, `취소`, `연결됨`, `마이크 ON/OFF`, 사람마다 `0%`~`100%` 값, `나가기`,
+`초대 주소가 바뀌었거나 방이 닫혔습니다.`를 사용한다. 상대 음량은 '연결됨' 화면 사람 목록 칸의 사람 줄마다(원문 20·21, **A안**):
+첫 줄 닉네임·`연결됨`, 둘째 줄 슬라이더·%(확정 시안 `webguest.html` ③, 비교 `webvol2.html` 위 A — 원문 20으로 `webvol.html`의
+슬라이더 하나를 대체, `상대방 음량` 글자는 쓰지 않음), LiveMix 슬라이더 부품과 같은 모양·손가락 높이 44px, 기본 100%,
+기기에 닉네임별 기억. 새 오류 코드에 맞춰 설명 문구를 임의로 늘리지 않는다.
 시안 설명용 board 제목·프레임 설명은 실제 화면에 넣지 않는다.
 
 R0 서버 원본은 다음 두 파일이며 byte 복사와 SHA-256/복사 시각은 `server/ytdown/ORIGIN.txt`에 기록한다.
@@ -1133,3 +1163,8 @@ R9 이후 실제 다른 PC 연결은 갱신된 설계/계획에 따라 **이 PC 
    (`gocue-webrec-rN`, 브랜치 `livemix-webguest-record-rN`)에서 빌드·시험한다. 아스트라 샌드박스는 공용 `.git`에 쓸 수 없으니
    회차는 커밋하지 않고, 클로드가 검토 뒤 소유 파일만 커밋해 본 브랜치에 합친다. 루트 CMake의 회차 빌드 조각 반복
    (`cmake/livemix017/R2..R11.cmake` OPTIONAL include)은 R0 단계에서 클로드가 미리 넣었다 — R1은 그 위에 WebRTC 연결만 더한다.
+4. **사람별 상대 음량(gom 원문 20 "사람별 조절로 확정", 18시 무렵):** 웹 전용 mix-minus를 없애고 웹 하향을 사람별 전달로 바꿨다
+   (§2.2·§2.4·§4), 웹은 사람마다 재생기·ASRC·gain(§5 `setPeerVolume(participantId, gain)`·`people`/`peerGain` 메시지),
+   방장 쪽은 R3 `setWebLink`, R4 `setSlotMonitorVolume`, R8 `setPersonMonitorVolume`·`collabPersonVolumes`(§6, §7 설정 표).
+   방장 합방 창도 사람별(설계서 결정 5)이며 위치는 웹·합방 창 모두 A안(원문 21 "웹참여 페이지 : A 라이브믹스 합방 창도 A로 해").
+   이미 돌고 있는 R1·R2·R5는 이 변경과 겹치는 소유 파일이 없다(R1 채널·검사 도구는 패킷 내용과 무관, R2 서버·R5 녹음 그대로).
