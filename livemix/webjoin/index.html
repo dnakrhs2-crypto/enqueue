@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <title>LiveMix</title>
+  <link rel="stylesheet" href="./join.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body class="web">
+  <header class="head" id="brand" tabindex="-1">
+    <span class="logo-on">ON</span><span class="logo-tx">LiveMix</span>
+  </header>
+  <main class="body">
+    <div class="col" id="app" data-screen="loading">
+      <h2 id="room-title" tabindex="-1" hidden></h2>
+      <form id="entry" class="screen" novalidate hidden>
+        <div class="wcard">
+          <label class="lab" for="nickname">닉네임</label>
+          <input class="inp" id="nickname" name="nickname" type="text"
+                 autocomplete="nickname" maxlength="80" required spellcheck="false">
+          <label class="lab" id="microphone-label" for="microphone">마이크</label>
+          <div class="device-picker">
+            <button class="inp sel" id="microphone" type="button" role="combobox"
+                    aria-labelledby="microphone-label microphone-name" aria-haspopup="listbox"
+                    aria-controls="microphone-options" aria-expanded="false">
+              <span id="microphone-name">마이크</span>
+            </button>
+            <ul id="microphone-options" role="listbox" aria-labelledby="microphone-label" hidden></ul>
+          </div>
+          <div class="hp" id="headphone-note">헤드폰을 쓰고 들어오세요.</div>
+        </div>
+        <button class="go" id="join" type="submit" aria-describedby="headphone-note" disabled>들어가기</button>
+      </form>
+      <section id="waiting" class="screen" hidden>
+        <div class="wcard">
+          <div class="wait" role="status"><span class="spin" aria-hidden="true"></span>방장이 수락하면 연결됩니다</div>
+        </div>
+        <button class="ghost" id="cancel" type="button">취소</button>
+      </section>
+      <section id="connected" class="screen" hidden>
+        <div class="wcard" id="people" role="list"></div>
+        <div class="wcard">
+          <button class="lampw" id="mic-toggle" type="button" aria-pressed="true">
+            <span class="d" aria-hidden="true"></span><span id="mic-text">마이크 ON</span>
+          </button>
+          <div class="lvl" id="mic-meter" role="meter" aria-label="마이크"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0%">
+            <i></i>
+          </div>
+        </div>
+        <button class="ghost" id="leave" type="button">나가기</button>
+      </section>
+      <section id="error" class="wcard err" hidden>
+        <div class="m" id="error-message" role="alert" tabindex="-1"></div>
+      </section>
+    </div>
+  </main>
+  <template id="person-template">
+    <div class="pblk" role="listitem">
+      <div class="top"><label class="nick"></label><span class="st">연결됨</span></div>
+      <div class="bot">
+        <div class="slider">
+          <div class="slider-track" aria-hidden="true"></div>
+          <div class="slider-fill" aria-hidden="true"></div>
+          <div class="slider-knob" aria-hidden="true"></div>
+          <input type="range" min="0" max="100" step="1" value="100" aria-valuetext="100%">
+        </div>
+        <span class="vv" aria-hidden="true">100%</span>
+      </div>
+    </div>
+  </template>
+</body>
+</html>
