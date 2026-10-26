@@ -129,8 +129,10 @@ public:
         expectEquals (hides, before); expect (panel.findChildWithID ("recording-error")->isVisible());
         expect (! control<juce::Label> (panel, "recording-error").getText().contains ("diagnostic"));
         expect (record.isEnabled());
+        checkDirectories (settings);
         checkMaster (settings);
         checkCollab (settings);
+        checkShortCollab (settings);
         checkEngine (settings, folder.file);
     }
 
@@ -166,6 +168,57 @@ private:
                 expect (juce::PNGImageFormat().writeImageToStream (image, output));
             }
         }
+    }
+    void checkDirectories (LiveMixSettings& settings)
+    {
+        beginTest ("recording paths keep the drive and last folder, with only a long last folder shortened at its end");
+        const auto saved = settings.getRecordingOptions();
+        const juce::String paths[] {
+            ko ("C:\\Users\\하람\\OneDrive\\문서\\LiveMix 녹음"),
+            ko ("C:\\Users\\김하람\\Documents\\LiveMix 녹음"),
+            ko ("D:\\LiveMix 녹음"),
+            ko ("C:\\Users\\하람\\Documents\\LiveMix 녹음 ") + juce::String::repeatedString (ko ("아주 긴 마지막 폴더 "), 8).trimEnd()
+        };
+        const char* names[] { "onedrive", "documents", "short", "long-folder" };
+        RecordingPanel panel (settings, {});
+        for (int i = 0; i < 4; ++i)
+        {
+            auto options = saved; options.directoryUtf8 = paths[i].toStdString();
+            settings.setRecordingOptions (options);
+            for (bool live : { false, true })
+            {
+                recording::Snapshot snapshot;
+                snapshot.state = live ? recording::State::recording : recording::State::idle;
+                snapshot.options = options;
+                panel.setSnapshot (snapshot);
+                auto& label = control<juce::Label> (panel, "directory");
+                const auto shown = label.getText();
+                expectEquals (label.getTooltip(), paths[i]);
+                expect (juce::GlyphArrangement::getStringWidthInt (label.getFont(), shown) <= label.getWidth());
+                if (i == 2) expectEquals (shown, paths[i]);
+                else
+                {
+                    expect (shown.startsWith ("C:\\") && shown.contains (ko ("…")), shown);
+                    if (i < 2) expect (shown.endsWith (ko ("\\LiveMix 녹음")), shown);
+                    else
+                    {
+                        expect (shown.contains (ko ("\\LiveMix 녹음 ")) && shown.endsWith (ko ("…")), shown);
+                        expect (shown.dropLastCharacters (1).contains (ko ("…")), "middle and final elision: " + shown);
+                    }
+                }
+                // Every displayed run comes from the original path, in order; only the ellipsis is added.
+                int position = 0;
+                for (const auto& run : juce::StringArray::fromTokens (shown, ko ("…"), ""))
+                {
+                    if (run.isEmpty()) continue;
+                    const int found = paths[i].indexOf (position, run);
+                    expect (found >= position, shown);
+                    position = found + run.length();
+                }
+                capture (panel, juce::String ("rec-path-") + names[i] + (live ? "-recording" : "-idle"));
+            }
+        }
+        settings.setRecordingOptions (saved);
     }
     void checkMaster (LiveMixSettings&)
     {
@@ -310,6 +363,107 @@ private:
         s.kickableWebId = 0; panel.setSize (440, 430); panel.setSnapshot (s); capture (panel, "collab-legacy-two");
         expect (panel.findChildWithID ("volume")->isVisible() && ! panel.findChildWithID ("volume-2")->isVisible());
         control<juce::Slider> (panel, "volume").setValue (44, juce::sendNotificationSync); expectEquals (volumeId, (c::ParticipantId) 22);
+    }
+    void checkShortCollab (LiveMixSettings& settings)
+    {
+        CollabPanel::Actions actions;
+        actions.outputs = [] { return CollabPanel::OutputPairs { { "1", "2", "3", "4" }, true, true, true, 4 }; };
+        auto waiting = room (false);
+        auto call = waiting;
+        call.state = State::connected; call.personCount = 2; call.people[1] = room().people[2];
+        auto request = call;
+        request.webRequestCount = 1; request.webRequests[0] = { "request-a", ko ("하늘"), 0, true, true };
+        const collab::CollabSession::Snapshot snapshots[] { waiting, call, request };
+        const char* names[] { "waiting-invite", "call-invite", "call-request" };
+        // Original 440x800 layout: button coordinates and total height including the 16 px bottom margin.
+        const int buttonY[] { 446, 494, 437 };
+        CollabViewport viewport (settings, actions);
+        viewport.setVisible (true); // hit testing only; no native window or desktop peer
+        auto& panel = *dynamic_cast<CollabPanel*> (viewport.getViewedComponent());
+        for (int state = 0; state < 3; ++state)
+        {
+            beginTest (juce::String ("short collab window keeps controls reachable: ") + names[state]);
+            CollabPanel reference (settings, actions);
+            reference.setSize (440, 800); reference.setSnapshot (snapshots[state]);
+            viewport.setSize (440, 800); viewport.setSnapshot (snapshots[state]);
+            auto& leave = control<juce::TextButton> (panel, "leave");
+            expectEquals (leave.getY(), buttonY[state]);
+            for (int height : { 441, 513, 537, 800 })
+            {
+                const auto tag = juce::String ("collab-low-") + names[state] + "-" + juce::String (height);
+                viewport.setSize (440, height);
+                viewport.setViewPosition (0, 0);
+                const bool scrolls = height < buttonY[state] + 36 + 16;
+                expectEquals (panel.getHeight(), juce::jmax (height, buttonY[state] + 36 + 16), tag);
+                expect (viewport.getVerticalScrollBar().isVisible() == scrolls, tag);
+                expect (! viewport.getHorizontalScrollBar().isVisible(), tag);
+                expectEquals (panel.getWidth(), 440 - (scrolls ? viewport.getScrollBarThickness() : 0), tag);
+                expect (viewport.getVerticalScrollBar().findColour (juce::ScrollBar::thumbColourId) == livemix::Palette::slotLine);
+                layout (panel);
+                capture (viewport, tag + "-top");
+                std::vector<juce::Component*> buttons { &leave };
+                if (state != 0) buttons.push_back (panel.findChildWithID ("rebuffer"));
+                if (state < 2)
+                {
+                    buttons.push_back (panel.findChildWithID ("copy-invite"));
+                    buttons.push_back (panel.findChildWithID ("renew-invite"));
+                }
+                else
+                {
+                    auto& requests = control<juce::Viewport> (panel, "web-requests");
+                    expect (! requests.getVerticalScrollBar().isVisible());
+                    auto* card = requests.getViewedComponent()->getChildComponent (0);
+                    buttons.push_back (card->findChildWithID ("accept"));
+                    buttons.push_back (card->findChildWithID ("reject"));
+                }
+                for (auto* button : buttons)
+                {
+                    expect (button != nullptr, tag); if (button == nullptr) continue;
+                    expectEquals (button->getHeight(), 36, tag + "/" + button->getComponentID());
+                    const auto bounds = panel.getLocalArea (button, button->getLocalBounds());
+                    viewport.setViewPosition (0, juce::jmax (0, bounds.getBottom() - height));
+                    const auto visibleBounds = viewport.getLocalArea (button, button->getLocalBounds());
+                    expect (juce::Rectangle<int> (0, 0, viewport.getMaximumVisibleWidth(), height).contains (visibleBounds), tag);
+                    expect (viewport.getComponentAt (visibleBounds.getCentre()) == button, tag + " reachable " + button->getComponentID());
+                }
+                viewport.setViewPosition (0, panel.getHeight());
+                if (scrolls) capture (viewport, tag + "-bottom");
+                if (height == 800)
+                {
+                    expectEquals (viewport.getViewPositionY(), 0);
+                    for (auto* child : panel.getChildren())
+                    {
+                        if (! child->isVisible()) continue;
+                        auto* original = reference.findChildWithID (child->getComponentID());
+                        expect (original != nullptr, child->getComponentID());
+                        if (original != nullptr) expect (child->getBounds() == original->getBounds(), "unchanged " + child->getComponentID());
+                    }
+                }
+            }
+        }
+        beginTest ("a short collab window updates its scroll range as requests arrive and keeps the request list's own scroll");
+        viewport.setSize (440, 441); viewport.setSnapshot (call);
+        viewport.setViewPosition (0, panel.getHeight());
+        expectEquals (panel.getHeight(), 546);
+        viewport.setSnapshot (request);
+        expectEquals (panel.getHeight(), 489);
+        expect (viewport.getViewArea().contains (panel.findChildWithID ("leave")->getBounds()));
+        request.webRequestCount = 8;
+        for (size_t i = 0; i < 8; ++i) request.webRequests[i] = { "request-" + juce::String ((int) i), ko ("하늘"), 0, true, true };
+        viewport.setSnapshot (request);
+        auto& requests = control<juce::Viewport> (panel, "web-requests");
+        expect (requests.getVerticalScrollBar().isVisible());
+        requests.setViewPosition (0, requests.getViewedComponent()->getHeight());
+        viewport.setViewPosition (0, 0);
+        auto* last = requests.getViewedComponent()->getChildComponent (7)->findChildWithID ("accept");
+        expectEquals (last->getHeight(), 36);
+        expect (requests.getViewArea().contains (requests.getViewedComponent()->getLocalArea (last, last->getLocalBounds())));
+        expect (viewport.getViewArea().contains (panel.getLocalArea (last, last->getLocalBounds())));
+        capture (viewport, "collab-low-requests-last-441");
+        viewport.setSnapshot (call); expectEquals (panel.getHeight(), 546);
+        viewport.setSnapshot ({});
+        expectEquals (panel.getHeight(), 441); expect (! viewport.getVerticalScrollBar().isVisible());
+        expectEquals (viewport.getViewPositionY(), 0);
     }
     void checkEngine (LiveMixSettings& settings, const juce::File& folder)
     {

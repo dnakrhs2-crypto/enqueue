@@ -3,6 +3,36 @@
 
 namespace gocue::livemix
 {
+namespace
+{
+juce::String directoryText (const juce::Font& font, const juce::String& path, int width)
+{
+    const auto fits = [&] (const juce::String& text) { return juce::GlyphArrangement::getStringWidthInt (font, text) <= width; };
+    if (fits (path)) return path;
+
+    const int first = path.indexOfAnyOf ("\\/"), last = path.lastIndexOfAnyOf ("\\/");
+    if (first < 0 || first == last) return ellipsisedText (font, path, width);
+    const auto dots = ko ("…");
+    auto prefix = path.substring (0, first + 1);
+    auto suffix = path.substring (last);
+    if (! fits (prefix + dots + suffix))
+        return ellipsisedText (font, prefix + dots + suffix, width); // only the last folder's end gives way
+
+    // Keep the drive and, when it fits, the first folder; spend the remaining space on the destination's parents.
+    const int next = path.indexOfAnyOf ("\\/", first + 1);
+    if (next < last && fits (path.substring (0, next + 1) + dots + suffix))
+        prefix = path.substring (0, next + 1);
+    for (int end = last; end > prefix.length();)
+    {
+        const int previous = path.substring (0, end).lastIndexOfAnyOf ("\\/");
+        if (previous < prefix.length() || ! fits (prefix + dots + path.substring (previous))) break;
+        suffix = path.substring (previous);
+        end = previous;
+    }
+    return prefix + dots + suffix;
+}
+}
+
 juce::String recordingElapsedText (double seconds)
 {
     const auto total = (juce::int64) std::floor (juce::jmax (0.0, seconds));
@@ -190,7 +220,7 @@ void RecordingPanel::resized()
     const auto path = options.directoryUtf8.empty()
         ? juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (ko ("LiveMix 녹음")).getFullPathName()
         : juce::String::fromUTF8 (options.directoryUtf8.c_str());
-    directory.setText (ellipsisedText (directory.getFont(), path, directory.getWidth()), juce::dontSendNotification);
+    directory.setText (directoryText (directory.getFont(), path, directory.getWidth()), juce::dontSendNotification);
     directory.setTooltip (path);
     if (error.isVisible()) { area.removeFromTop (3); error.setBounds (area.removeFromTop (16)); area.removeFromTop (1); }
     area.removeFromTop (12); record.setBounds (area);

@@ -75,6 +75,10 @@ public:
 
 private:
     friend struct CollabPanelTestAccess;
+    friend class CollabViewport;
+    struct Layout;
+    Layout layoutForSize (int width, int height) const;
+    int viewportHeight = 0;
     struct Message : juce::Component   // wraps whole Korean words (keep-all) and measures its own height
     {
         void setText (const juce::String&);
@@ -133,6 +137,21 @@ private:
     std::vector<std::unique_ptr<RequestCard>> requests;
 };
 
+// Keeps the panel's controls at their natural height when the work area limits the window.
+class CollabViewport : public juce::Viewport
+{
+public:
+    CollabViewport (LiveMixSettings&, CollabPanel::Actions);
+    ~CollabViewport() override;
+    void setSnapshot (const collab::CollabSession::Snapshot&);
+    void pushMeter (collab::CollabAudio::Meter m, bool repaint) { panel.pushMeter (m, repaint); }
+    void resized() override;
+    void paint (juce::Graphics& g) override { g.fillAll (Palette::background); }
+
+private:
+    CollabPanel panel;
+};
+
 class CollabWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
@@ -151,7 +170,7 @@ public:
 private:
     void timerCallback() override;
     collab::CollabSession& session;
-    CollabPanel* content = nullptr;
+    CollabViewport* content = nullptr;
     bool inviteRequested = false, expandedForRoom = false;
     juce::String roomCode;
     juce::TooltipWindow tooltips { this, 700 };   // LiveMix has no app-wide one: the full peer name and the pair note

@@ -620,33 +620,96 @@ bool CollabPanel::keyPressed (const juce::KeyPress& key)
     return false;
 }
 
+struct CollabPanel::Layout
+{
+    int padding = 14, gap = 10, outerGap = 12;
+    int height = 0;
+    juce::Rectangle<int> nickCaption, nickname, requests, first, join, stats, invite, buttons;
+};
+
+CollabPanel::Layout CollabPanel::layoutForSize (int width, int height) const
+{
+    const auto state = snapshot.state;
+    const bool failed = state == State::hostUnavailable;
+    const auto measure = [&] (bool compact)
+    {
+        Layout result;
+        result.padding = compact ? 10 : 14;
+        result.gap = compact ? 6 : 10;
+        result.outerGap = compact ? 6 : 12;
+        const int padding = result.padding, gap = result.gap, outerGap = result.outerGap;
+        // Lay out the outer rows without clipping to the available height. The same rectangles
+        // drive resized() and the viewport's content height, so no separate minimum can drift.
+        int y = 16;
+        const auto take = [&] (int rowHeight)
+        {
+            const juce::Rectangle<int> row (16, y, width - 32, rowHeight);
+            y += rowHeight;
+            return row;
+        };
+        if (! inCall (state))
+        {
+            result.nickCaption = take (15); y += outerGap;
+            result.nickname = take (36); y += outerGap;
+        }
+        const int count = (int) personVisible[0] + (int) personVisible[1];
+        const int callHeight = 28 + 15 + 76 * count + juce::jmax (0, count - 1) * 8 + 32 + 40 + 46 + 4 * gap;
+        if (requestViewport.isVisible())
+        {
+            // Preserve the request list's own scrolling and let it use spare window height.
+            const int remaining = inCall (state) ? callHeight + (stats[0].isVisible() ? 58 + outerGap : 0) : 154;
+            const int available = juce::jmax (120, height - 16 - y - remaining - 36 - 2 * outerGap);
+            result.requests = take (juce::jmin (available, (int) requests.size() * 132 - 12));
+            y += outerGap;
+        }
+        if (inCall (state))
+        {
+            result.first = take (callHeight);
+            if (stats[0].isVisible()) { y += outerGap; result.stats = take (58); }
+            if (inviteCaption.isVisible()) { y += outerGap; result.invite = take (177); }
+            y += outerGap; result.buttons = take (36);
+        }
+        else if (state == State::hostWaiting)
+        {
+            const bool webRoom = snapshot.roomMode == collab::contracts::RoomMode::v2;
+            result.first = take (webRoom ? 154 : 202);
+            if (webRoom)
+            {
+                if (inviteCaption.isVisible()) { y += outerGap; result.invite = take (177); }
+                y += outerGap; result.buttons = take (36);
+            }
+        }
+        else
+        {
+            const int textWidth = width - 32 - 2 * padding;
+            result.first = take (failed ? 2 * padding + message.heightFor (textWidth) + reason.heightFor (textWidth) + 36 + 2 * gap
+                                        : 2 * padding + 15 + 34 + 44 + 2 * gap);
+            y += outerGap;
+            result.join = take (2 * padding + 15 + 58 + 44 + 2 * gap + (notice.isVisible() ? 18 + gap : 0));
+        }
+        result.height = y + 16;
+        return result;
+    };
+    const auto roomy = measure (false);
+    // Preserve the existing compact layout, using the visible height even when the panel scrolls.
+    return height < 430 || (notice.isVisible() && height < 458) || (failed && height < roomy.height) ? measure (true) : roomy;
+}
+
 void CollabPanel::resized()
 {
-    auto area = getLocalBounds().reduced (16);
-    firstCard = joinCard = inviteCard = qrBounds = {};
+    const auto layout = layoutForSize (getWidth(), viewportHeight > 0 ? viewportHeight : getHeight());
+    const int padding = layout.padding, gap = layout.gap;
+    firstCard = layout.first; joinCard = layout.join;
+    inviteCard = qrBounds = {};
     personBounds = {};
     const auto state = snapshot.state;
     const bool failed = state == State::hostUnavailable;
-    // roomy height of the cause layout: margins, nickname row, the cause card and the join card; a long cause
-    // (a second router, a carrier's shared address) wraps to a second line instead of ending in …
-    const int textWidth = area.getWidth() - 28;
-    const int failedHeight = failed ? 32 + (15 + 12 + 36 + 12) + (28 + message.heightFor (textWidth) + reason.heightFor (textWidth)
-                                                                  + 20 + 36) + 12 + (28 + 15 + 58 + 44 + 20) : 0;
-    // The 400 px minimum preserves type and control sizes by tightening only card padding and inner gaps.
-    const bool compact = getHeight() < 430 || (notice.isVisible() && getHeight() < 458) || getHeight() < failedHeight;
-    const int padding = compact ? 10 : 14;
-    const int gap = compact ? 6 : 10;
-    const int outerGap = compact ? 6 : 12;
     const auto layoutRequests = [&]
     {
         if (! requestViewport.isVisible()) return;
         // One request remains fully visible; a long pending list scrolls within the same card area.
-        const int count = (int) personVisible[0] + (int) personVisible[1];
-        const int callHeight = 28 + 15 + 76 * count + juce::jmax (0, count - 1) * 8 + 32 + 40 + 46 + 4 * gap;
-        const int remaining = inCall (state) ? callHeight + (stats[0].isVisible() ? 58 + outerGap : 0) : 154;
-        const int available = juce::jmax (120, area.getHeight() - remaining - 36 - 2 * outerGap);
-        const int height = juce::jmin (available, (int) requests.size() * 132 - 12);
-        requestViewport.setBounds (area.removeFromTop (height)); area.removeFromTop (outerGap);
+        const int height = layout.requests.getHeight();
+        requestViewport.setBounds (layout.requests);
         const int width = requestViewport.getWidth() - ((int) requests.size() * 132 - 12 > height ? 8 : 0);
         requestHolder.setSize (width, (int) requests.size() * 132 - 12);
         for (size_t i = 0; i < requests.size(); ++i) requests[i]->setBounds (0, (int) i * 132, width, 120);
@@ -655,9 +718,7 @@ void CollabPanel::resized()
     {
         layoutRequests();
         // the 출력 row keeps every control at its size: the 400 px window only tightens the gaps
-        const int callGap = compact ? 6 : 10;
-        const int count = (int) personVisible[0] + (int) personVisible[1];
-        firstCard = area.removeFromTop (28 + 15 + 76 * count + juce::jmax (0, count - 1) * 8 + 32 + 40 + 46 + 4 * callGap);
+        const int callGap = gap;
         auto inner = firstCard.reduced (14);
         auto row = inner.removeFromTop (15);
         connection.setBounds (row.removeFromRight (labelWidthForText (connection, connection.getText())));
@@ -684,7 +745,7 @@ void CollabPanel::resized()
         inner.removeFromTop (callGap); meter.setBounds (inner.removeFromTop (46));
         if (stats[0].isVisible())
         {
-            area.removeFromTop (outerGap); row = area.removeFromTop (58);
+            row = layout.stats;
             const int statWidth = (row.getWidth() - 24) / 4;
             for (int i = 0; i < 4; ++i)
             {
@@ -692,22 +753,18 @@ void CollabPanel::resized()
                 if (i < 3) row.removeFromLeft (8);
             }
         }
-        if (inviteCaption.isVisible())
-        {
-            area.removeFromTop (outerGap); layoutInvite (area.removeFromTop (177));
-        }
-        area.removeFromTop (outerGap); row = area.removeFromTop (36);
+        if (inviteCaption.isVisible()) layoutInvite (layout.invite);
+        row = layout.buttons;
         rebufferButton.setBounds (row.removeFromLeft ((row.getWidth() - 8) / 2));
         row.removeFromLeft (8); leaveButton.setBounds (row);
         return;
     }
-    nickCaption.setBounds (area.removeFromTop (15)); area.removeFromTop (outerGap);
-    nickname.setBounds (area.removeFromTop (36)); area.removeFromTop (outerGap);
+    nickCaption.setBounds (layout.nickCaption);
+    nickname.setBounds (layout.nickname);
     layoutRequests();
     if (state == State::hostWaiting)
     {
         const bool webRoom = snapshot.roomMode == collab::contracts::RoomMode::v2;
-        firstCard = area.removeFromTop (webRoom ? 154 : 202);
         auto inner = firstCard.reduced (14);
         auto caption = inner.removeFromTop (17);
         if (roomRate.isVisible()) roomRate.setBounds (caption.removeFromRight (labelWidthForText (roomRate, roomRate.getText())));
@@ -717,20 +774,16 @@ void CollabPanel::resized()
         inner.removeFromTop (10); waiting.setBounds (inner.removeFromTop (17));
         if (webRoom)
         {
-            if (inviteCaption.isVisible())
-            {
-                area.removeFromTop (outerGap); layoutInvite (area.removeFromTop (177));
-            }
-            area.removeFromTop (outerGap); leaveButton.setBounds (area.removeFromTop (36));
+            if (inviteCaption.isVisible()) layoutInvite (layout.invite);
+            leaveButton.setBounds (layout.buttons);
         }
         else { inner.removeFromTop (10); leaveButton.setBounds (inner.removeFromTop (36)); }
         return;
     }
     if (failed)
     {
-        const int messageHeight = message.heightFor (area.getWidth() - 2 * padding);
-        const int reasonHeight = reason.heightFor (area.getWidth() - 2 * padding);
-        firstCard = area.removeFromTop (2 * padding + messageHeight + reasonHeight + 36 + 2 * gap);
+        const int messageHeight = message.heightFor (firstCard.getWidth() - 2 * padding);
+        const int reasonHeight = reason.heightFor (firstCard.getWidth() - 2 * padding);
         auto inner = firstCard.reduced (padding);
         message.setBounds (inner.removeFromTop (messageHeight)); inner.removeFromTop (gap);
         reason.setBounds (inner.removeFromTop (reasonHeight)); inner.removeFromTop (gap);
@@ -740,7 +793,6 @@ void CollabPanel::resized()
     }
     else
     {
-        firstCard = area.removeFromTop (2 * padding + 15 + 34 + 44 + 2 * gap);
         auto inner = firstCard.reduced (padding);
         rateCaption.setBounds (inner.removeFromTop (15)); inner.removeFromTop (gap);
         auto row = inner.removeFromTop (34);
@@ -748,8 +800,6 @@ void CollabPanel::resized()
         row.removeFromLeft (8); rateChips[1].setBounds (row);
         inner.removeFromTop (gap); createButton.setBounds (inner.removeFromTop (44));
     }
-    area.removeFromTop (outerGap);
-    joinCard = area.removeFromTop (2 * padding + 15 + 58 + 44 + 2 * gap + (notice.isVisible() ? 18 + gap : 0));
     auto inner = joinCard.reduced (padding);
     codeCaption.setBounds (inner.removeFromTop (15)); inner.removeFromTop (gap);
     code.setBounds (inner.removeFromTop (58).withWidth (256)); inner.removeFromTop (gap);
@@ -792,6 +842,30 @@ void CollabPanel::paint (juce::Graphics& g)
         }
 }
 
+CollabViewport::CollabViewport (LiveMixSettings& settings, CollabPanel::Actions actions)
+    : panel (settings, std::move (actions))
+{
+    setOpaque (true);
+    setViewedComponent (&panel, false);
+    setScrollBarsShown (true, false); // inherits the same LiveMix scrollbars as the main channel list
+    setSize (panel.getWidth(), panel.getHeight());
+}
+CollabViewport::~CollabViewport() { setViewedComponent (nullptr, false); }
+void CollabViewport::setSnapshot (const collab::CollabSession::Snapshot& snapshot)
+{
+    panel.setSnapshot (snapshot);
+    resized();
+}
+void CollabViewport::resized()
+{
+    juce::Viewport::resized();
+    panel.viewportHeight = getHeight();
+    const bool scrolls = panel.layoutForSize (getWidth(), getHeight()).height > getHeight();
+    const int width = getWidth() - (scrolls ? getScrollBarThickness() : 0);
+    panel.setSize (width, juce::jmax (getHeight(), panel.layoutForSize (width, getHeight()).height));
+    panel.resized();
+}
+
 CollabWindow::CollabWindow (collab::CollabSession& collab, LiveMixSettings& settings, std::function<CollabPanel::OutputPairs()> outputs)
     : DocumentWindow (ko ("합방"), Palette::background, DocumentWindow::allButtons), session (collab)
 {
@@ -810,7 +884,7 @@ CollabWindow::CollabWindow (collab::CollabSession& collab, LiveMixSettings& sett
     actions.rejectWebRequest = [this] (const auto& id) { session.rejectWebRequest (id); };
     actions.kickWebGuest = [this] (auto id) { session.kickWebGuest (id); };
     actions.hide = [this] { closeButtonPressed(); };
-    content = new CollabPanel (settings, std::move (actions));
+    content = new CollabViewport (settings, std::move (actions));
     setContentOwned (content, true);
     setResizable (true, false);
     const auto border = getContentComponentBorder();

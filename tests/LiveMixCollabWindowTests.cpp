@@ -379,7 +379,11 @@ public:
                 main.menuItemSelected (1, 3); expect (collabWindow->getContentComponent() == content);
                 collabWindow->closeButtonPressed(); expect (! collabWindow->isVisible());
                 main.menuItemSelected (1, 3); expect (collabWindow->isVisible());
-                child<juce::TextEditor> (*content, "nickname").keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)); dispatch();
+                auto* viewport = dynamic_cast<CollabViewport*> (content);
+                expect (viewport != nullptr);
+                if (viewport != nullptr)
+                    child<juce::TextEditor> (*viewport->getViewedComponent(), "nickname").keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+                dispatch();
                 expect (! collabWindow->isVisible()); expect (session.getSnapshot().state == State::off);
             }
         }
