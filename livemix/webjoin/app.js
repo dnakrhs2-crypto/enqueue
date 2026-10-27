@@ -49,11 +49,14 @@ export function startApp(doc = document, win = window) {
   const app = $("app"), title = $("room-title"), entry = $("entry");
   const nickname = $("nickname"), join = $("join"), microphone = $("microphone");
   const options = $("microphone-options"), people = $("people");
-  const micToggle = $("mic-toggle"), meter = $("mic-meter");
+  const micToggle = $("mic-toggle"), meter = $("mic-meter"), diag = $("diag");
   const rows = new Map();
   let client, invite, devices = [], deviceId = null, activeDevice = 0;
   let prepared = false, busy = false, micEnabled = true, localEnding = false;
-  let screen = "loading";
+  let screen = "loading", diagTimer = null;
+  // Only the test copy (/next/) shows the playback counters, read off a phone during a network test.
+  const showDiag = /\/next\//.test(win.location.pathname);
+  diag.hidden = !showDiag;
 
   nickname.value = preferences.nickname();
 
@@ -70,6 +73,10 @@ export function startApp(doc = document, win = window) {
     for (const id of ["entry", "waiting", "connected", "error"]) $(id).hidden = id !== next;
     title.hidden = !["entry", "waiting", "connected"].includes(next);
     closeDevices();
+    if (showDiag) {
+      clearInterval(diagTimer);
+      diagTimer = next === "connected" ? setInterval(renderDiag, 500) : null;
+    }
     if (changed) {
       const target = next === "error" ? $("error-message") : title.hidden ? $("brand") : title;
       target.focus();
@@ -81,6 +88,30 @@ export function startApp(doc = document, win = window) {
     meter.setAttribute("aria-valuenow", String(value));
     meter.setAttribute("aria-valuetext", `${value}%`);
     meter.firstElementChild.style.width = `${value}%`;
+  }
+
+  function diagCell(label, value) {
+    const cell = doc.createElement("span"), number = doc.createElement("b");
+    number.textContent = String(value);
+    cell.append(`${label} `, number);
+    return cell;
+  }
+
+  function renderDiag() {
+    const cells = [];
+    for (const person of client?.audioMetrics?.audio?.people ?? []) {
+      if (!person.participantId) continue;
+      const who = doc.createElement("span");
+      who.className = "who";
+      who.textContent = rows.get(person.participantId)?.nick ?? "";
+      cells.push(who, diagCell("끊김", person.underruns), diagCell("빈 패킷", person.lost - person.underruns),
+        diagCell("늦게 옴", person.late), diagCell("버퍼", `${Math.round(person.bufferMs)}ms`),
+        diagCell("목표", `${Math.round(person.targetMs)}ms`), diagCell("흔들림", `${Math.round(person.spreadMs ?? 0)}ms`),
+        diagCell("받음", person.received));
+    }
+    const path = client?.transportInfo?.path;
+    if (path) cells.push(diagCell("경로", path === "worker" ? "워커" : "화면"));
+    diag.replaceChildren(...cells);
   }
 
   function clearConnection() {

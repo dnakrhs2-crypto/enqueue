@@ -141,6 +141,64 @@ await test('playout reorder, duplicate, late discard, PLC and rebuffer', () => {
   assert.ok(startup.playing);assert.ok(startup.cursor>=240000);
   return p.stats({});
 });
+// A host sends each device block as one burst after a fixed network delay; a stall holds every
+// arrival inside [at, at + ms) until its end, the way a phone's LTE/Wi-Fi link stops and catches up.
+function streamPlayout({ seconds, block = 1024, rate = 48000, stalls = [], skip = null, probe = () => {} }) {
+  const p = new Playout(rate, 48000); p.reset(1);
+  const data = new Float32Array(240).fill(0.25), left = new Float32Array(120), right = new Float32Array(120);
+  const arrivals = []; let produced = 0, seq = 0;
+  for (let b = 1; b * block * 1000 / rate < seconds * 1000 + 200; b++) {
+    const sent = b * block * 1000 / rate;
+    produced += block;
+    while ((seq + 1) * 120 <= produced) {
+      let at = sent + 20;
+      for (const s of stalls) if (at >= s.at && at < s.at + s.ms) at = s.at + s.ms;
+      if (!skip || seq < skip.from || seq >= skip.from + skip.packets) arrivals.push({ seq, at });
+      seq++;
+    }
+  }
+  let k = 0, next = 1;
+  for (let i = 0; i < seconds * 48000 / 128; i++) {
+    const now = (i + 1) * 128 / 48;
+    while (k < arrivals.length && arrivals[k].at <= now) {
+      const a = arrivals[k++];
+      p.push({ streamEpoch: 1, frames: 120, firstFrame: BigInt(a.seq) * 120n, arrivalNs: BigInt(Math.round(a.at * 1e6)) }, data);
+    }
+    p.render(left, right, 120); p.render(left, right, 8);
+    if (now >= next * 1000) probe(next++, p.stats({}));
+  }
+  return p.stats({});
+}
+await test('a network stall sizes the buffer once: the next stalls of that size play through', () => {
+  const stalls = [{ at: 10000, ms: 100 }, { at: 40000, ms: 100 }, { at: 70000, ms: 80 }];
+  let afterFirst = null;
+  const s = streamPlayout({ seconds: 90, stalls, probe: (second, st) => { if (second === 12) afterFirst = st; } });
+  assert.equal(afterFirst.underruns, 1, JSON.stringify(afterFirst));
+  assert.ok(afterFirst.spreadMs >= 100 && afterFirst.targetMs >= 100, JSON.stringify(afterFirst));
+  assert.equal(s.underruns, 1, JSON.stringify(s)); assert.equal(s.late, 0); assert.equal(s.lost, 1);
+  return { underruns: s.underruns, spreadMs: s.spreadMs, targetMs: s.targetMs };
+});
+await test('a calm link keeps the 20 ms floor; host block bursts are measured, not paid for in underruns', () => {
+  const calm = streamPlayout({ seconds: 30, block: 256 });
+  assert.equal(calm.underruns, 0); assert.equal(calm.targetMs, 20, JSON.stringify(calm));
+  const big = streamPlayout({ seconds: 30, block: 2048, rate: 44100 });
+  assert.equal(big.underruns, 0, JSON.stringify(big)); assert.ok(big.targetMs > 40 && big.targetMs < 60, JSON.stringify(big));
+  return { calmTargetMs: calm.targetMs, block2048TargetMs: big.targetMs, block2048SpreadMs: big.spreadMs };
+});
+await test('100 ms the host skipped is silence once, not a bigger buffer', () => {
+  // Nothing exists to play for those 100 ms; the packets after them are on time.
+  const s = streamPlayout({ seconds: 20, block: 256, skip: { from: 2000, packets: 40 } });
+  assert.equal(s.underruns, 1, JSON.stringify(s)); assert.ok(s.targetMs <= 22.5, JSON.stringify(s)); assert.ok(s.spreadMs < 6, JSON.stringify(s));
+  return { lost: s.lost, targetMs: s.targetMs, spreadMs: s.spreadMs };
+});
+await test('five calm minutes after a stall step the buffer back down, never below what it still needs', () => {
+  const marks = {};
+  streamPlayout({ seconds: 380, stalls: [{ at: 5000, ms: 100 }], probe: (second, st) => { if ([300, 380].includes(second)) marks[second] = st; } });
+  assert.ok(marks[300].targetMs >= 100, JSON.stringify(marks[300]));
+  assert.ok(marks[380].targetMs <= 30 && marks[380].targetMs >= 20, JSON.stringify(marks[380]));
+  assert.equal(marks[380].underruns, 1);
+  return { targetAt300s: marks[300].targetMs, targetAt380s: marks[380].targetMs };
+});
 await test('capture 120 frames, mute zeros, volume does not change upstream', () => {
   const audio = new GuestAudio(7,44100,48000); let count=0, last=-120n, mutePackets=0;
   audio.port = {postMessage(m) {
