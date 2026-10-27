@@ -4,7 +4,7 @@ import { FRAMES, FrameFIFO, TransferPool, audioPackets } from "./buffers.js";
 
 // Exported core also runs in the deterministic node tests with real render sizes.
 export class GuestAudio {
-  constructor(generation, wireRate, deviceRate) {
+  constructor(generation, wireRate, deviceRate, playoutOptions = {}) {
     this.generation = generation; this.wireRate = wireRate; this.deviceRate = deviceRate;
     this.port = null; this.closed = false; this.enabled = true; this.active = false;
     this.epoch = 0; this.frame = 0; this.captureDropped = 0;
@@ -14,7 +14,7 @@ export class GuestAudio {
     this.capturePool = new TransferPool(audioPackets(wireRate), FRAMES * 4, "capture", generation);
     this.left = new Float32Array(FRAMES); this.right = new Float32Array(FRAMES);
     this.peers = Array.from({ length: 2 }, () => ({ id: 0, epoch: 0, gain: 1, target: 1,
-      remaining: 0, retiring: false, tailL: 0, tailR: 0, tailRemaining: 0, playout: new Playout(wireRate, deviceRate) }));
+      remaining: 0, retiring: false, tailL: 0, tailR: 0, tailRemaining: 0, playout: new Playout(wireRate, deviceRate, playoutOptions) }));
     this.gains = Array.from({ length: 3 }, () => ({ id: 0, gain: 1 }));
     this.ramp = Math.max(1, Math.round(deviceRate * 0.020));
     this.peak = 0; this.statsFrames = 0;

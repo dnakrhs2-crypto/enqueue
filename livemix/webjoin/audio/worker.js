@@ -9,7 +9,7 @@ export class GuestWorker {
     this.channel = null; this.transport = null; this.audio = null;
     this.members = []; this.room = null; this.revision = 0; this.activeRevision = 0;
     this.controls = []; this.buffered = 0; this.mic = true;
-    this.metrics = { received: 0, sent: 0, invalid: 0, dropped: 0, transportDropped: 0, bufferedBytes: 0 };
+    this.metrics = { received: 0, sent: 0, invalid: 0, dropped: 0, playbackDropped: 0, transportDropped: 0, bufferedBytes: 0 };
     this.signaling = new Signaling({ ...options, onEvent: e => this.event(e), onError: code => this.fail(code) });
     this.timer = setInterval(() => this.flushControls(), 5);
   }
@@ -38,7 +38,8 @@ export class GuestWorker {
     this.generation = d.connectionGeneration; this.selfId = d.participantId; this.epoch = d.streamEpoch;
     this.room = d.room; this.wireRate = d.room.wireRate; this.session = sessionValue(d.room.session);
     this.captureTransport = new TransferPool(audioPackets(this.wireRate), 288, "packet", this.generation);
-    this.playbackPool = new TransferPool(2 * Math.ceil(this.wireRate * 0.2 / 120), 960, "playback", this.generation);
+    // A stall up to the playout's 600 ms ring arrives as one burst of leases before any is recycled.
+    this.playbackPool = new TransferPool(2 * Math.ceil(this.wireRate * 0.6 / 120), 960, "playback", this.generation);
     this.header = { session: this.session, origin: this.selfId, linkSender: this.selfId,
       streamEpoch: this.epoch, rosterRevision: 0, seq: 0, firstFrame: 0n };
   }
@@ -154,7 +155,7 @@ export class GuestWorker {
         this.control(rosterAck(h, this.selfId), h.rosterRevision);
       } else if (validDownlink(h, this.selfId, this.revision, this.members)) {
         const slot = this.playbackPool.take();
-        if (!slot) { this.metrics.dropped++; return; }
+        if (!slot) { this.metrics.dropped++; this.metrics.playbackDropped++; return; }
         decodeAudio(h, slot.floats);
         Object.assign(slot.message, { origin: h.origin, streamEpoch: h.streamEpoch, seq: h.seq,
           firstFrame: h.firstFrame, frames: 120, arrivalNs });

@@ -13,11 +13,13 @@ const PEAK_SECONDS = 300, STEP_DOWN_SECONDS = 2;
 // configuration, never on the rendering path. Arrival timestamps size the buffer;
 // the feedback clock is the device's rendered-frame clock, independently per peer.
 export class Playout {
-  constructor(wireRate, deviceRate) {
+  // A call starts with 100 ms: on the Fold7's Wi-Fi (10/27) stalls of up to 96 ms cost five cuts in the first minute
+  // while the buffer learned them. A calm link steps down to its own need within a minute. LTE stalled for 352 ms.
+  constructor(wireRate, deviceRate, { startMs = 100 } = {}) {
     this.wireRate = wireRate; this.deviceRate = deviceRate;
-    this.floor = wireRate * 0.020; this.ceiling = wireRate * 0.16;
+    this.floor = wireRate * 0.020; this.ceiling = wireRate * 0.4; this.initial = Math.max(this.floor, wireRate * startMs / 1000);
     // The ceiling plus a whole 2048-frame host block of burst still fits the ring.
-    this.capacity = Math.ceil(wireRate * 0.4 / FRAMES);
+    this.capacity = Math.ceil(wireRate * 0.6 / FRAMES);
     this.slots = Array.from({ length: this.capacity }, () => ({ frame: 0, ready: false, pcm: new Float32Array(240) }));
     this.packet = new Float32Array(240); this.output = new Float32Array(240);
     this.baseBucket = new Float64Array(BASE_BUCKETS); this.baseDelay = new Float64Array(BASE_BUCKETS);
@@ -32,8 +34,9 @@ export class Playout {
     for (let i = 0; i < this.capacity; i++) this.slots[i].ready = false;
     this.anchor = null; this.cursor = null; this.newest = -Infinity;
     this.readyFrames = 0; this.position = FRAMES; this.packetReal = false;
-    this.target = this.floor; this.playing = false;
+    this.target = this.initial; this.playing = false;
     this.hold = 0; this.holdSeconds = 0; this.stableSeconds = 0;
+    this.lossRuns = this.lossRun = this.longestLoss = 0;
     this.baseBucket.fill(-1); this.base = null; this.peakSecond.fill(-1); this.second = -1; this.spreadMs = 0;
     this.arrivals = 0; this.lastArrival = NaN;
     this.fadeIn = FRAMES; this.release = 0;
@@ -142,6 +145,10 @@ export class Playout {
       this.rebuffer();
       return false;
     }
+    // A run of missing packets is one gap: the host's queue drops in runs, a lossy radio mostly singles.
+    if (found) this.lossRun = 0;
+    else if (++this.lossRun === 1) this.lossRuns++;
+    this.longestLoss = Math.max(this.longestLoss, this.lossRun);
     if (found) {
       this.packet.set(slot.pcm); slot.ready = false; this.readyFrames -= FRAMES;
       for (let f = this.skip; f < FRAMES && this.fadeIn > 0; f++) {
@@ -208,6 +215,7 @@ export class Playout {
     target.bufferMs = this.queued() * 1000 / this.wireRate;
     target.targetMs = this.target * 1000 / this.wireRate;
     target.spreadMs = this.spreadMs;
+    target.lossRuns = this.lossRuns; target.longestLossMs = this.longestLoss * FRAMES * 1000 / this.wireRate;
     target.driftPpm = this.drift.ppm;
     return target;
   }

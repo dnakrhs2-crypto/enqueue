@@ -122,7 +122,8 @@ await test('lm_drift PI follows independent +/- clock errors', () => {
   return {measurements};
 });
 await test('playout reorder, duplicate, late discard, PLC and rebuffer', () => {
-  const p = new Playout(48000,48000); p.reset(1);
+  // Packet mechanics from a 20 ms start; a call's 100 ms start is in the stream tests below.
+  const p = new Playout(48000,48000,{startMs:20}); p.reset(1);
   for (const n of [2,0,1,4,3,5,6,7,8,9,10,12,13,14,15]) assert.ok(p.push(message(n),pcm));
   assert.ok(!p.push(message(5),pcm));
   const left = new Float32Array(128), right = new Float32Array(128);
@@ -135,7 +136,7 @@ await test('playout reorder, duplicate, late discard, PLC and rebuffer', () => {
   assert.ok(p.playing);
   // A prolonged interruption before the first buffer fills must not leave that
   // very first packet pinning the playback cursor seconds behind the sender.
-  const startup=new Playout(48000,48000);startup.reset(1);startup.push(message(0),pcm);
+  const startup=new Playout(48000,48000,{startMs:20});startup.reset(1);startup.push(message(0),pcm);
   for(let n=2000;n<2014;n++)startup.push(message(n),pcm);
   for(let i=0;i<4;i++)startup.render(left,right,128);
   assert.ok(startup.playing);assert.ok(startup.cursor>=240000);
@@ -143,8 +144,8 @@ await test('playout reorder, duplicate, late discard, PLC and rebuffer', () => {
 });
 // A host sends each device block as one burst after a fixed network delay; a stall holds every
 // arrival inside [at, at + ms) until its end, the way a phone's LTE/Wi-Fi link stops and catches up.
-function streamPlayout({ seconds, block = 1024, rate = 48000, stalls = [], skip = null, probe = () => {} }) {
-  const p = new Playout(rate, 48000); p.reset(1);
+function streamPlayout({ seconds, block = 1024, rate = 48000, stalls = [], skip = null, startMs, probe = () => {} }) {
+  const p = new Playout(rate, 48000, startMs === undefined ? {} : { startMs }); p.reset(1);
   const data = new Float32Array(240).fill(0.25), left = new Float32Array(120), right = new Float32Array(120);
   const arrivals = []; let produced = 0, seq = 0;
   for (let b = 1; b * block * 1000 / rate < seconds * 1000 + 200; b++) {
@@ -172,28 +173,33 @@ function streamPlayout({ seconds, block = 1024, rate = 48000, stalls = [], skip 
 await test('a network stall sizes the buffer once: the next stalls of that size play through', () => {
   const stalls = [{ at: 10000, ms: 100 }, { at: 40000, ms: 100 }, { at: 70000, ms: 80 }];
   let afterFirst = null;
-  const s = streamPlayout({ seconds: 90, stalls, probe: (second, st) => { if (second === 12) afterFirst = st; } });
+  const s = streamPlayout({ seconds: 90, stalls, startMs: 20, probe: (second, st) => { if (second === 12) afterFirst = st; } });
   assert.equal(afterFirst.underruns, 1, JSON.stringify(afterFirst));
   assert.ok(afterFirst.spreadMs >= 100 && afterFirst.targetMs >= 100, JSON.stringify(afterFirst));
   assert.equal(s.underruns, 1, JSON.stringify(s)); assert.equal(s.late, 0); assert.equal(s.lost, 1);
   return { underruns: s.underruns, spreadMs: s.spreadMs, targetMs: s.targetMs };
 });
-await test('a calm link keeps the 20 ms floor; host block bursts are measured, not paid for in underruns', () => {
-  const calm = streamPlayout({ seconds: 30, block: 256 });
+await test('a call starts at 100 ms; a calm link steps down to the 20 ms floor within 90 s, a 2048-frame host block to its burst', () => {
+  const calm = streamPlayout({ seconds: 90, block: 256 });
   assert.equal(calm.underruns, 0); assert.equal(calm.targetMs, 20, JSON.stringify(calm));
-  const big = streamPlayout({ seconds: 30, block: 2048, rate: 44100 });
+  const big = streamPlayout({ seconds: 90, block: 2048, rate: 44100 });
   assert.equal(big.underruns, 0, JSON.stringify(big)); assert.ok(big.targetMs > 40 && big.targetMs < 60, JSON.stringify(big));
   return { calmTargetMs: calm.targetMs, block2048TargetMs: big.targetMs, block2048SpreadMs: big.spreadMs };
 });
+await test("a phone's first Wi-Fi stalls up to 90 ms play through: the call starts with 100 ms", () => {
+  const s = streamPlayout({ seconds: 40, stalls: [{ at: 4000, ms: 90 }, { at: 9000, ms: 60 }, { at: 21000, ms: 85 }] });
+  assert.equal(s.underruns, 0, JSON.stringify(s)); assert.equal(s.lost, 0);
+  return { underruns: s.underruns, targetMs: s.targetMs, spreadMs: s.spreadMs };
+});
 await test('100 ms the host skipped is silence once, not a bigger buffer', () => {
   // Nothing exists to play for those 100 ms; the packets after them are on time.
-  const s = streamPlayout({ seconds: 20, block: 256, skip: { from: 2000, packets: 40 } });
+  const s = streamPlayout({ seconds: 20, block: 256, startMs: 20, skip: { from: 2000, packets: 40 } });
   assert.equal(s.underruns, 1, JSON.stringify(s)); assert.ok(s.targetMs <= 22.5, JSON.stringify(s)); assert.ok(s.spreadMs < 6, JSON.stringify(s));
   return { lost: s.lost, targetMs: s.targetMs, spreadMs: s.spreadMs };
 });
 await test('five calm minutes after a stall step the buffer back down, never below what it still needs', () => {
   const marks = {};
-  streamPlayout({ seconds: 380, stalls: [{ at: 5000, ms: 100 }], probe: (second, st) => { if ([300, 380].includes(second)) marks[second] = st; } });
+  streamPlayout({ seconds: 380, startMs: 20, stalls: [{ at: 5000, ms: 100 }], probe: (second, st) => { if ([300, 380].includes(second)) marks[second] = st; } });
   assert.ok(marks[300].targetMs >= 100, JSON.stringify(marks[300]));
   assert.ok(marks[380].targetMs <= 30 && marks[380].targetMs >= 20, JSON.stringify(marks[380]));
   assert.equal(marks[380].underruns, 1);
@@ -217,7 +223,9 @@ await test('capture 120 frames, mute zeros, volume does not change upstream', ()
   return {packets:count,mutePackets,lastFrame:String(last),captureDropped:audio.captureDropped};
 });
 await test('two origins, stereo separation, gain ramp, epoch and removal isolation', () => {
-  const audio=new GuestAudio(1,48000,48000), left=new Float32Array(128),right=new Float32Array(128);
+  // Gain and separation from a 20 ms start: a call's step down from 100 ms shifts pitch by ~2 cents for a minute,
+  // which a 2-second single-bin amplitude reads as a level change.
+  const audio=new GuestAudio(1,48000,48000,{startMs:20}), left=new Float32Array(128),right=new Float32Array(128);
   audio.setGain(3,0.5); audio.people([{participantId:1,streamEpoch:1},{participantId:3,streamEpoch:1}]);
   assert.equal(audio.peers[1].gain,0.5); audio.setGain(3,1);
   const data=new Float32Array(240); let seq=0;

@@ -107,10 +107,13 @@ export function startApp(doc = document, win = window) {
       cells.push(who, diagCell("끊김", person.underruns), diagCell("빈 패킷", person.lost - person.underruns),
         diagCell("늦게 옴", person.late), diagCell("버퍼", `${Math.round(person.bufferMs)}ms`),
         diagCell("목표", `${Math.round(person.targetMs)}ms`), diagCell("흔들림", `${Math.round(person.spreadMs ?? 0)}ms`),
-        diagCell("받음", person.received));
+        diagCell("빠짐 묶음", person.lossRuns ?? 0), diagCell("최장 빠짐", `${Math.round(person.longestLossMs ?? 0)}ms`),
+        diagCell("시계차", `${Math.round(person.driftPpm ?? 0)}ppm`), diagCell("받음", person.received));
     }
     const path = client?.transportInfo?.path;
     if (path) cells.push(diagCell("경로", path === "worker" ? "워커" : "화면"));
+    const transport = client?.audioMetrics?.transport;
+    if (transport) cells.push(diagCell("워커 버림", transport.playbackDropped ?? 0));
     diag.replaceChildren(...cells);
   }
 
