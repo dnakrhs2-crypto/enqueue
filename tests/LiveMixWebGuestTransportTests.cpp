@@ -175,34 +175,55 @@ public:
     WebGuestTransportTests() : UnitTest("LiveMix WebGuest transport", "LiveMix") {}
     void runTest() override
     {
-        beginTest("20ms backlog keeps newest audio and counts old/expired packets");
+        beginTest("backlog keeps newest audio and counts old/expired packets");
         {
             using Queue = WebGuestTransport::AudioQueue;
-            // 20 ms per downlink stream, two streams (host + one forwarded native participant).
-            for (const auto rate : { 44100u, 48000u })
-                expectEquals(int((rate * 20 + 120000 - 1) / 120000 * contracts::remoteSlots), int(Queue::capacity));
-            constexpr int capacity = int(Queue::capacity);
+            constexpr int capacity = int(Queue::capacity), extra = 24, total = capacity + extra;
             Queue queue;
             uint64_t dropped = 0;
             constexpr uint64_t start = 1'000'000'000;
-            for (uint32_t seq = 0; seq < 40; ++seq)
+            for (uint32_t seq = 0; seq < (uint32_t) total; ++seq)
             {
                 const auto packet = fixture::audio(false, seq);
                 dropped += queue.push(packet.data(), packet.size(), start);
             }
-            expectEquals(int(dropped), 40 - capacity);
+            expectEquals(int(dropped), extra);
             expectEquals(int(queue.count), capacity);
             dropped += queue.trim((capacity - 2) * Queue::packetBytes, start);
-            expectEquals(int(dropped), 38);
+            expectEquals(int(dropped), total - 2);
             expectEquals(int(queue.count), 2);
-            expectEquals(int(fixture::sequence(queue.pop().data.data())), 38);
-            expectEquals(int(fixture::sequence(queue.pop().data.data())), 39);
-            const auto packet = fixture::audio(false, 40);
+            expectEquals(int(fixture::sequence(queue.pop().data.data())), total - 2);
+            expectEquals(int(fixture::sequence(queue.pop().data.data())), total - 1);
+            const auto packet = fixture::audio(false, (uint32_t) total);
             queue.push(packet.data(), packet.size(), start);
             expectEquals(int(queue.trim(0, start + Queue::maxAgeNs)), 1);
             expectEquals(int(queue.count), 0);
             queue.push(packet.data(), packet.size(), start);
             expectEquals(int(queue.trim(capacity * Queue::packetBytes, start)), 1);
+        }
+
+        beginTest("a whole host device block per downlink stream is never trimmed within its own duration");
+        {
+            // 10/27 gom (44.1 kHz, 1024-frame ASIO block): the host queued a block's 8.5 packets at once and the old
+            // 8-packet / 20 ms per-stream limit, counted together with SCTP's unsent bytes, dropped every block's tail.
+            using Queue = WebGuestTransport::AudioQueue;
+            for (const int streams : { 1, int(contracts::remoteSlots) })
+            {
+                Queue queue;
+                constexpr uint64_t start = 1'000'000'000;
+                constexpr int blockPackets = (2048 + contracts::packetFrames - 1) / contracts::packetFrames;
+                uint64_t dropped = 0;
+                for (int i = 0; i < streams * blockPackets; ++i)
+                {
+                    const auto packet = fixture::audio(false, (uint32_t) i);
+                    dropped += queue.push(packet.data(), packet.size(), start);
+                }
+                // SCTP still holds the 20 ms allowance (8 packets per stream), checked when this block's 2048 frames
+                // have played (46.4 ms)
+                dropped += queue.trim((size_t) (streams * 8) * Queue::packetBytes, start + 46'500'000);
+                expectEquals(int(dropped), 0, "streams " + juce::String(streams));
+                expectEquals(int(queue.count), streams * blockPackets);
+            }
         }
 
         beginTest("in-band unordered rexmit=0, early ICE, mono16/stereo24 and control contents");
