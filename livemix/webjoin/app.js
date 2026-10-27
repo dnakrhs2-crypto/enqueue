@@ -139,7 +139,7 @@ export function startApp(doc = document, win = window) {
   async function prepare(selectedId = deviceId) {
     const available = await client.prepareMicrophone(selectedId);
     devices = available;
-    deviceId = selectedId ?? devices[0]?.deviceId ?? null;
+    deviceId = selectedId ?? client.microphoneId ?? devices[0]?.deviceId ?? null;
     prepared = true;
     renderDevices();
   }

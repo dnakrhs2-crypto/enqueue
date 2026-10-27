@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPreferences, cleanNickname, validNickname, errorText, ERROR_TEXT,
   NICKNAME_KEY, VOLUME_PREFIX } from "../../../livemix/webjoin/app.js";
-import { parseInvite } from "../../../livemix/webjoin/guest-client.js";
+import { parseInvite, phoneMicForBluetooth } from "../../../livemix/webjoin/guest-client.js";
 
 const results = [];
 async function test(name, run) {
@@ -20,6 +20,22 @@ await test("R6 fragment preserves ASCII code and invite generation", () => {
   assert.deepEqual(parseInvite("#v=2&code=0042&invite=" + "ab".repeat(32) + "&generation=3"),
     { code: "0042", inviteToken: "ab".repeat(32), inviteGeneration: 3 });
   assert.throws(() => parseInvite(""));
+});
+await test("Bluetooth earbuds listed: the phone's own mic, never the earbuds' call link", () => {
+  // gom's Galaxy Z Fold7, Chrome 156 (10/27): the default input opened the earbuds' call link 3.9 s late and played nothing
+  const fold7 = [
+    { kind: "audioinput", label: "기본값", deviceId: "default" },
+    { kind: "audioinput", label: "Speakerphone", deviceId: "116f929a15" },
+    { kind: "audioinput", label: "Headset earpiece", deviceId: "1767060db4" },
+    { kind: "audioinput", label: "Bluetooth headset", deviceId: "1599a95c5e" },
+    { kind: "audiooutput", label: "기본값", deviceId: "default" },
+  ];
+  assert.equal(phoneMicForBluetooth(fold7), "116f929a15");
+  assert.equal(phoneMicForBluetooth(fold7.filter(d => d.label !== "Bluetooth headset")), null);   // no earbuds: default
+  assert.equal(phoneMicForBluetooth(fold7.filter(d => d.label !== "Speakerphone")), null);        // nothing to pick
+  assert.equal(phoneMicForBluetooth(fold7.map(d => ({ ...d, label: "", deviceId: "" }))), null);    // before the permission
+  assert.equal(phoneMicForBluetooth([{ kind: "audioinput", label: "Headset (Galaxy Buds3 Pro Hands-Free)", deviceId: "x" }]), null);
+  assert.equal(phoneMicForBluetooth(undefined), null);
 });
 await test("new device defaults to empty nickname and 100 percent", () => {
   const prefs = createPreferences(() => memory());

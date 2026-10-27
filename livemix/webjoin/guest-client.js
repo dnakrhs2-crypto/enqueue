@@ -15,6 +15,20 @@ function microphoneCode(error) {
   return ({ NotAllowedError: "microphone_denied", NotFoundError: "microphone_missing",
     NotReadableError: "microphone_busy", OverconstrainedError: "microphone_constraints" })[error?.name] ?? "microphone";
 }
+// Android Chrome and Samsung Internet list their call routes as inputs ('Speakerphone', 'Headset earpiece', 'Bluetooth
+// headset'). With Bluetooth earbuds connected the default input is the earbuds' call link: on gom's Galaxy Z Fold7 (both
+// browsers, 10/27) it opened 3.9 s late, the page played nothing until Bluetooth was toggled, and a call link is mono.
+// The phone's own mic ('Speakerphone') opened at once and the earbuds kept stereo. Unless the person picked a
+// microphone, a listed Bluetooth headset therefore means the phone's mic.
+export function phoneMicForBluetooth(devices) {
+  const inputs = (devices ?? []).filter(d => d.kind === "audioinput");
+  if (!inputs.some(d => /bluetooth/i.test(d.label))) return null;
+  return inputs.find(d => /^speakerphone$/i.test(d.label.trim()))?.deviceId || null;
+}
+function openMicrophone(deviceId) {
+  return navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false,
+    autoGainControl: false, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false });
+}
 function connectionId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2, "0")).join("");
 }
@@ -108,8 +122,18 @@ class GuestClient {
     if (this.context) { await this.context.close(); this.context = null; }
     let stream, context;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false,
-        noiseSuppression: false, autoGainControl: false, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false });
+      // Labels, and so the phone's mic, are known before opening only once the page has the microphone permission.
+      let chosen = deviceId || phoneMicForBluetooth(await navigator.mediaDevices.enumerateDevices());
+      stream = await openMicrophone(chosen);
+      if (!chosen) {
+        const phone = phoneMicForBluetooth(await navigator.mediaDevices.enumerateDevices());
+        if (phone) {
+          stream.getTracks().forEach(t => t.stop());
+          await new Promise(resolve => setTimeout(resolve, 500));   // let the phone drop the earbuds' call link
+          try { stream = await openMicrophone(phone); chosen = phone; }
+          catch { stream = await openMicrophone(null); }
+        }
+      }
       if (life !== this.lifecycle || this.disposed || this.ending) { stream.getTracks().forEach(t => t.stop()); throw new Error("cancelled"); }
       context = new AudioContext({ latencyHint: "interactive" });
       await context.audioWorklet.addModule(new URL("./audio/worklet.js", import.meta.url));
@@ -118,6 +142,7 @@ class GuestClient {
       const tracks = stream.getAudioTracks();
       if (!tracks.length || tracks[0].readyState !== "live") throw new Error("microphone_missing");
       this.stream = stream; this.context = context;
+      this.microphoneId = chosen || tracks[0].getSettings().deviceId || null;
       tracks[0].onended = () => { if (this.stream === stream && !this.ending) void this.fail("microphone_ended"); };
       this.diagnostics({ type: "microphone", trackSettings: tracks[0].getSettings(),
         sampleRate: context.sampleRate, baseLatency: context.baseLatency, outputLatency: context.outputLatency });
