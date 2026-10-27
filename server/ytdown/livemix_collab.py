@@ -967,6 +967,10 @@ def reset_for_tests(now=None):
 
 
 class _StandaloneHandler(BaseHTTPRequestHandler):
+    # 운영 서버는 NAS 중계를 거쳐 HTTP/1.1로 답한다. 시험 서버가 HTTP/1.0이면 앱(WinINet)이 동시 연결을 4개까지 열어
+    # 방장 롱폴 2개 뒤에 연결 정보가 묶이는 결함(10/27 웹 참가 실패)이 시험에서 안 보였다 — 운영과 같게.
+    protocol_version = "HTTP/1.1"
+
     def do_POST(self):
         return handle_post(self)
 

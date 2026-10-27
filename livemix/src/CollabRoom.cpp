@@ -4,10 +4,35 @@
 #include <chrono>
 #include <set>
 
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #include <windows.h>
+ #include <wininet.h>
+#endif
+
 namespace gocue::livemix::collab
 {
 namespace
 {
+// juce::WebInputStream is WinINet, which opens only 2 connections at once to an HTTP/1.1 server by default. A host
+// keeps two long polls on the room server (its events and the web guest's), so the offer, candidates and heartbeats
+// waited behind them for up to 20 s and the web guest gave up after 10 s (10/27: the production server answers
+// HTTP/1.1 through its proxy; the HTTP/1.0 test server allowed 4 and hid it). Process-wide, before the first request.
+void allowParallelRequests()
+{
+   #if JUCE_WINDOWS
+    static const bool raised = []
+    {
+        DWORD connections = 16;
+        const bool perServer = InternetSetOptionW (nullptr, INTERNET_OPTION_MAX_CONNS_PER_SERVER, &connections, sizeof (connections)) != FALSE;
+        const bool perOldServer = InternetSetOptionW (nullptr, INTERNET_OPTION_MAX_CONNS_PER_1_0_SERVER, &connections, sizeof (connections)) != FALSE;
+        return perServer && perOldServer;
+    }();
+    juce::ignoreUnused (raised);
+   #endif
+}
 juce::var object (std::initializer_list<std::pair<const char*, juce::var>> fields)
 {
     auto* value = new juce::DynamicObject();
@@ -73,6 +98,7 @@ void CollabRoom::Cancellation::setHandler (std::function<void()> fn)
 
 CollabRoom::Response CollabRoom::httpRequest (const Request& request)
 {
+    allowParallelRequests();
     Response response;
     if (request.cancellation != nullptr)
     {
