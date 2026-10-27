@@ -53,7 +53,10 @@ APPS = {
                     repo="dnakrhs2-crypto/enqueue", remote="origin", ctest_filter="^EnqueueUnitTests$"),
     "livemix": dict(name="LiveMix", exe="LiveMix.exe", iss="LiveMix.iss", artefacts="LiveMix_artefacts", target="LiveMix",
                     fixed="LiveMix-Setup.exe", notes_dir="docs/release-notes/livemix", site_dir="livemix", tag_prefix="livemix-v",
-                    repo="dnakrhs2-crypto/livemix", remote="livemix", ctest_filter="^EnqueueUnitTests$"),
+                    repo="dnakrhs2-crypto/livemix", remote="livemix", ctest_filter="^EnqueueUnitTests$",
+                    # 10/27: 0.17.0 shipped with web guests unable to join through the production room server - every end-to-end
+                    # test used a local server. The gate now joins a real web guest through production (prod_web_check.py).
+                    probe="LiveMixCollabProbe", web_check="tools/lm_collab017/prod_web_check.py"),
     "recorder": recorder_app(),
 }
 SITE_REPO = "dnakrhs2-crypto/enqueue"   # 곰튀김.com lives on this repo's gh-pages, both apps included
@@ -387,13 +390,18 @@ def pick_builder(choice, ready=roomc_ready):
     return "local"
 
 
+def build_targets():
+    """This app, its web-join probe (LiveMix) and the test gate's EnqueueTests."""
+    return [APP["target"]] + ([APP["probe"]] if APP.get("probe") else []) + ["EnqueueTests"]
+
+
 def roomc_build_command(preset):
     """PowerShell for roomc: configure, then build only when configure succeeded, so $LASTEXITCODE at the end is the
     first failure - no `exit`, the job script must still record the code. Colon switches are written /m /v:m
     (PowerShell splits -v:m)."""
     cmake = ROOMC_CMAKE_BIN + r"\cmake.exe"
-    return ("& '%s' --preset %s ; if ($LASTEXITCODE -eq 0) { & '%s' --build --preset %s-release --target %s EnqueueTests "
-            "-- /m /v:m /nologo }" % (cmake, preset, cmake, preset, APP["target"]))
+    return ("& '%s' --preset %s ; if ($LASTEXITCODE -eq 0) { & '%s' --build --preset %s-release --target %s "
+            "-- /m /v:m /nologo }" % (cmake, preset, cmake, preset, " ".join(build_targets())))
 
 
 def roomc_ctest_command(preset):
@@ -423,21 +431,35 @@ def build_on_roomc(preset, skip_tests, working):
         if code:
             sys.exit("roomc test gate failed (exit %s) - see the output above" % code)
     fetch_roomc_release(rbuild)
+    if not skip_tests:
+        web_join_gate()
 
 
 def fetch_roomc_release(rbuild):
-    """Replace this app's Release folder here with roomc's: copied next to it first, swapped in only when complete."""
-    local = ROOT / "build" / "vs2022" / APP["artefacts"] / "Release"
-    incoming, previous = local.with_name("Release.roomc"), local.with_name("Release.previous")
-    shutil.rmtree(incoming, ignore_errors=True)
-    local.parent.mkdir(parents=True, exist_ok=True)
-    run(rbuild.SCP + ["-r", "%s@%s:%s" % (rbuild.USER, rbuild.HOST, rbuild.to_remote(local)), str(incoming)])
-    shutil.rmtree(previous, ignore_errors=True)
-    if local.exists():
-        local.rename(previous)
-    incoming.rename(local)
-    shutil.rmtree(previous, ignore_errors=True)
-    print("BUILDER: roomc build fetched to", local, flush=True)
+    """Replace this app's Release folder (and its probe's) here with roomc's: copied next to it first, swapped in only
+    when complete."""
+    for artefacts in [APP["artefacts"]] + ([APP["probe"] + "_artefacts"] if APP.get("probe") else []):
+        local = ROOT / "build" / "vs2022" / artefacts / "Release"
+        incoming, previous = local.with_name("Release.roomc"), local.with_name("Release.previous")
+        shutil.rmtree(incoming, ignore_errors=True)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        run(rbuild.SCP + ["-r", "%s@%s:%s" % (rbuild.USER, rbuild.HOST, rbuild.to_remote(local)), str(incoming)])
+        shutil.rmtree(previous, ignore_errors=True)
+        if local.exists():
+            local.rename(previous)
+        incoming.rename(local)
+        shutil.rmtree(previous, ignore_errors=True)
+        print("BUILDER: roomc build fetched to", local, flush=True)
+
+
+def web_join_gate():
+    """LiveMix: a real web guest joins a probe host through the production room server, on this PC (headless Chromium)."""
+    if not APP.get("web_check"):
+        return
+    probe = ROOT / "build" / "vs2022" / (APP["probe"] + "_artefacts") / "Release" / (APP["probe"] + ".exe")
+    print("WEB GATE: web guest through the production room server", flush=True)
+    if subprocess.run([sys.executable, "-X", "utf8", str(ROOT / APP["web_check"]), "--probe", str(probe)], cwd=str(ROOT)).returncode:
+        sys.exit("web join gate failed - a web guest could not join through the production room server (see WEB_CHECK above)")
 
 
 def build(preset, skip_tests, gate_idle=GATE_IDLE_S, gate_idle_max_min=GATE_IDLE_MAX_MIN, builder="local", working=False):
@@ -445,13 +467,14 @@ def build(preset, skip_tests, gate_idle=GATE_IDLE_S, gate_idle_max_min=GATE_IDLE
         return build_on_roomc(preset, skip_tests, working)
     run(["cmake", "--preset", preset])
     with heavy_slot("release build " + APP["name"]):
-        run(["cmake", "--build", "--preset", preset + "-release", "--target", APP["target"], "EnqueueTests", "--", "-m", "-v:m", "-nologo"])
+        run(["cmake", "--build", "--preset", preset + "-release", "--target"] + build_targets() + ["--", "-m", "-v:m", "-nologo"])
     if not skip_tests:
         wait_for_gate_idle(gate_idle, gate_idle_max_min)
         # only this app's suites: the Recorder tests registered by recorder/CMakeLists.txt need RecorderTests.exe, which an
         # Enqueue / LiveMix build does not make (2026-09-14: the 0.10.2 release stopped on 41 "Not Run" Recorder tests)
         with heavy_slot("release test gate " + APP["name"]):
             run(["ctest", "--preset", preset + "-release"] + (["-R", APP["ctest_filter"]] if APP.get("ctest_filter") else []))
+        web_join_gate()
 
 
 def stage_obs_plugin(source_dir):

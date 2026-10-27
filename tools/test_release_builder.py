@@ -42,8 +42,14 @@ class GateCommandTests(unittest.TestCase):
         parts = command.split(" ; if ($LASTEXITCODE -eq 0) { ")
         self.assertEqual(len(parts), 2)
         self.assertIn("cmake.exe' --preset local", parts[0])
-        self.assertIn("--build --preset local-release --target %s EnqueueTests -- /m /v:m /nologo" % release.APP["target"], parts[1])
+        self.assertIn("--build --preset local-release --target LiveMix LiveMixCollabProbe EnqueueTests -- /m /v:m /nologo", parts[1])
         self.assertTrue(command.endswith(" }"))
+
+    def test_only_livemix_builds_the_web_join_probe(self):
+        release.APP = release.APPS["enqueue"]
+        self.assertEqual(release.build_targets(), ["Enqueue", "EnqueueTests"])
+        release.APP = release.APPS["livemix"]
+        self.assertEqual(release.build_targets(), ["LiveMix", "LiveMixCollabProbe", "EnqueueTests"])
 
     def test_gate_runs_this_apps_tests(self):
         self.assertEqual(release.roomc_ctest_command("local"),
@@ -53,7 +59,7 @@ class GateCommandTests(unittest.TestCase):
 class BuildOnRoomcTests(unittest.TestCase):
     """The build shares roomc, the gate runs alone (exclusive), then the Release folder comes back."""
 
-    def run_build(self, skip_tests, codes):
+    def run_build(self, skip_tests, codes, web_ok=True):
         calls, codes = [], list(codes)
 
         class FakeRbuild:
@@ -69,22 +75,24 @@ class BuildOnRoomcTests(unittest.TestCase):
                 return codes.pop(0)
 
         saved_module, saved_fetch, saved_app = sys.modules.get("rbuild"), release.fetch_roomc_release, release.APP
+        saved_gate = release.web_join_gate
         sys.modules["rbuild"] = FakeRbuild
         release.fetch_roomc_release = lambda rbuild: calls.append("fetch")
+        release.web_join_gate = lambda: calls.append("web gate") if web_ok else sys.exit("web join gate failed")
         release.APP = release.APPS["livemix"]
         try:
             release.build_on_roomc("local", skip_tests, True)
         finally:
-            release.fetch_roomc_release, release.APP = saved_fetch, saved_app
+            release.fetch_roomc_release, release.APP, release.web_join_gate = saved_fetch, saved_app, saved_gate
             if saved_module is None:
                 sys.modules.pop("rbuild")
             else:
                 sys.modules["rbuild"] = saved_module
         return calls
 
-    def test_build_then_exclusive_gate_then_fetch(self):
+    def test_build_then_exclusive_gate_then_fetch_then_web_join(self):
         self.assertEqual(self.run_build(False, [0, 0]),
-                         [("sync", True), ("run", False, False, False), ("run", True, True, False), "fetch"])
+                         [("sync", True), ("run", False, False, False), ("run", True, True, False), "fetch", "web gate"])
 
     def test_skip_tests_builds_and_fetches_without_a_gate(self):
         self.assertEqual(self.run_build(True, [0]), [("sync", True), ("run", False, False, False), "fetch"])
@@ -92,6 +100,10 @@ class BuildOnRoomcTests(unittest.TestCase):
     def test_a_failed_gate_stops_before_the_fetch(self):
         with self.assertRaises(SystemExit):
             self.run_build(False, [0, 8])
+
+    def test_a_failed_web_join_stops_the_release(self):
+        with self.assertRaises(SystemExit):
+            self.run_build(False, [0, 0], web_ok=False)
 
 
 class BuildDispatchTests(unittest.TestCase):
