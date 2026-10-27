@@ -345,6 +345,36 @@ public:
             host.transport.stop(); web.reset(); // callbacks are quiescent before the fake is destroyed
         }
 
+        beginTest ("a whole host device block reaches the web link: 1024 and 2048 frames, nothing dropped");
+        {
+            // 10/27 gom (44.1 kHz, 1024-frame ASIO): the web link kept 8 packets / 20 ms per stream, so the transport
+            // dropped the tail of every device block - 6% of the host's audio at 1024 frames, 53% at 2048.
+            for (const int block : { 1024, 2048 })
+            {
+                Node host (1);
+                host.audio.prepare (48000, block);
+                expect (host.transport.open (0, true).isEmpty());
+                auto r = room ({ 1, 3 }, true);
+                host.start (r, {});
+                auto web = std::make_unique<FakeWeb> (host.transport, 3);
+                host.transport.setWebLink (3, 33, web->senders());
+                expect (until ([&] { return host.transport.getStats (3).v2; }));
+                std::vector<float> left ((size_t) block, 1.0f / 16), right ((size_t) block, -1.0f / 32);
+                constexpr int blocks = 6;
+                for (int n = 0; n < blocks; ++n)   // device pace: one whole block per period
+                {
+                    host.audio.pushLocal (left.data(), right.data(), block);
+                    std::this_thread::sleep_for (std::chrono::milliseconds (block * 1000 / 48000));
+                }
+                const auto expected = (unsigned) (blocks * block / 120);
+                const auto label = "block " + juce::String (block);
+                expect (until ([&] { return web->trace->origins[1].load() >= expected; }), label);
+                expectEquals ((int) host.transport.getStats (3).droppedAudio, 0, label);
+                expectEquals (web->trace->errors.load(), 0u, label);
+                host.transport.stop(); web.reset();
+            }
+        }
+
         beginTest ("native handshake retries, address/origin/revision validation, restart ACK and independent disconnect");
         {
             Node host (1), b (2);

@@ -20,6 +20,12 @@ inline constexpr std::uint8_t packetVersion = 2;
 inline constexpr std::size_t v1HeaderBytes = 36, v2HeaderBytes = 48, maxPacketBytes = 1200;
 inline constexpr std::uint16_t packetFrames = 120;
 inline constexpr std::size_t stereoPcm24Bytes = 720, monoPcm16Bytes = 240;
+// Host -> web downlink backlog, per stream, in CollabTransport's web link output and WebGuestTransport's queue alike.
+// The host's audio arrives a whole device block at once (up to 2048 frames = 18 packets), so each stage holds a block
+// plus the 20 ms congestion allowance (8 packets) and drops queued audio after 70 ms (a 2048-frame block plus 20 ms).
+// 10/27: 8 packets / 20 ms dropped every block's tail - 6% of the host's audio at 1024 frames, 53% at 2048.
+inline constexpr std::size_t webBacklogPackets = (2048 + packetFrames - 1) / packetFrames + 8;
+inline constexpr std::uint64_t webBacklogAgeNs = 70'000'000;
 inline constexpr std::uint32_t defaultWireRate = 48000;
 inline constexpr ParticipantId noParticipant = 0, hostParticipant = 1;
 inline constexpr std::uint32_t controlRetryMs = 200;

@@ -63,15 +63,11 @@ private:
     // congestion test does not depend on saturating a localhost SCTP socket.
     struct AudioQueue
     {
-        // A host device block arrives here at once: up to 2048 frames (18 packets, 46.4 ms at 44.1 kHz) per downlink
-        // stream, plus the 20 ms congestion allowance (8 packets), for each of up to two streams: the host and one
-        // forwarded native participant (contract 4, per-person downlink). 10/27: 8 packets / 20 ms per stream dropped
-        // the tail of every 1024-frame block (6%, 228 dropouts in 12 s on the web) and more over Wi-Fi, where SCTP
-        // still holds the previous burst for a round trip.
-        static constexpr size_t blockPackets = (2048 + contracts::packetFrames - 1) / contracts::packetFrames;
-        static constexpr size_t capacity = (blockPackets + 8) * contracts::remoteSlots;
+        // contracts::webBacklogPackets for each of up to two downlink streams: the host and one forwarded native
+        // participant (contract 4, per-person downlink). SCTP's unsent bytes count against the same budget.
+        static constexpr size_t capacity = contracts::webBacklogPackets * contracts::remoteSlots;
         static constexpr size_t packetBytes = contracts::v2HeaderBytes + contracts::stereoPcm24Bytes;
-        static constexpr uint64_t maxAgeNs = 70'000'000;   // a whole 2048-frame block (46.4 ms) plus 20 ms
+        static constexpr uint64_t maxAgeNs = contracts::webBacklogAgeNs;
         std::array<Packet, capacity> packets {};
         size_t first = 0, count = 0;
         uint64_t push(const void*, size_t, uint64_t now);

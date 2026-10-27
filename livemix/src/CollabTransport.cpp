@@ -375,10 +375,10 @@ struct CollabTransport::Impl
             const auto& m = roster.members[n]; const auto* acked = findMember (l.acknowledged, m.participantId);
             if (m.kind == c::ParticipantKind::native && acked != nullptr && acked->streamEpoch == m.streamEpoch) ++streams;
         }
-        // Every downward packet is 768 bytes: this count is exactly the byte
-        // budget streams * 768 * ceil(wireRate * 20ms / 120).
-        return std::max (size_t (1), streams * ((roster.wireRate * 20 + 119999) / 120000));
+        // Every downward packet is 768 bytes: a whole device block plus 20 ms per stream (contracts::webBacklogPackets).
+        return std::max (size_t (1), streams * c::webBacklogPackets);
     }
+    static_assert (c::webBacklogPackets * c::remoteSlots <= std::tuple_size_v<decltype (Link::output)>);
     void queueAudio (Link& l, const c::HeaderV2& original, const uint8_t* payload, uint64_t now)
     {
         if (! canSend (l, original)) return;
@@ -401,7 +401,7 @@ struct CollabTransport::Impl
                 const auto& d = l.output[l.outputRead];
                 c::HeaderV2 h; const uint8_t* payload = nullptr;
                 const bool obsolete = ! readPacketV2 (d.data.data(), d.bytes, h, payload) || ! canSend (l, h)
-                    || (l.web && now > d.arrival && now - d.arrival > 20000000ULL);
+                    || (l.web && now > d.arrival && now - d.arrival > c::webBacklogAgeNs);
                 if (! obsolete && ! sendBytes (l, d, true)) break; // only this link is congested
                 if (obsolete) ++linkDropped[indexOf (l)];
                 l.outputRead = (l.outputRead + 1) % l.output.size(); --l.outputCount;
