@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "livemix-obs.h"
+#include "source-names.h"
 #include <util/platform.h>
 #include <util/dstr.h>
 
@@ -7,6 +8,9 @@
 
 #define LM_SOURCE_MAX_FRAMES 4096
 #define LM_NANOSECONDS UINT64_C(1000000000)
+#define LM_NAME_POLL_NS (LM_NANOSECONDS / 4)
+#define LM_BASE_NAME "base_name"
+#define LM_AUTO_NAME "auto_name"
 
 typedef struct livemix_source {
 	obs_source_t *source;
@@ -15,8 +19,90 @@ typedef struct livemix_source {
 	unsigned slot; /* 0 master, 1/2 collab partner */
 	HANDLE thread;
 	volatile LONG stop;
+	uint64_t name_last_poll; /* Video thread only. */
+	volatile LONG name_task_pending;
+	uint64_t name_empty_since; /* UI thread only; never persisted across OBS runs. */
 	float left[LM_SOURCE_MAX_FRAMES], right[LM_SOURCE_MAX_FRAMES];
 } livemix_source;
+
+static bool source_name_used(void *context, const char *name)
+{
+	obs_source_t *other = obs_get_source_by_name(name);
+	bool used = other && other != context;
+	obs_source_release(other);
+	return used;
+}
+
+static void peer_source_update_name(livemix_source *s)
+{
+	lm_obs_metadata metadata;
+	bool connected = lm_connection_read_metadata(s->connection, s->slot, &metadata) && metadata.participant_id &&
+			 metadata.state == LM_OBS_PARTICIPANT_CONNECTED && metadata.nickname_bytes;
+	uint64_t now = os_gettime_ns();
+	if (connected)
+		s->name_empty_since = 0;
+	else if (!s->name_empty_since)
+		s->name_empty_since = now;
+
+	const char *const *known = lm_peer_default_names[s->slot - 1];
+	const char *defaults[] = {obs_module_text(s->slot == 1 ? "PeerSource.Name" : "Peer2Source.Name"),
+				 known[0], known[1], known[2], known[3]};
+	obs_data_t *settings = obs_source_get_settings(s->source);
+	lm_source_name_request request = {
+		.current_name = obs_source_get_name(s->source),
+		.base_name = obs_data_get_string(settings, LM_BASE_NAME),
+		.auto_name = obs_data_get_string(settings, LM_AUTO_NAME),
+		.default_names = defaults,
+		.default_count = sizeof(defaults) / sizeof(defaults[0]),
+		.connected = connected,
+		.nickname = metadata.nickname_utf8,
+		.empty_ns = connected ? 0 : now - s->name_empty_since,
+		.name_used = source_name_used,
+		.context = s->source,
+	};
+	char *name = lm_source_name_next(&request);
+	if (name) {
+		if (!*request.base_name)
+			obs_data_set_string(settings, LM_BASE_NAME, request.current_name);
+		/* Set these before rename signals schedule the scene collection save. */
+		obs_data_set_string(settings, LM_AUTO_NAME, name);
+		obs_source_set_name(s->source, name);
+		free(name);
+	}
+	obs_data_release(settings);
+}
+
+static void peer_source_name_task(void *opaque)
+{
+	obs_weak_source_t *weak = opaque;
+	obs_source_t *source = obs_weak_source_get_source(weak);
+	obs_weak_source_release(weak);
+	if (!source)
+		return;
+	livemix_source *s = obs_obj_get_data(source);
+	if (s) {
+		if (!obs_source_removed(source))
+			peer_source_update_name(s);
+		InterlockedExchange(&s->name_task_pending, 0);
+	}
+	obs_source_release(source);
+}
+
+static void peer_source_tick(void *data, float seconds)
+{
+	livemix_source *s = data;
+	(void)seconds;
+	uint64_t now = os_gettime_ns();
+	if (now - s->name_last_poll < LM_NAME_POLL_NS)
+		return;
+	s->name_last_poll = now;
+	if (obs_source_removed(s->source) || InterlockedCompareExchange(&s->name_task_pending, 1, 0))
+		return;
+	/* OBS ticks audio-only sources too. Only the UI task reads metadata and
+	 * changes names/settings; queued work holds no source or instance pointer.
+	 * A strong reference obtained from the weak ref keeps data alive in the task. */
+	obs_queue_task(OBS_TASK_UI, peer_source_name_task, obs_source_get_weak_source(s->source), false);
+}
 
 static uint64_t frames_to_ns(uint64_t frames, uint32_t rate)
 {
@@ -194,6 +280,7 @@ struct obs_source_info livemix_peer_source = {
 	.get_name = peer_source_name,
 	.create = peer_source_create,
 	.destroy = source_destroy,
+	.video_tick = peer_source_tick,
 	.get_properties = peer_source_properties,
 };
 
@@ -204,5 +291,6 @@ struct obs_source_info livemix_peer2_source = {
 	.get_name = peer2_source_name,
 	.create = peer2_source_create,
 	.destroy = source_destroy,
+	.video_tick = peer_source_tick,
 	.get_properties = peer_source_properties,
 };

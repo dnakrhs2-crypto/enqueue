@@ -2,6 +2,7 @@
 #include "receiver.h"
 #include "lm_obs_protocol.h"
 #include "ring-names.h"
+#include "source-names.h"
 
 #include <math.h>
 #include <sddl.h>
@@ -1651,6 +1652,257 @@ done:
 	return ok;
 }
 
+static lm_source_name_request name_request(unsigned slot, const char *current, const char *base, const char *auto_name)
+{
+	lm_source_name_request request = {
+		.current_name = current,
+		.base_name = base,
+		.auto_name = auto_name,
+		.default_names = lm_peer_default_names[slot - 1],
+		.default_count = 4,
+		.connected = true,
+		.nickname = "곰",
+	};
+	return request;
+}
+
+static bool expect_name(const lm_source_name_request *request, const char *expected)
+{
+	char *name = lm_source_name_next(request);
+	bool matches = expected ? name && strcmp(name, expected) == 0 : name == NULL;
+	if (!matches)
+		printf("  name: expected %s, got %s\n", expected ? expected : "(unchanged)", name ? name : "(unchanged)");
+	free(name);
+	return matches;
+}
+
+static bool name_in_list(void *context, const char *name)
+{
+	const char *const *names = context;
+	for (size_t i = 0; names[i]; ++i)
+		if (strcmp(name, names[i]) == 0)
+			return true;
+	return false;
+}
+
+static bool test_source_name_defaults(void)
+{
+	bool ok = true;
+	for (unsigned slot = 1; slot <= 2; ++slot) {
+		for (size_t locale = 0; locale < 2; ++locale) {
+			lm_source_name_request r = name_request(slot, lm_peer_default_names[slot - 1][locale], "", "");
+			CHECK(expect_name(&r, "곰"));
+			/* An empty slot (or no usable nickname) cannot claim a default. */
+			r.connected = false;
+			r.empty_ns = UINT64_C(10000000000);
+			CHECK(expect_name(&r, NULL));
+			r.connected = true;
+			r.nickname = "";
+			CHECK(expect_name(&r, NULL));
+		}
+	}
+done:
+	return ok;
+}
+
+static bool test_source_name_numbered_defaults(void)
+{
+	bool ok = true;
+	const unsigned numbers[] = {2, 3, 12};
+	for (unsigned slot = 1; slot <= 2; ++slot) {
+		for (size_t locale = 0; locale < 2; ++locale) {
+			for (size_t i = 0; i < 3; ++i) {
+				char current[128];
+				snprintf(current, sizeof(current), "%s %u", lm_peer_default_names[slot - 1][locale], numbers[i]);
+				lm_source_name_request r = name_request(slot, current, "", "");
+				CHECK(expect_name(&r, "곰"));
+			}
+		}
+	}
+done:
+	return ok;
+}
+
+static bool test_source_name_legacy(void)
+{
+	bool ok = true;
+	for (unsigned slot = 1; slot <= 2; ++slot) {
+		for (size_t locale = 2; locale < 4; ++locale) {
+			const char *base = lm_peer_default_names[slot - 1][locale];
+			lm_source_name_request r = name_request(slot, base, "", "");
+			CHECK(expect_name(&r, "곰"));
+			char numbered[128];
+			snprintf(numbered, sizeof(numbered), "%s 3", base);
+			r.current_name = numbered;
+			CHECK(expect_name(&r, "곰"));
+		}
+	}
+done:
+	return ok;
+}
+
+static bool test_source_name_custom(void)
+{
+	bool ok = true;
+	const char *names[] = {"방송 친구", "LiveMix 합방 상대 1 보조", "LiveMix Collab Partner 2 backup"};
+	for (size_t i = 0; i < 3; ++i) {
+		lm_source_name_request r = name_request(1, names[i], "", "");
+		CHECK(expect_name(&r, NULL));
+		r.connected = false;
+		r.empty_ns = UINT64_C(5000000000);
+		CHECK(expect_name(&r, NULL));
+	}
+done:
+	return ok;
+}
+
+static bool test_source_name_replacement(void)
+{
+	bool ok = true;
+	lm_source_name_request r = name_request(2, "곰", "LiveMix 합방 상대 2 3", "곰");
+	r.nickname = "여우";
+	CHECK(expect_name(&r, "여우"));
+	r.current_name = r.auto_name = "여우";
+	CHECK(expect_name(&r, NULL));
+	/* The first base survives every change of participant. */
+	r.connected = false;
+	r.empty_ns = UINT64_C(4000000000);
+	CHECK(expect_name(&r, "LiveMix 합방 상대 2 3"));
+done:
+	return ok;
+}
+
+static bool test_source_name_reconnect(void)
+{
+	bool ok = true;
+	lm_source_name_request r = name_request(1, "곰", "LiveMix 합방 상대 1", "곰");
+	r.connected = false;
+	CHECK(expect_name(&r, NULL));
+	r.empty_ns = UINT64_C(2000000000);
+	CHECK(expect_name(&r, NULL));
+	r.connected = true;
+	r.empty_ns = 0;
+	CHECK(expect_name(&r, NULL));
+	/* A later disconnection starts a fresh grace period. */
+	r.connected = false;
+	r.empty_ns = UINT64_C(2000000000);
+	CHECK(expect_name(&r, NULL));
+done:
+	return ok;
+}
+
+static bool test_source_name_restore(void)
+{
+	bool ok = true;
+	lm_source_name_request r = name_request(1, "곰", "LiveMix Collab Partner 1 2", "곰");
+	r.connected = false;
+	r.empty_ns = LM_SOURCE_NAME_GRACE_NS;
+	CHECK(expect_name(&r, NULL));
+	r.empty_ns += 1;
+	CHECK(expect_name(&r, r.base_name));
+	r.current_name = r.auto_name = r.base_name;
+	CHECK(expect_name(&r, NULL));
+	r.connected = true;
+	r.empty_ns = 0;
+	CHECK(expect_name(&r, "곰"));
+done:
+	return ok;
+}
+
+static bool test_source_name_collision(void)
+{
+	bool ok = true;
+	lm_source_name_request r = name_request(1, "LiveMix 합방 상대 1", "", "");
+	const char *used[] = {"곰", "곰 (3)", NULL};
+	r.name_used = name_in_list;
+	r.context = used;
+	CHECK(expect_name(&r, "곰 (2)"));
+	used[1] = "곰 (2)";
+	CHECK(expect_name(&r, "곰 (3)"));
+	/* The currently owned name is not a collision with another source. */
+	r.base_name = r.current_name;
+	r.current_name = r.auto_name = "곰 (2)";
+	CHECK(expect_name(&r, NULL));
+done:
+	return ok;
+}
+
+static bool test_source_name_restore_collision(void)
+{
+	bool ok = true;
+	lm_source_name_request r = name_request(1, "곰", "LiveMix 합방 상대 1", "곰");
+	const char *used[] = {"LiveMix 합방 상대 1", "LiveMix 합방 상대 1 (2)", NULL};
+	r.name_used = name_in_list;
+	r.context = used;
+	r.connected = false;
+	r.empty_ns = UINT64_C(4000000000);
+	CHECK(expect_name(&r, "LiveMix 합방 상대 1 (3)"));
+	r.current_name = r.auto_name = "LiveMix 합방 상대 1 (3)";
+	CHECK(expect_name(&r, NULL));
+	/* A restored collision suffix still belongs to us on the next join. */
+	r.connected = true;
+	r.empty_ns = 0;
+	CHECK(expect_name(&r, "곰"));
+done:
+	return ok;
+}
+
+static bool test_source_name_restart(void)
+{
+	bool ok = true;
+	/* These are the three strings saved by OBS; no in-memory history remains. */
+	lm_source_name_request r = name_request(2, "곰 (2)", "LiveMix Collab Partner 2", "곰 (2)");
+	r.connected = false;
+	CHECK(expect_name(&r, NULL));
+	r.empty_ns = LM_SOURCE_NAME_GRACE_NS;
+	CHECK(expect_name(&r, NULL));
+	r.empty_ns += 1;
+	CHECK(expect_name(&r, "LiveMix Collab Partner 2"));
+	/* A connected restart can immediately follow a different participant. */
+	r.connected = true;
+	r.empty_ns = 0;
+	r.nickname = "여우";
+	CHECK(expect_name(&r, "여우"));
+done:
+	return ok;
+}
+
+static bool test_source_name_manual_after_auto(void)
+{
+	bool ok = true;
+	const char *manual[] = {"방송 친구", "LiveMix 합방 상대 1", "LiveMix 합방 상대 1 3", "곰 2"};
+	for (size_t i = 0; i < 4; ++i) {
+		lm_source_name_request r = name_request(1, manual[i], "LiveMix 합방 상대 1", "곰");
+		CHECK(expect_name(&r, NULL));
+		r.nickname = "여우";
+		CHECK(expect_name(&r, NULL));
+		r.connected = false;
+		r.empty_ns = UINT64_C(10000000000);
+		CHECK(expect_name(&r, NULL));
+	}
+done:
+	return ok;
+}
+
+static bool test_source_name_added_copy(void)
+{
+	bool ok = true;
+	const char *used[] = {"곰", NULL};
+	/* A second default-named instance can track the same slot independently. */
+	lm_source_name_request r = name_request(1, "LiveMix 합방 상대 1 2", "", "");
+	r.name_used = name_in_list;
+	r.context = used;
+	CHECK(expect_name(&r, "곰 (2)"));
+	/* OBS duplicates settings too. A name chosen for that copy must not be
+	 * mistaken for the original instance's saved auto_name. */
+	r.current_name = "곰 2";
+	r.base_name = "LiveMix 합방 상대 1";
+	r.auto_name = "곰";
+	CHECK(expect_name(&r, NULL));
+done:
+	return ok;
+}
+
 static void run_test(const char *name, bool (*test)(void))
 {
 	if (test_filter && !strstr(name, test_filter))
@@ -1714,6 +1966,18 @@ int main(int argc, char **argv)
 	run_test("peer metadata: writer identity, disabled audio and stale heartbeat", test_metadata_writer);
 	run_test("peer metadata: legacy audio without metadata and an empty slot", test_metadata_empty);
 	run_test("peer metadata: ABI version, size, nickname bound and terminating NUL", test_metadata_layout);
+	run_test("source name: both slots and both locale defaults become the nickname", test_source_name_defaults);
+	run_test("source name: OBS numbered defaults", test_source_name_numbered_defaults);
+	run_test("source name: 0.15 legacy defaults and numbered copies", test_source_name_legacy);
+	run_test("source name: user names remain unchanged", test_source_name_custom);
+	run_test("source name: a replacement participant preserves the original base", test_source_name_replacement);
+	run_test("source name: reconnect within three seconds keeps the nickname", test_source_name_reconnect);
+	run_test("source name: restore strictly after three seconds and follow the next join", test_source_name_restore);
+	run_test("source name: first free collision suffix and own-name exclusion", test_source_name_collision);
+	run_test("source name: restore collision and subsequent join", test_source_name_restore_collision);
+	run_test("source name: restart from persisted base and auto names", test_source_name_restart);
+	run_test("source name: manual changes after auto rename disable renaming and restoration", test_source_name_manual_after_auto);
+	run_test("source name: added sources and duplicated settings keep independent ownership", test_source_name_added_copy);
 	printf("LiveMix OBS core tests: %d passed, %d failed (%d total)\n",
 	       tests_run - tests_failed, tests_failed, tests_run);
 	return tests_failed ? EXIT_FAILURE : EXIT_SUCCESS;
