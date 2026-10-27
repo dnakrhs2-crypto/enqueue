@@ -28,6 +28,50 @@ typedef struct lm_source_name_request {
 	void *context;
 } lm_source_name_request;
 
+/* Instance-owned strings. OBS settings are only a persistence copy: properties
+ * may roll them back and source duplication copies them into a new instance. */
+typedef struct lm_source_name_state {
+	char *base_name, *auto_name;
+} lm_source_name_state;
+
+static inline void lm_source_name_state_free(lm_source_name_state *state)
+{
+	free(state->base_name);
+	free(state->auto_name);
+	memset(state, 0, sizeof(*state));
+}
+
+static inline bool lm_source_name_state_set(lm_source_name_state *state, const char *base, const char *auto_name)
+{
+	char *base_copy = malloc(strlen(base) + 1);
+	char *auto_copy = malloc(strlen(auto_name) + 1);
+	if (!base_copy || !auto_copy) {
+		free(base_copy);
+		free(auto_copy);
+		return false;
+	}
+	strcpy(base_copy, base);
+	strcpy(auto_copy, auto_name);
+	lm_source_name_state_free(state);
+	state->base_name = base_copy;
+	state->auto_name = auto_copy;
+	return true;
+}
+
+/* Call once during creation with a zero-initialized state. A different or
+ * absent UUID is not proof of ownership, even if the saved names match. */
+static inline bool lm_source_name_state_init(lm_source_name_state *state, const char *uuid, const char *saved_uuid,
+					    const char *base, const char *auto_name)
+{
+	bool own_record = *saved_uuid && strcmp(uuid, saved_uuid) == 0;
+	return lm_source_name_state_set(state, own_record ? base : "", own_record ? auto_name : "");
+}
+
+static inline bool lm_source_name_state_renamed(lm_source_name_state *state, const char *current, const char *next)
+{
+	return lm_source_name_state_set(state, *state->base_name ? state->base_name : current, next);
+}
+
 static inline bool lm_source_name_is_default(const lm_source_name_request *request)
 {
 	for (size_t i = 0; i < request->default_count; ++i) {

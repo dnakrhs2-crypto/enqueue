@@ -1903,6 +1903,109 @@ done:
 	return ok;
 }
 
+static bool test_source_name_settings_rollback(void)
+{
+	bool ok = true;
+	lm_source_name_state state = {0};
+	const char *uuid = "a4c1b507-659a-4a80-b478-3072dc779d63";
+	char saved_uuid[40] = "", saved_base[128] = "", saved_auto[128] = "";
+	const char *base = "LiveMix 합방 상대 1";
+	CHECK(lm_source_name_state_init(&state, uuid, saved_uuid, saved_base, saved_auto));
+	lm_source_name_request r = name_request(1, base, state.base_name, state.auto_name);
+	CHECK(expect_name(&r, "곰"));
+	CHECK(lm_source_name_state_renamed(&state, base, "곰"));
+	strcpy(saved_uuid, uuid);
+	strcpy(saved_base, state.base_name);
+	strcpy(saved_auto, state.auto_name);
+
+	/* Cancel/reset replaces the persisted settings with the original empty
+	 * values, while the source name and instance remain alive. */
+	saved_uuid[0] = saved_base[0] = saved_auto[0] = '\0';
+	r = name_request(1, "곰", state.base_name, state.auto_name);
+	r.nickname = "여우";
+	CHECK(expect_name(&r, "여우"));
+	CHECK(lm_source_name_state_renamed(&state, "곰", "여우"));
+	CHECK(strcmp(state.base_name, base) == 0 && strcmp(state.auto_name, "여우") == 0);
+
+	/* Replacing settings with other saved values must not become an import
+	 * either. Only creation calls state_init; update/save export the instance. */
+	strcpy(saved_uuid, "b0ab75f9-10f6-4b8a-937e-6cb1841ac03a");
+	strcpy(saved_base, "LiveMix 합방 상대 2");
+	strcpy(saved_auto, "곰");
+	r = name_request(1, "여우", state.base_name, state.auto_name);
+	r.connected = false;
+	r.empty_ns = LM_SOURCE_NAME_GRACE_NS;
+	CHECK(expect_name(&r, NULL));
+	r.empty_ns += 1;
+	CHECK(expect_name(&r, base));
+	CHECK(lm_source_name_state_renamed(&state, "여우", base));
+	r = name_request(1, base, state.base_name, state.auto_name);
+	CHECK(expect_name(&r, "곰"));
+done:
+	lm_source_name_state_free(&state);
+	return ok;
+}
+
+static bool test_source_name_copied_uuid(void)
+{
+	bool ok = true;
+	lm_source_name_state state = {0};
+	const char *original_uuid = "a4c1b507-659a-4a80-b478-3072dc779d63";
+	const char *copy_uuid = "b0ab75f9-10f6-4b8a-937e-6cb1841ac03a";
+	const char *original_base = "LiveMix 합방 상대 1";
+	const char *copy_base = "LiveMix 합방 상대 1 2";
+	/* A restored original has base == auto. OBS copies both strings into
+	 * its duplicate, whose UUID and numbered default name are different. */
+	CHECK(lm_source_name_state_init(&state, copy_uuid, original_uuid, original_base, original_base));
+	CHECK(!*state.base_name && !*state.auto_name);
+	lm_source_name_request r = name_request(1, copy_base, state.base_name, state.auto_name);
+	const char *used[] = {"곰", NULL};
+	r.name_used = name_in_list;
+	r.context = used;
+	CHECK(expect_name(&r, "곰 (2)"));
+	CHECK(lm_source_name_state_renamed(&state, copy_base, "곰 (2)"));
+	CHECK(strcmp(state.base_name, copy_base) == 0);
+	r = name_request(1, "곰 (2)", state.base_name, state.auto_name);
+	r.connected = false;
+	r.empty_ns = LM_SOURCE_NAME_GRACE_NS + 1;
+	CHECK(expect_name(&r, copy_base));
+
+	/* Discarding foreign ownership must still respect a custom copy name. */
+	lm_source_name_state_free(&state);
+	CHECK(lm_source_name_state_init(&state, copy_uuid, original_uuid, original_base, "곰"));
+	r = name_request(1, "곰 2", state.base_name, state.auto_name);
+	CHECK(expect_name(&r, NULL));
+done:
+	lm_source_name_state_free(&state);
+	return ok;
+}
+
+static bool test_source_name_owned_uuid_restart(void)
+{
+	bool ok = true;
+	lm_source_name_state state = {0};
+	const char *uuid = "a4c1b507-659a-4a80-b478-3072dc779d63";
+	char saved_base[128] = "LiveMix Collab Partner 2 3", saved_auto[128] = "곰 (2)";
+	CHECK(lm_source_name_state_init(&state, uuid, uuid, saved_base, saved_auto));
+	/* Loading must copy, not borrow strings that settings can invalidate. */
+	saved_base[0] = saved_auto[0] = '\0';
+	lm_source_name_request r = name_request(2, "곰 (2)", state.base_name, state.auto_name);
+	r.connected = false;
+	CHECK(expect_name(&r, NULL));
+	r.empty_ns = LM_SOURCE_NAME_GRACE_NS + 1;
+	CHECK(expect_name(&r, "LiveMix Collab Partner 2 3"));
+	r.current_name = "방송 친구";
+	CHECK(expect_name(&r, NULL));
+
+	/* A record without an owner UUID cannot identify its source. */
+	lm_source_name_state_free(&state);
+	CHECK(lm_source_name_state_init(&state, uuid, "", "LiveMix Collab Partner 2 3", "곰 (2)"));
+	CHECK(!*state.base_name && !*state.auto_name);
+done:
+	lm_source_name_state_free(&state);
+	return ok;
+}
+
 static void run_test(const char *name, bool (*test)(void))
 {
 	if (test_filter && !strstr(name, test_filter))
@@ -1978,6 +2081,9 @@ int main(int argc, char **argv)
 	run_test("source name: restart from persisted base and auto names", test_source_name_restart);
 	run_test("source name: manual changes after auto rename disable renaming and restoration", test_source_name_manual_after_auto);
 	run_test("source name: added sources and duplicated settings keep independent ownership", test_source_name_added_copy);
+	run_test("source name: settings rollback and replacement preserve instance ownership", test_source_name_settings_rollback);
+	run_test("source name: a copied UUID is ignored and the numbered copy tracks its own base", test_source_name_copied_uuid);
+	run_test("source name: matching UUID restores owned names across restart", test_source_name_owned_uuid_restart);
 	printf("LiveMix OBS core tests: %d passed, %d failed (%d total)\n",
 	       tests_run - tests_failed, tests_failed, tests_run);
 	return tests_failed ? EXIT_FAILURE : EXIT_SUCCESS;
