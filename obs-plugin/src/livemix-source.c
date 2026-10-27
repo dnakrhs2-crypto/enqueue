@@ -23,27 +23,17 @@ typedef struct livemix_source {
 	uint64_t name_last_poll; /* Video thread only. */
 	volatile LONG name_task_pending;
 	uint64_t name_empty_since; /* UI thread only; never persisted across OBS runs. */
-	SRWLOCK name_lock; /* Settings update/save callbacks can run on their caller's thread. */
-	lm_source_name_state name_state;
+	lm_source_name_state name_state; /* Initialized and changed only by UI name tasks. */
 	float left[LM_SOURCE_MAX_FRAMES], right[LM_SOURCE_MAX_FRAMES];
 } livemix_source;
 
-/* Caller holds name_lock, or is initializing the instance before publication. */
-static void peer_source_write_name(livemix_source *s, obs_data_t *settings)
+static void peer_source_write_name(livemix_source *s)
 {
-	obs_data_set_string(settings, LM_BASE_NAME, s->name_state.base_name);
-	obs_data_set_string(settings, LM_AUTO_NAME, s->name_state.auto_name);
-	obs_data_set_string(settings, LM_NAME_UUID, obs_source_get_uuid(s->source));
-}
-
-static void peer_source_sync_name(void *data, obs_data_t *settings)
-{
-	livemix_source *s = data;
-	AcquireSRWLockExclusive(&s->name_lock);
-	/* Neither a properties rollback nor a settings update may replace the
-	 * instance's ownership. The save callback also repairs direct settings edits. */
-	peer_source_write_name(s, settings);
-	ReleaseSRWLockExclusive(&s->name_lock);
+	obs_data_t *private_settings = obs_source_get_private_settings(s->source);
+	obs_data_set_string(private_settings, LM_BASE_NAME, s->name_state.base_name);
+	obs_data_set_string(private_settings, LM_AUTO_NAME, s->name_state.auto_name);
+	obs_data_set_string(private_settings, LM_NAME_UUID, obs_source_get_uuid(s->source));
+	obs_data_release(private_settings);
 }
 
 static bool source_name_used(void *context, const char *name)
@@ -56,6 +46,18 @@ static bool source_name_used(void *context, const char *name)
 
 static void peer_source_update_name(livemix_source *s)
 {
+	if (!s->name_state.initialized) {
+		/* OBS restores/copies private settings after create returns. Read them
+		 * once in the first UI task, after loading or duplication has finished. */
+		obs_data_t *private_settings = obs_source_get_private_settings(s->source);
+		bool initialized = lm_source_name_state_init(&s->name_state, obs_source_get_uuid(s->source),
+						    obs_data_get_string(private_settings, LM_NAME_UUID),
+						    obs_data_get_string(private_settings, LM_BASE_NAME),
+						    obs_data_get_string(private_settings, LM_AUTO_NAME));
+		obs_data_release(private_settings);
+		if (!initialized)
+			return;
+	}
 	lm_obs_metadata metadata;
 	bool connected = lm_connection_read_metadata(s->connection, s->slot, &metadata) && metadata.participant_id &&
 			 metadata.state == LM_OBS_PARTICIPANT_CONNECTED && metadata.nickname_bytes;
@@ -68,7 +70,6 @@ static void peer_source_update_name(livemix_source *s)
 	const char *const *known = lm_peer_default_names[s->slot - 1];
 	const char *defaults[] = {obs_module_text(s->slot == 1 ? "PeerSource.Name" : "Peer2Source.Name"),
 				 known[0], known[1], known[2], known[3]};
-	AcquireSRWLockExclusive(&s->name_lock);
 	lm_source_name_request request = {
 		.current_name = obs_source_get_name(s->source),
 		.base_name = s->name_state.base_name,
@@ -87,14 +88,9 @@ static void peer_source_update_name(livemix_source *s)
 		name = NULL;
 	}
 	if (name) {
-		/* Set these before rename signals schedule the scene collection save. */
-		obs_data_t *settings = obs_source_get_settings(s->source);
-		peer_source_write_name(s, settings);
-		obs_data_release(settings);
-	}
-	ReleaseSRWLockExclusive(&s->name_lock);
-	/* Rename signals can synchronously save the source: do not hold the lock. */
-	if (name) {
+		/* Persist before rename signals can save the scene collection. Only UI
+		 * tasks access this state; no lock is held across the rename signals. */
+		peer_source_write_name(s);
 		obs_source_set_name(s->source, name);
 		free(name);
 	}
@@ -127,7 +123,7 @@ static void peer_source_tick(void *data, float seconds)
 	if (obs_source_removed(s->source) || InterlockedCompareExchange(&s->name_task_pending, 1, 0))
 		return;
 	/* OBS ticks audio-only sources too. Only the UI task reads metadata and
-	 * changes names/settings; queued work holds no source or instance pointer.
+	 * changes names/private settings; queued work holds no source or instance pointer.
 	 * A strong reference obtained from the weak ref keeps data alive in the task. */
 	obs_queue_task(OBS_TASK_UI, peer_source_name_task, obs_source_get_weak_source(s->source), false);
 }
@@ -226,8 +222,7 @@ static void source_destroy(void *data)
 	free(s);
 }
 
-static void *source_create_for_connection(obs_data_t *settings, obs_source_t *source, lm_connection *connection,
-					 unsigned slot)
+static void *source_create_for_connection(obs_source_t *source, lm_connection *connection, unsigned slot)
 {
 	livemix_source *s = calloc(1, sizeof(*s));
 	if (!s)
@@ -235,17 +230,6 @@ static void *source_create_for_connection(obs_data_t *settings, obs_source_t *so
 	s->source = source;
 	s->connection = connection;
 	s->slot = slot;
-	InitializeSRWLock(&s->name_lock);
-	if (slot) {
-		if (!lm_source_name_state_init(&s->name_state, obs_source_get_uuid(source),
-					       obs_data_get_string(settings, LM_NAME_UUID),
-					       obs_data_get_string(settings, LM_BASE_NAME),
-					       obs_data_get_string(settings, LM_AUTO_NAME))) {
-			source_destroy(s);
-			return NULL;
-		}
-		peer_source_write_name(s, settings);
-	}
 	audio_t *audio = obs_get_audio();
 	uint32_t rate = audio ? audio_output_get_sample_rate(audio) : 48000;
 	s->receiver = lm_receiver_create(connection, rate);
@@ -260,17 +244,20 @@ static void *source_create_for_connection(obs_data_t *settings, obs_source_t *so
 
 static void *source_create(obs_data_t *settings, obs_source_t *source)
 {
-	return source_create_for_connection(settings, source, livemix_obs_connection(), 0);
+	(void)settings;
+	return source_create_for_connection(source, livemix_obs_connection(), 0);
 }
 
 static void *peer_source_create(obs_data_t *settings, obs_source_t *source)
 {
-	return source_create_for_connection(settings, source, livemix_obs_peer_connection(1), 1);
+	(void)settings;
+	return source_create_for_connection(source, livemix_obs_peer_connection(1), 1);
 }
 
 static void *peer2_source_create(obs_data_t *settings, obs_source_t *source)
 {
-	return source_create_for_connection(settings, source, livemix_obs_peer_connection(2), 2);
+	(void)settings;
+	return source_create_for_connection(source, livemix_obs_peer_connection(2), 2);
 }
 
 static obs_properties_t *source_properties_for_status(void *data, const char *connected_key, const char *waiting_key)
@@ -318,8 +305,6 @@ struct obs_source_info livemix_peer_source = {
 	.get_name = peer_source_name,
 	.create = peer_source_create,
 	.destroy = source_destroy,
-	.update = peer_source_sync_name,
-	.save = peer_source_sync_name,
 	.video_tick = peer_source_tick,
 	.get_properties = peer_source_properties,
 };
@@ -331,8 +316,6 @@ struct obs_source_info livemix_peer2_source = {
 	.get_name = peer2_source_name,
 	.create = peer2_source_create,
 	.destroy = source_destroy,
-	.update = peer_source_sync_name,
-	.save = peer_source_sync_name,
 	.video_tick = peer_source_tick,
 	.get_properties = peer_source_properties,
 };

@@ -1908,30 +1908,24 @@ static bool test_source_name_settings_rollback(void)
 	bool ok = true;
 	lm_source_name_state state = {0};
 	const char *uuid = "a4c1b507-659a-4a80-b478-3072dc779d63";
-	char saved_uuid[40] = "", saved_base[128] = "", saved_auto[128] = "";
 	const char *base = "LiveMix 합방 상대 1";
-	CHECK(lm_source_name_state_init(&state, uuid, saved_uuid, saved_base, saved_auto));
+	/* A new source's private record is empty at its first UI task. */
+	CHECK(lm_source_name_state_init(&state, uuid, "", "", ""));
 	lm_source_name_request r = name_request(1, base, state.base_name, state.auto_name);
 	CHECK(expect_name(&r, "곰"));
 	CHECK(lm_source_name_state_renamed(&state, base, "곰"));
-	strcpy(saved_uuid, uuid);
-	strcpy(saved_base, state.base_name);
-	strcpy(saved_auto, state.auto_name);
 
-	/* Cancel/reset replaces the persisted settings with the original empty
-	 * values, while the source name and instance remain alive. */
-	saved_uuid[0] = saved_base[0] = saved_auto[0] = '\0';
+	/* Cancel/reset only clears user settings. No ownership reload occurs on
+	 * the next task, and even an empty record cannot erase the instance. */
+	CHECK(lm_source_name_state_init(&state, uuid, "", "", ""));
 	r = name_request(1, "곰", state.base_name, state.auto_name);
 	r.nickname = "여우";
 	CHECK(expect_name(&r, "여우"));
 	CHECK(lm_source_name_state_renamed(&state, "곰", "여우"));
 	CHECK(strcmp(state.base_name, base) == 0 && strcmp(state.auto_name, "여우") == 0);
 
-	/* Replacing settings with other saved values must not become an import
-	 * either. Only creation calls state_init; update/save export the instance. */
-	strcpy(saved_uuid, "b0ab75f9-10f6-4b8a-937e-6cb1841ac03a");
-	strcpy(saved_base, "LiveMix 합방 상대 2");
-	strcpy(saved_auto, "곰");
+	/* Imports are one-time, even after participant changes. */
+	CHECK(lm_source_name_state_init(&state, uuid, uuid, "LiveMix 합방 상대 2", "곰"));
 	r = name_request(1, "여우", state.base_name, state.auto_name);
 	r.connected = false;
 	r.empty_ns = LM_SOURCE_NAME_GRACE_NS;
@@ -1954,8 +1948,9 @@ static bool test_source_name_copied_uuid(void)
 	const char *copy_uuid = "b0ab75f9-10f6-4b8a-937e-6cb1841ac03a";
 	const char *original_base = "LiveMix 합방 상대 1";
 	const char *copy_base = "LiveMix 합방 상대 1 2";
-	/* A restored original has base == auto. OBS copies both strings into
-	 * its duplicate, whose UUID and numbered default name are different. */
+	/* OBS copies private settings after creating the duplicate. Its first UI
+	 * task sees the restored original's base == auto, but a different UUID. */
+	CHECK(!state.initialized);
 	CHECK(lm_source_name_state_init(&state, copy_uuid, original_uuid, original_base, original_base));
 	CHECK(!*state.base_name && !*state.auto_name);
 	lm_source_name_request r = name_request(1, copy_base, state.base_name, state.auto_name);
@@ -1987,7 +1982,7 @@ static bool test_source_name_owned_uuid_restart(void)
 	const char *uuid = "a4c1b507-659a-4a80-b478-3072dc779d63";
 	char saved_base[128] = "LiveMix Collab Partner 2 3", saved_auto[128] = "곰 (2)";
 	CHECK(lm_source_name_state_init(&state, uuid, uuid, saved_base, saved_auto));
-	/* Loading must copy, not borrow strings that settings can invalidate. */
+	/* Import copies strings out of private settings into the instance. */
 	saved_base[0] = saved_auto[0] = '\0';
 	lm_source_name_request r = name_request(2, "곰 (2)", state.base_name, state.auto_name);
 	r.connected = false;
@@ -2001,6 +1996,37 @@ static bool test_source_name_owned_uuid_restart(void)
 	lm_source_name_state_free(&state);
 	CHECK(lm_source_name_state_init(&state, uuid, "", "LiveMix Collab Partner 2 3", "곰 (2)"));
 	CHECK(!*state.base_name && !*state.auto_name);
+done:
+	lm_source_name_state_free(&state);
+	return ok;
+}
+
+static bool test_source_name_late_private_settings(void)
+{
+	bool ok = true;
+	lm_source_name_state state = {0};
+	const char *uuid = "a4c1b507-659a-4a80-b478-3072dc779d63";
+	char private_uuid[40] = "", private_base[128] = "", private_auto[128] = "";
+	/* create must not import the initially empty private settings. OBS fills
+	 * these after creation; the first UI name task then restores ownership. */
+	CHECK(!state.initialized && !state.base_name && !state.auto_name);
+	strcpy(private_uuid, uuid);
+	strcpy(private_base, "LiveMix Collab Partner 2 3");
+	strcpy(private_auto, "곰 (2)");
+	CHECK(lm_source_name_state_init(&state, uuid, private_uuid, private_base, private_auto));
+	CHECK(state.initialized);
+	lm_source_name_request r = name_request(2, "곰 (2)", state.base_name, state.auto_name);
+	r.connected = false;
+	CHECK(expect_name(&r, NULL));
+	r.empty_ns = LM_SOURCE_NAME_GRACE_NS + 1;
+	CHECK(expect_name(&r, private_base));
+	CHECK(lm_source_name_state_renamed(&state, "곰 (2)", private_base));
+	CHECK(state.initialized);
+	/* Later tasks must not import the previous auto name again. */
+	CHECK(lm_source_name_state_init(&state, uuid, private_uuid, private_base, private_auto));
+	CHECK(strcmp(state.auto_name, private_base) == 0);
+	r = name_request(2, private_base, state.base_name, state.auto_name);
+	CHECK(expect_name(&r, "곰"));
 done:
 	lm_source_name_state_free(&state);
 	return ok;
@@ -2084,6 +2110,7 @@ int main(int argc, char **argv)
 	run_test("source name: settings rollback and replacement preserve instance ownership", test_source_name_settings_rollback);
 	run_test("source name: a copied UUID is ignored and the numbered copy tracks its own base", test_source_name_copied_uuid);
 	run_test("source name: matching UUID restores owned names across restart", test_source_name_owned_uuid_restart);
+	run_test("source name: private settings populated after create are imported by the first UI task", test_source_name_late_private_settings);
 	printf("LiveMix OBS core tests: %d passed, %d failed (%d total)\n",
 	       tests_run - tests_failed, tests_failed, tests_run);
 	return tests_failed ? EXIT_FAILURE : EXIT_SUCCESS;

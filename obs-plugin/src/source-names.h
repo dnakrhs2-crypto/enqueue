@@ -28,10 +28,11 @@ typedef struct lm_source_name_request {
 	void *context;
 } lm_source_name_request;
 
-/* Instance-owned strings. OBS settings are only a persistence copy: properties
- * may roll them back and source duplication copies them into a new instance. */
+/* Instance-owned strings, persisted in OBS private settings. User settings and
+ * properties rollbacks never participate in name ownership. */
 typedef struct lm_source_name_state {
 	char *base_name, *auto_name;
+	bool initialized;
 } lm_source_name_state;
 
 static inline void lm_source_name_state_free(lm_source_name_state *state)
@@ -52,19 +53,26 @@ static inline bool lm_source_name_state_set(lm_source_name_state *state, const c
 	}
 	strcpy(base_copy, base);
 	strcpy(auto_copy, auto_name);
-	lm_source_name_state_free(state);
+	free(state->base_name);
+	free(state->auto_name);
 	state->base_name = base_copy;
 	state->auto_name = auto_copy;
 	return true;
 }
 
-/* Call once during creation with a zero-initialized state. A different or
- * absent UUID is not proof of ownership, even if the saved names match. */
+/* Start zero-initialized, then import private settings in the first UI name
+ * task, after OBS has populated them. Later tasks keep the instance record.
+ * A different or absent UUID is not proof of ownership. */
 static inline bool lm_source_name_state_init(lm_source_name_state *state, const char *uuid, const char *saved_uuid,
 					    const char *base, const char *auto_name)
 {
+	if (state->initialized)
+		return true;
 	bool own_record = *saved_uuid && strcmp(uuid, saved_uuid) == 0;
-	return lm_source_name_state_set(state, own_record ? base : "", own_record ? auto_name : "");
+	if (!lm_source_name_state_set(state, own_record ? base : "", own_record ? auto_name : ""))
+		return false;
+	state->initialized = true;
+	return true;
 }
 
 static inline bool lm_source_name_state_renamed(lm_source_name_state *state, const char *current, const char *next)
