@@ -133,8 +133,10 @@ h2 { font-size: 22px; font-weight: 700; margin: 0; }
 #microphone-options li { min-height: 44px; padding: 10px; font-size: 16px; border-radius: 6px; cursor: pointer; }
 #microphone-options li.active { box-shadow: inset 0 0 0 2px var(--accent); }
 .hp { font-size: 14px; color: var(--dimText); line-height: 1.5; }
-/* Field message under the microphone picker; --danger on the card is 5.2:1. */
-.fe { font-size: 14px; font-weight: 700; color: var(--danger); line-height: 1.5; margin-top: -4px; }
+/* Field message between the microphone button and its list, so the open list starts below it; --danger on the
+   card is 5.2:1. It blinks out while the page tries a microphone, so a retry that fails again is seen. */
+.fe { font-size: 14px; font-weight: 700; color: var(--danger); line-height: 1.5; margin-top: 6px; text-wrap: balance; }
+#entry[aria-busy="true"] .fe { visibility: hidden; }
 .go, .ghost {
   width: 100%;
   border-radius: var(--controlRadius);

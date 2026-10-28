@@ -376,12 +376,23 @@ class Suite:
             await expect(page.locator("#microphone-name")).to_have_text("기본값 - 라인(오디오 인터페이스)")
             assert not await self.calls(page, "requestJoin")
             await self.copy(page, ["하람 님의 합방"] + [device["label"] for device in devices])
-            if not via_list:
+
+            async def list_below_message():
+                # The open list starts below the message instead of covering it (design check 10/29).
+                message = await page.locator("#microphone-error").bounding_box()
+                listed = await page.locator("#microphone-options").bounding_box()
+                assert message and listed and listed["y"] >= message["y"] + message["height"], (message, listed)
+
+            if via_list:
+                await list_below_message()
+            else:
                 # Joining again tries the same microphone; opening the list after it does not.
                 await page.locator("#join").click()
                 await expect(page.locator("#microphone-error")).to_have_text(MIC_SWITCH)
+                await expect(page.locator("#microphone-error")).to_be_visible()
                 await page.locator("#microphone").click()
                 await expect(page.locator("#microphone-options li")).to_have_count(3)
+                await list_below_message()
             prepared = [call["deviceId"] for call in await self.calls(page, "prepareMicrophone")]
             assert prepared == ([None] if via_list else [None, None]), prepared
             await page.locator("#microphone-options li", has_text="마이크(웹캠)").click()
