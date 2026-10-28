@@ -476,6 +476,47 @@ await test('microphone permission precedes join and cleanup releases actual reso
   }
   return {tracksStopped:stopped,contextsClosed:closed,deviceRate:48000,trackRate:44100};
 });
+await test('a default microphone another program holds leaves the named inputs to pick from', async () => {
+  const navigatorDescriptor=Object.getOwnPropertyDescriptor(globalThis,'navigator');
+  const contextDescriptor=Object.getOwnPropertyDescriptor(globalThis,'AudioContext');
+  const errors=[],opened=[];let named=true;
+  const track={readyState:'live',getSettings:()=>({channelCount:1,sampleRate:48000}),stop(){this.readyState='ended';}};
+  // gom's case: the PC's default input is an audio interface a DAW holds; Chrome answers NotReadableError.
+  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{
+    async getUserMedia(c){const id=c.audio.deviceId?.exact??null;opened.push(id);
+      if(id===null||id==='interface')throw new DOMException('Could not start audio source','NotReadableError');
+      track.readyState='live';return {getTracks:()=>[track],getAudioTracks:()=>[track]};},
+    async enumerateDevices(){return [{kind:'audioinput',deviceId:'default',label:named?'기본값 - 라인(오디오 인터페이스)':''},
+      {kind:'audioinput',deviceId:'interface',label:named?'라인(오디오 인터페이스)':''},
+      {kind:'audioinput',deviceId:'webcam',label:named?'마이크(웹캠)':''},{kind:'videoinput',deviceId:'cam',label:named?'웹캠':''}];}
+  }}});
+  Object.defineProperty(globalThis,'AudioContext',{configurable:true,value:class {constructor(){this.sampleRate=48000;this.state='suspended';this.audioWorklet={addModule:async()=>{}};}async resume(){this.state='running';}async close(){this.state='closed';}}});
+  const client=createGuestClient({onError:e=>errors.push(e)});
+  try {
+    const busy=await client.prepareMicrophone().then(()=>null,e=>e);
+    assert.equal(busy?.code,'microphone_busy');
+    assert.deepEqual(busy.devices.map(d=>d.deviceId),['default','interface','webcam']);
+    assert.equal(errors.length,0);assert.notEqual(client.state,'error');
+    await client.prepareMicrophone('webcam');
+    assert.equal(client.state,'ready');assert.equal(client.microphoneId,'webcam');
+    // Picking a held input after a working one leaves no microphone and no join until another is picked.
+    const again=await client.prepareMicrophone('interface').then(()=>null,e=>e);
+    assert.equal(again?.code,'microphone_busy');assert.equal(client.state,'idle');assert.equal(client.stream,null);
+    await assert.rejects(client.requestJoin({},'web'),/microphone_required/);
+    assert.equal(errors.length,0);
+    // Without the permission the inputs have no names to pick from: the page ends with the microphone sentence as before.
+    named=false;
+    const unnamed=createGuestClient({onError:e=>errors.push(e)});
+    const ended=await unnamed.prepareMicrophone().then(()=>null,e=>e);
+    assert.equal(ended?.message,'microphone_busy');assert.equal(ended.devices,undefined);
+    assert.equal(unnamed.state,'error');assert.equal(errors.at(-1).code,'microphone_busy');await unnamed.dispose();
+  } finally {
+    await client.dispose();
+    if(navigatorDescriptor)Object.defineProperty(globalThis,'navigator',navigatorDescriptor);else delete globalThis.navigator;
+    if(contextDescriptor)Object.defineProperty(globalThis,'AudioContext',contextDescriptor);else delete globalThis.AudioContext;
+  }
+  return {opened:opened.length};
+});
 
 const summary={ok:results.every(r=>r.ok),passed:results.filter(r=>r.ok).length,total:results.length,results};
 if(process.argv[2]) await writeFile(process.argv[2],JSON.stringify(summary,null,2));

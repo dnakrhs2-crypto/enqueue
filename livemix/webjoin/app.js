@@ -1,6 +1,7 @@
 import { parseInvite, createGuestClient } from "./guest-client.js";
 
 export const ERROR_TEXT = "초대 주소가 바뀌었거나 방이 닫혔습니다.";
+export const MIC_SWITCH_TEXT = "이 마이크를 쓸 수 없습니다. 다른 마이크를 고르세요.";
 export const NICKNAME_KEY = "livemix.webjoin.nickname";
 export const VOLUME_PREFIX = "livemix.webjoin.volume.";
 
@@ -49,10 +50,10 @@ export function startApp(doc = document, win = window) {
   const app = $("app"), title = $("room-title"), entry = $("entry");
   const nickname = $("nickname"), join = $("join"), microphone = $("microphone");
   const options = $("microphone-options"), people = $("people");
-  const micToggle = $("mic-toggle"), meter = $("mic-meter"), diag = $("diag");
+  const micToggle = $("mic-toggle"), meter = $("mic-meter"), diag = $("diag"), micError = $("microphone-error");
   const rows = new Map();
   let client, invite, devices = [], deviceId = null, activeDevice = 0;
-  let prepared = false, busy = false, micEnabled = true, localEnding = false;
+  let prepared = false, busy = false, micEnabled = true, localEnding = false, micProblem = false;
   let screen = "loading", diagTimer = null;
   // Only the test copy (/next/) shows the playback counters, read off a phone during a network test.
   const showDiag = /\/next\//.test(win.location.pathname);
@@ -64,6 +65,17 @@ export function startApp(doc = document, win = window) {
     options.hidden = true;
     microphone.setAttribute("aria-expanded", "false");
     microphone.removeAttribute("aria-activedescendant");
+  }
+
+  // Chrome lists the system default input as 'default'; a default microphone that failed shows under that name.
+  const currentId = () => deviceId ?? "default";
+
+  // The microphone last tried would not open; the entry screen stays and asks for another one.
+  function setMicProblem(on) {
+    micProblem = on;
+    micError.textContent = on ? MIC_SWITCH_TEXT : "";
+    micError.hidden = !on;
+    microphone.setAttribute("aria-invalid", String(on));
   }
 
   function show(next) {
@@ -146,7 +158,7 @@ export function startApp(doc = document, win = window) {
   function updateDeviceHighlight() {
     [...options.children].forEach((option, index) => {
       option.classList.toggle("active", index === activeDevice);
-      option.setAttribute("aria-selected", String(devices[index].deviceId === deviceId));
+      option.setAttribute("aria-selected", String(devices[index].deviceId === currentId()));
     });
     const active = options.children[activeDevice];
     if (active) {
@@ -166,15 +178,29 @@ export function startApp(doc = document, win = window) {
       option.addEventListener("click", () => void chooseDevice(index));
       options.append(option);
     });
-    const selected = devices.find(device => device.deviceId === deviceId);
+    const selected = devices.find(device => device.deviceId === currentId());
     $("microphone-name").textContent = selected?.label || "마이크";
   }
 
+  // A failure that lists the inputs (guest-client.js) leaves the person here to pick another one; it still
+  // rejects, so opening the list or joining stops.
   async function prepare(selectedId = deviceId) {
-    const available = await client.prepareMicrophone(selectedId);
+    let available;
+    try { available = await client.prepareMicrophone(selectedId); }
+    catch (error) {
+      if (error.devices) {
+        devices = error.devices;
+        deviceId = selectedId;
+        prepared = false;
+        setMicProblem(true);
+        renderDevices();
+      }
+      throw error;
+    }
     devices = available;
     deviceId = selectedId ?? client.microphoneId ?? devices[0]?.deviceId ?? null;
     prepared = true;
+    setMicProblem(false);
     renderDevices();
   }
 
@@ -184,13 +210,17 @@ export function startApp(doc = document, win = window) {
     busy = true;
     updateEntry();
     try {
-      if (!prepared) await prepare();
+      // After a failed microphone the inputs are already listed; opening the list does not try it again.
+      if (!prepared && !micProblem) {
+        try { await prepare(); }
+        catch (error) { if (!error.devices) throw error; }
+      }
       if (screen !== "entry") return;
       options.hidden = false;
       microphone.setAttribute("aria-expanded", "true");
       // In a short window (a 1366x768 laptop at 125%) the list would open below the visible page.
       options.scrollIntoView({ block: "nearest" });
-      activeDevice = Math.max(0, devices.findIndex(device => device.deviceId === deviceId));
+      activeDevice = Math.max(0, devices.findIndex(device => device.deviceId === currentId()));
       updateDeviceHighlight();
     } catch (error) { fail({ code: error.code }); }
     finally {
@@ -203,11 +233,12 @@ export function startApp(doc = document, win = window) {
   async function chooseDevice(index) {
     const selected = devices[index];
     closeDevices();
-    if (!selected || selected.deviceId === deviceId) return;
+    // The microphone that failed may be picked again once the other program lets it go.
+    if (!selected || (prepared && selected.deviceId === deviceId)) return;
     busy = true;
     updateEntry();
     try { await prepare(selected.deviceId); }
-    catch (error) { fail({ code: error.code }); }
+    catch (error) { if (!error.devices) fail({ code: error.code }); }
     finally {
       busy = false;
       updateEntry();
@@ -281,6 +312,7 @@ export function startApp(doc = document, win = window) {
     renderDevices();
     people.hidden = true;
     $("cancel").disabled = $("leave").disabled = false;
+    setMicProblem(false);
     try {
       invite = parseInvite(win.location.hash);
       client = createGuestClient({ onState, onRoster, onMeter: ({ peak }) => {
@@ -347,8 +379,12 @@ export function startApp(doc = document, win = window) {
     try {
       if (!prepared) await prepare();
       await client.requestJoin(invite, nickname.value);
-    } catch (error) { fail({ code: error.code }); }
-    finally { busy = false; updateEntry(); }
+    } catch (error) { if (!error.devices) fail({ code: error.code }); }
+    finally {
+      busy = false;
+      updateEntry();
+      if (micProblem && screen === "entry") microphone.focus();
+    }
   });
   micToggle.addEventListener("click", () => {
     micEnabled = !micEnabled;

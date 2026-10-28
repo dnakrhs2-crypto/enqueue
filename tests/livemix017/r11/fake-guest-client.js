@@ -46,6 +46,11 @@ export function createGuestClient(handlers) {
         window.r11.error(config.microphoneError);
         throw new Error(config.microphoneError);
       }
+      // A microphone another program holds: the real client lists the named inputs instead of ending.
+      if ((config.heldMicrophones ?? []).includes(deviceId)) {
+        ready = false;
+        throw Object.assign(new Error("microphone_busy"), { code: "microphone_busy", devices: config.devices });
+      }
       ready = true;
       callbacks.onState({ state: "ready", generation: 0 });
       return config.devices ?? [

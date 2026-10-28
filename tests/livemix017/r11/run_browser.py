@@ -22,6 +22,7 @@ ERROR = "초대 주소가 바뀌었거나 방이 닫혔습니다."
 MIC_ERROR, FULL_ERROR, REJECTED_ERROR, CONNECTION_ERROR = ("마이크를 쓸 수 없습니다.", "방이 꽉 찼습니다.",
                                                            "방장이 거절했습니다.", "연결하지 못했습니다.")
 PERMISSION_ERROR = "마이크 권한이 없습니다."
+MIC_SWITCH = "이 마이크를 쓸 수 없습니다. 다른 마이크를 고르세요."
 ERROR_FOR = {"network": CONNECTION_ERROR, "microphone_denied": PERMISSION_ERROR, "microphone_missing": MIC_ERROR,
              "microphone_busy": MIC_ERROR, "web_full": FULL_ERROR, "full": FULL_ERROR, "rejected": REJECTED_ERROR}
 NICKNAME_KEY = "livemix.webjoin.nickname"
@@ -31,7 +32,7 @@ STATES = ("entry", "waiting", "connected", "error")
 SIZES = {"phone": (390, 760), "pc": (960, 600)}
 COPY = ["ON", "LiveMix", "닉네임", "마이크", "헤드폰을 쓰고 들어오세요.", "들어가기",
         "방장이 수락하면 연결됩니다", "취소", "연결됨", "마이크 ON", "마이크 OFF", "나가기", ERROR,
-        MIC_ERROR, FULL_ERROR, REJECTED_ERROR, CONNECTION_ERROR, PERMISSION_ERROR]
+        MIC_ERROR, FULL_ERROR, REJECTED_ERROR, CONNECTION_ERROR, PERMISSION_ERROR, MIC_SWITCH]
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -353,6 +354,47 @@ class Suite:
         finally:
             await context.close()
 
+    async def held_microphone(self, via_list):
+        """A PC whose default input another program holds stays on the entry screen and picks another input."""
+        from playwright.async_api import expect
+        context = await self.context()
+        try:
+            devices = [{"deviceId": "default", "kind": "audioinput", "label": "기본값 - 라인(오디오 인터페이스)"},
+                       {"deviceId": "interface", "kind": "audioinput", "label": "라인(오디오 인터페이스)"},
+                       {"deviceId": "webcam", "kind": "audioinput", "label": "마이크(웹캠)"}]
+            page = await self.page(context, {"heldMicrophones": [None, "default", "interface"], "devices": devices})
+            await page.locator("#nickname").fill("하늘")
+            if via_list:
+                await page.locator("#microphone").click()
+                await expect(page.locator("#microphone-options li")).to_have_count(3)
+            else:
+                await page.locator("#join").click()
+                await expect(page.locator("#microphone")).to_be_focused()
+            await expect(page.locator("#app")).to_have_attribute("data-screen", "entry")
+            await expect(page.locator("#microphone-error")).to_have_text(MIC_SWITCH)
+            await expect(page.locator("#microphone")).to_have_attribute("aria-invalid", "true")
+            await expect(page.locator("#microphone-name")).to_have_text("기본값 - 라인(오디오 인터페이스)")
+            assert not await self.calls(page, "requestJoin")
+            await self.copy(page, ["하람 님의 합방"] + [device["label"] for device in devices])
+            if not via_list:
+                # Joining again tries the same microphone; opening the list after it does not.
+                await page.locator("#join").click()
+                await expect(page.locator("#microphone-error")).to_have_text(MIC_SWITCH)
+                await page.locator("#microphone").click()
+                await expect(page.locator("#microphone-options li")).to_have_count(3)
+            prepared = [call["deviceId"] for call in await self.calls(page, "prepareMicrophone")]
+            assert prepared == ([None] if via_list else [None, None]), prepared
+            await page.locator("#microphone-options li", has_text="마이크(웹캠)").click()
+            await expect(page.locator("#microphone-name")).to_have_text("마이크(웹캠)")
+            await expect(page.locator("#microphone-error")).to_be_hidden()
+            await expect(page.locator("#microphone")).to_have_attribute("aria-invalid", "false")
+            await page.locator("#join").click()
+            await expect(page.locator("#waiting")).to_be_visible()
+            assert (await self.calls(page, "prepareMicrophone"))[-1]["deviceId"] == "webcam"
+            assert len(await self.calls(page, "requestJoin")) == 1
+        finally:
+            await context.close()
+
     async def invalid_invite(self):
         from playwright.async_api import expect
         context = await self.context()
@@ -538,6 +580,8 @@ class Suite:
                             ("microphoneError", "microphone_busy"), ("joinError", "web_full"),
                             ("joinError", "full"), ("state", "rejected"), ("state", "ended")]:
             await self.case(f"approved error copy: {stage}/{code}", lambda s=stage, c=code: self.error_flow(s, c))
+        await self.case("held default microphone: join keeps the entry and another input is picked", lambda: self.held_microphone(False))
+        await self.case("held default microphone: the list opens and another input is picked", lambda: self.held_microphone(True))
         await self.case("invalid fragment stops before inspect", self.invalid_invite)
         await self.case("a reissued invite pasted into the same tab opens its room", self.reissued_invite)
         await self.case("short window device list, disabled join and slider focus ring", self.design_fixes)

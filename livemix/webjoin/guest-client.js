@@ -29,6 +29,13 @@ function openMicrophone(deviceId) {
   return navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false,
     autoGainControl: false, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false });
 }
+// The inputs the person can tell apart. Names are only there once the page has the microphone permission.
+async function namedInputs() {
+  try { return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audioinput" && d.label); }
+  catch { return []; }
+}
+// The device itself would not open: another program holds it, it will not start, or it is gone.
+const DEVICE_FAILURES = ["microphone_busy", "microphone_constraints", "microphone_missing"];
 function connectionId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2, "0")).join("");
 }
@@ -155,6 +162,17 @@ class GuestClient {
       if (context && context.state !== "closed") await context.close();
       if (this.context === context) { this.context = null; this.stream = null; }
       const code = error.message === "cancelled" ? "cancelled" : microphoneCode(error);
+      // A PC whose default microphone another program holds (an audio interface in a DAW) would end the page here
+      // with no way to pick another one. When the other inputs have names, the entry screen lists them instead
+      // and the person picks one (app.js); nothing switches by itself, since an input such as Stereo Mix would
+      // send the call back to everyone.
+      if (DEVICE_FAILURES.includes(code) && !this.ending) {
+        const inputs = await namedInputs();
+        if (inputs.length && life === this.lifecycle && !this.disposed && !this.ending) {
+          if (this.state === "ready") this.setState("idle");
+          throw Object.assign(new Error(code), { code, devices: inputs });
+        }
+      }
       if (code !== "cancelled" && !this.ending) await this.fail(code);
       throw new Error(code);
     }
