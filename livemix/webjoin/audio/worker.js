@@ -1,4 +1,4 @@
-import { Signaling } from "../signaling.js";
+import { Signaling, iceServersFor } from "../signaling.js";
 import { CAPABILITIES, Kind, readPacket, readRoster, rosterAck, controlPacket, validDownlink,
   decodeAudio, encodeAudio, sessionValue, validRate } from "./packet.js";
 import { TransferPool, audioPackets, audioBudget, expired, validChannel, channelInfo, normalChannelClose } from "./buffers.js";
@@ -47,8 +47,10 @@ export class GuestWorker {
     const d = event.data;
     if (event.type === "accepted") {
       this.configureConnection(d);
-      // Tokens stay in Signaling, never in snapshots, diagnostics or main messages.
-      this.post("accepted", { selfId: this.selfId, streamEpoch: this.epoch, wireRate: this.wireRate });
+      // Tokens stay in Signaling, never in snapshots, diagnostics or main messages. The relay credentials are not
+      // connection tokens: the main thread needs them to build the RTCPeerConnection.
+      this.post("accepted", { selfId: this.selfId, streamEpoch: this.epoch, wireRate: this.wireRate,
+        iceServers: iceServersFor(d.iceServers) });
     } else if (event.type === "room") this.room = d.room;
     else if (event.type === "signal" && d.connectionGeneration === this.generation && d.from === "host") {
       if (d.signal.type === "offer") this.post("remoteDescription", { sdp: d.signal.sdp });

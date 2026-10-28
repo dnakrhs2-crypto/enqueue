@@ -22,8 +22,11 @@ import secrets
 import socket
 import struct
 import threading
+import os
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import urlparse
 
 PREFIX = "/api/livemix/collab/"
@@ -32,6 +35,9 @@ MAX_WEB_BODY = 131072
 WEB_ORIGIN = "https://dnakrhs2-crypto.github.io"  # 웹 참여 페이지 = GitHub Pages 기본 주소(10/26 gom, 영문만)
 EVENT_WAIT_SEC = 20
 PENDING_SEC, RESERVATION_SEC = 60, 15
+# A web guest connects through both routers (ICE), slower than a LiveMix guest's direct UDP: its page waits 20 s,
+# so its seat must outlive that (10/28: a 15 s seat would end a join the page was still waiting for).
+WEB_RESERVATION_SEC = 30
 CAPABILITIES = ["packet_v2", "roster_ack", "star_3", "pcm16_mono", "web_guest"]
 MAX_ROOMS = 500
 HOST_DROP_SEC = 45
@@ -488,7 +494,7 @@ def _reserve(room, nick, kind, client, now):
     member = _member(pid, generation, nick, kind, client)
     room["members"][pid] = member
     room["reservations"][pid] = dict(participantId=pid, kind=kind, connectionGeneration=generation,
-                                    expiresAtMs=int((now + RESERVATION_SEC) * 1000))
+                                    expiresAtMs=int((now + (WEB_RESERVATION_SEC if kind == "web" else RESERVATION_SEC)) * 1000))
     return member
 
 
@@ -679,6 +685,77 @@ def _native(action, body, h, now, v2):
     return result
 
 
+# ── 중계(TURN) 접속 정보 (10/28) ─────────────────────────────────────────
+# Two routers that would not open a direct path for the web join (10/28 22:32: office PC -> 도이's home, ICE failed)
+# connect through Cloudflare's relay. Only an accepted pair receives short-lived credentials; the long-term key stays
+# on this PC outside the repository. Fetched in the background, never under _lock; any failure leaves STUN as before.
+TURN_KEY_FILE = os.environ.get("LIVEMIX_TURN_KEY_FILE", r"C:\Users\claude\SDKs\gocue_release\cf_turn.json")
+TURN_TTL_SEC, TURN_REFRESH_SEC, TURN_RETRY_SEC = 172800, 86400, 60   # 48 h credentials, renewed below 24 h left
+_turn_lock = threading.Lock()
+_turn = dict(servers=None, expires=0.0, fetching=False, failedAt=0.0)
+
+
+def _clean_ice(servers):
+    """Browser- and libjuice-safe ICE servers: stun/turn/turns URLs only, never port 53 (browsers block it)."""
+    cleaned = []
+    for server in servers if isinstance(servers, list) else []:
+        if not isinstance(server, dict):
+            continue
+        urls = server.get("urls")
+        urls = [urls] if isinstance(urls, str) else urls if isinstance(urls, list) else []
+        urls = [u for u in urls if isinstance(u, str) and re.fullmatch(r"(stun|turns?):[A-Za-z0-9.\-]+:\d+(\?transport=(udp|tcp))?", u)
+                and not re.search(r":53(\?|$)", u)]
+        # Each relay address costs every network adapter of the browser a candidate (64 per side): keep UDP 3478 and
+        # TLS 443 (for a network that blocks UDP) of the relay, every STUN address.
+        urls = [u for u in urls if u.startswith("stun:") or u.endswith(":3478?transport=udp") or
+                (u.startswith("turns:") and u.endswith(":443?transport=tcp"))][:4]
+        if not urls:
+            continue
+        entry = dict(urls=urls)
+        for key in ("username", "credential"):
+            if isinstance(server.get(key), str) and 0 < len(server[key]) <= 256:
+                entry[key] = server[key]
+        if any(u.startswith("turn") for u in urls) and len(entry) != 3:
+            continue
+        cleaned.append(entry)
+    return cleaned[:4]
+
+
+def _fetch_turn():
+    try:
+        key = json.loads(Path(TURN_KEY_FILE).read_text(encoding="utf-8"))
+        request = urllib.request.Request(
+            "https://rtc.live.cloudflare.com/v1/turn/keys/%s/credentials/generate-ice-servers" % key["keyId"],
+            data=json.dumps({"ttl": TURN_TTL_SEC}).encode(), method="POST",
+            headers={"Authorization": "Bearer " + key["apiToken"], "Content-Type": "application/json",
+                     "User-Agent": "LiveMix-RoomServer/1.0"})   # Cloudflare refuses Python's default agent (403)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            servers = _clean_ice(json.loads(response.read()).get("iceServers"))
+        if not any(u.startswith("turn") for s in servers for u in s["urls"]):
+            raise ValueError("no relay")
+        with _turn_lock:
+            _turn.update(servers=servers, expires=time.time() + TURN_TTL_SEC, fetching=False)
+        _log("turn_credentials", servers=len(servers), hours=TURN_TTL_SEC // 3600)
+    except Exception as e:   # a missing key, network or answer: STUN only
+        with _turn_lock:
+            _turn.update(fetching=False, failedAt=time.time())
+        _log("turn_failed", error=type(e).__name__)
+
+
+def _turn_servers():
+    """The current relay credentials (more than an hour left) or None; starts a background renewal when due."""
+    now = time.time()
+    with _turn_lock:
+        servers, expires = _turn["servers"], _turn["expires"]
+        due = ((servers is None or expires - now < TURN_REFRESH_SEC) and not _turn["fetching"]
+               and now - _turn["failedAt"] >= TURN_RETRY_SEC)
+        if due:
+            _turn["fetching"] = True
+    if due:
+        threading.Thread(target=_fetch_turn, name="livemix-turn", daemon=True).start()
+    return copy.deepcopy(servers) if servers and expires - now > 3600 else None
+
+
 def _web_compatible(room):
     if not all(_supports(m, True) for m in room["members"].values()):
         raise Fail(409, "incompatible")
@@ -719,10 +796,13 @@ def _connection_auth(room, body):
 
 def _accepted(room, request, role):
     connection = room["connections"][request["generation"]]
-    return dict(apiVersion=2, requestId=request["requestId"], state="accepted",
-                participantId=connection["participantId"], streamEpoch=1,
-                connectionGeneration=connection["generation"], connectionToken=connection[role + "Token"],
-                reservationExpiresAtMs=connection["expiresAtMs"], room=connection["acceptedRoom"])
+    result = dict(apiVersion=2, requestId=request["requestId"], state="accepted",
+                  participantId=connection["participantId"], streamEpoch=1,
+                  connectionGeneration=connection["generation"], connectionToken=connection[role + "Token"],
+                  reservationExpiresAtMs=connection["expiresAtMs"], room=connection["acceptedRoom"])
+    if connection.get("iceServers"):
+        result["iceServers"] = copy.deepcopy(connection["iceServers"])
+    return result
 
 
 def _web(action, body, h, now):
@@ -731,6 +811,7 @@ def _web(action, body, h, now):
         _host(room, body.get("hostToken"))
     if action == "invite":
         _web_compatible(room)
+        _turn_servers()   # warm the relay credentials before anyone is accepted
         for request in room["pendingWebRequests"].values():
             if request["state"] == "pending":
                 _end_request(room, request, "invalidated")
@@ -795,6 +876,7 @@ def _web(action, body, h, now):
                           expiresAtMs=room["reservations"][pid]["expiresAtMs"],
                           signals={role: dict(last=0, replies={}, candidates=0, sdp=False) for role in ("host", "web")})
         room["connections"][generation] = connection
+        connection["iceServers"] = _turn_servers()   # the pair's relay, only for an accepted pair
         _request_state(room, req, "accepted")
         _changed(room)
         connection["acceptedRoom"] = _snapshot(room)
@@ -1002,6 +1084,8 @@ def reset_for_tests(now=None):
         _closed.clear()
         _closed_rooms.clear()
         _now = time.time if now is None else now
+    with _turn_lock:   # tests never fetch real relay credentials; a test that needs them sets _turn itself
+        _turn.update(servers=None, expires=0.0, fetching=False, failedAt=float("inf"))
 
 
 class _StandaloneHandler(BaseHTTPRequestHandler):

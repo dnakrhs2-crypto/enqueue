@@ -1,5 +1,22 @@
 export const API_BASE = "https://xn--2j1bo5s81gjmag88b.com/api/livemix/collab/";
 export const STUN = Object.freeze([{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun.cloudflare.com:3478" }]);
+// The room server hands an accepted pair short-lived relay credentials (10/28: an office PC and a home host whose routers
+// would not open a direct path connected only through a relay). Anything malformed, or no relay, leaves STUN.
+export function iceServersFor(value) {
+  if (!Array.isArray(value) || value.length > 4) return null;
+  const servers = [];
+  for (const server of value) {
+    const urls = (typeof server?.urls === "string" ? [server.urls] : Array.isArray(server?.urls) ? server.urls : [])
+      .filter(u => typeof u === "string" && /^(stun|turns?):[A-Za-z0-9.-]+:\d+(\?transport=(udp|tcp))?$/.test(u) && !/:53(\?|$)/.test(u));
+    if (!urls.length || urls.length > 8) continue;
+    const relay = urls.some(u => u.startsWith("turn"));
+    const secret = typeof server.username === "string" && typeof server.credential === "string" &&
+      server.username.length > 0 && server.username.length <= 256 && server.credential.length > 0 && server.credential.length <= 256;
+    if (relay && !secret) continue;
+    servers.push(relay ? { urls, username: server.username, credential: server.credential } : { urls });
+  }
+  return servers.some(s => s.urls.some(u => u.startsWith("turn"))) ? servers : null;
+}
 export class SignalError extends Error {
   constructor(code, status = 0) { super(code); this.code = code; this.status = status; }
 }

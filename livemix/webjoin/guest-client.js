@@ -187,11 +187,13 @@ class GuestClient {
     for (const gain of this.gains) this.node.port.postMessage({ type: "peerGain", generation, participantId: gain.id, gain: gain.gain });
     this.worker.postMessage({ type: "mic", generation, enabled: this.micEnabled });
     this.candidates = []; this.candidateCount = 0; this.sentCandidates = 0; this.endSent = false; this.channelSeen = false;
-    const pc = new RTCPeerConnection({ iceServers: this.testing?.iceServers ?? STUN });
+    const pc = new RTCPeerConnection({ iceServers: this.testing?.iceServers ?? m.iceServers ?? STUN });
     this.pc = pc;
     const current = () => this.pc === pc && this.generation === generation && !this.ending;
     pc.onicecandidate = e => {
       if (!current()) return;
+      // The host's ICE (libjuice) has no TCP: a browser's TCP host candidates only use up the 64 per side.
+      if (e.candidate && (e.candidate.candidate.split(" ")[2] ?? "").toLowerCase() === "tcp") return;
       if (e.candidate) {
         if (++this.sentCandidates > 64) { void this.fail("ice_candidates"); return; }
         this.localSignal({ type: "candidate", candidate: e.candidate.candidate, sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex });
@@ -215,7 +217,9 @@ class GuestClient {
         this.attachRelay(e.channel, generation);
       }
     };
-    this.connectTimer = setTimeout(() => { if (current() && this.state !== "connected") void this.fail("connect_timeout"); }, 10000);
+    // 20 s (10/28): a path opened through two routers, or a relay, can take longer than the 10 s that cut off a join the
+    // two sides were still checking. The room server keeps a web seat 30 s (WEB_RESERVATION_SEC).
+    this.connectTimer = setTimeout(() => { if (current() && this.state !== "connected") void this.fail("connect_timeout"); }, 20000);
   }
   localSignal(signal) { this.worker?.postMessage({ type: "localSignal", generation: this.generation, signal }); }
   async remoteDescription(m) {
