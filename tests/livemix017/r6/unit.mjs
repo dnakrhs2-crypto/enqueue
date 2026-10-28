@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
+import { mock } from 'node:test';
 import { ASRC, Drift } from '../../../livemix/webjoin/audio/asrc.js';
 import { FrameFIFO, TransferPool, normalChannelClose, expired, audioBudget, audioPackets } from '../../../livemix/webjoin/audio/buffers.js';
 import * as packet from '../../../livemix/webjoin/audio/packet.js';
@@ -405,6 +406,43 @@ await test('main relay age/buffer limits recycle leases and normal abort ends cl
     await client.finishTask;assert.equal(states.at(-1).state,'ended');assert.equal(errors.length,0);
   } finally {await client.dispose();workerPort?.close();Date.now=realNow;}
   return {oldAudioSent:0,overBudgetAudioSent:0,normalAudioSent:2,recycledBytes:4*288,normalAbortErrors:0};
+});
+await test('accepted ICE waits 20 seconds and a connection after 10 seconds survives the deadline', async () => {
+  const saved = ['AudioWorkletNode', 'RTCPeerConnection'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
+  Object.defineProperty(globalThis, 'AudioWorkletNode', { configurable: true, value: class {
+    constructor() { this.port = { postMessage(m) { m.port?.close(); }, close() {} }; }
+    connect() {} disconnect() {}
+  }});
+  Object.defineProperty(globalThis, 'RTCPeerConnection', { configurable: true, value: class { close() {} } });
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    for (const connects of [false, true]) {
+      const errors = [], client = createGuestClient({ onError: e => errors.push(e.code) });
+      client.context = { sampleRate: 48000, state: 'running', destination: {},
+        createMediaStreamSource: () => ({ connect() {}, disconnect() {} }), async close() { this.state = 'closed'; } };
+      client.stream = { getTracks: () => [] };
+      client.worker = { postMessage(m) { m.port?.close(); }, terminate() {} };
+      client.rpc = async () => {};
+      try {
+        await client.accept({ generation: 1, wireRate: 48000 });
+        mock.timers.tick(10000);
+        assert.equal(client.state, 'connecting'); assert.deepEqual(errors, []);
+        mock.timers.tick(5000);
+        if (connects) client.setState('connected');
+        mock.timers.tick(4999); assert.deepEqual(errors, []);
+        mock.timers.tick(1);
+        if (client.finishTask) await client.finishTask;
+        assert.deepEqual(errors, connects ? [] : ['connect_timeout']);
+        assert.equal(client.state, connects ? 'connected' : 'error');
+      } finally { await client.dispose(); }
+    }
+  } finally {
+    mock.timers.reset();
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+    }
+  }
+  return { timeoutMs: 20000, successfulConnectionMs: 15000 };
 });
 await test('microphone permission precedes join and cleanup releases actual resources', async () => {
   const navigatorDescriptor=Object.getOwnPropertyDescriptor(globalThis,'navigator');

@@ -58,6 +58,7 @@ struct CollabSession::Impl
 {
     Impl (CollabSession& s, std::unique_ptr<CollabRoom> r, std::unique_ptr<CollabUpnp> u)
         : owner (s), room (std::move (r)), upnp (std::move (u)),
+          webUpnp (s.options.webUpnpFactory()),
           signaling (s.options.webRequest, s.options.webServer),
           web (s.options.webEndpoint ? s.options.webEndpoint : std::make_shared<NativeWebEndpoint>()),
           worker ([this] { run(); }) {}
@@ -109,7 +110,9 @@ struct CollabSession::Impl
         code.clear(); token.clear();
         apiV2 = false;
         if (upnpUsed) upnp->removeMapping();
+        if (webUpnpUsed) webUpnp->removeMapping();
         upnpUsed = false;
+        webUpnpUsed = false; webOptions = {};
     }
     void error (unsigned id, const juce::String& text)
     {
@@ -120,12 +123,14 @@ struct CollabSession::Impl
     CollabSession& owner;
     std::unique_ptr<CollabRoom> room;
     std::unique_ptr<CollabUpnp> upnp;
+    std::unique_ptr<CollabUpnp> webUpnp;
+    WebGuestTransport::Options webOptions;
     WebGuestSignaling signaling;
     std::shared_ptr<WebEndpoint> web;
     std::atomic<unsigned> generation { 0 };
     // Worker-owned room credentials and mapping ownership, including cancelled in-flight creates.
     juce::String code, token;
-    bool upnpUsed = false, apiV2 = false;
+    bool upnpUsed = false, webUpnpUsed = false, apiV2 = false;
     std::mutex mutex;
     std::condition_variable wake;
     std::deque<std::function<void()>> tasks, completions;
@@ -233,6 +238,23 @@ void CollabSession::createRoom (const juce::String& nick)
         w.upnpUsed = true;
         const auto upnp = w.upnp->discover (transport.getLocalPort());
         if (w.generation.load() != id) return;
+        const int webPort = transport.getLocalPort() + 1;
+        // A router the first discovery did not find would only cost room creation a second discovery timeout.
+        if (upnp.found && webPort <= 65535)
+        {
+            w.webUpnpUsed = true;
+            const auto webUpnp = w.webUpnp->discover (webPort);
+            if (webUpnp.mapped)
+            {
+                w.webOptions.localPort = (uint16_t) webPort;
+                if (WebGuestTransport::isPublicIpv4 (webUpnp.externalIp))
+                {
+                    w.webOptions.externalIp = webUpnp.externalIp;
+                    w.webOptions.lanIp = webUpnp.lanIp;
+                }
+            }
+        }
+        if (w.generation.load() != id) return;
         const auto stun = transport.discoverPublic (options.stunServers, options.stunTimeoutMs);
         if (w.generation.load() != id) return;
         auto lan = lanAddresses();
@@ -268,9 +290,10 @@ void CollabSession::createRoom (const juce::String& nick)
             return;
         }
         if (! confirmed.ok()) { w.error (id, confirmed.error); return; }
-        w.complete (id, [this, created, confirmed, me, upnp, punch]
+        w.complete (id, [this, created, confirmed, me, upnp, punch, mappedWeb = w.webOptions.localPort != 0]
         {
             started = true; mapped = upnp.mapped; punching = punch; snapshot.code = created.code;
+            webMapped = mappedWeb;
             snapshot.session = created.session; snapshot.selfId = created.participantId != 0 ? created.participantId : 1;
             snapshot.nativeAvailable = confirmed.room.apiVersion == 2 ? confirmed.room.nativeState != "unavailable" : true;
             applyRoom (confirmed.room.apiVersion == 2 ? confirmed.room : created.room);
@@ -323,6 +346,7 @@ void CollabSession::leave()
     webGeneration.store (0);
     if (audioAttached) audio.detach();
     audioAttached = started = mapped = heartbeatPending = renewPending = punching = false;
+    webMapped = false;
     heartbeatConnected = heartbeatStopped = heartbeatDirty = false;
     heartbeatFailures = 0;
     snapshot.isHost = false;
@@ -648,8 +672,14 @@ void CollabSession::startSignaling()
     { impl->complete (id, [this, request] { removeWebRequest (request); }); };
     callbacks.onAccepted = [this, id] (const WebGuestSignaling::Accepted& accepted)
     {
-        // Only the token-free transport context crosses into the session/UI queue.
-        impl->complete (id, [this, connection = accepted.connection] { webAcceptPending = false; startWeb (connection); });
+        // Only token-free room and transport context cross into the session/UI queue.
+        impl->complete (id, [this, connection = accepted.connection, room = accepted.room]
+        {
+            webAcceptPending = false;
+            // Advance the server revision before opening the link so an old heartbeat cannot remove its member.
+            applyRoom (room);
+            startWeb (connection);
+        });
     };
     callbacks.onSignal = [this, id] (uint32_t generation, const juce::var& incoming)
     {
@@ -811,7 +841,11 @@ void CollabSession::startWeb (c::WebConnection connection)
     impl->enqueue ([this, id, connection, callbacks = std::move (callbacks)] () mutable
     {
         if (impl->generation.load() == id && webGeneration.load() == connection.generation)
-            impl->web->start (connection, { options.loopbackOnly }, std::move (callbacks));
+        {
+            auto webOptions = impl->webOptions;
+            webOptions.loopbackOnly = options.loopbackOnly;
+            impl->web->start (connection, webOptions, std::move (callbacks));
+        }
     });
 }
 
@@ -1029,14 +1063,15 @@ void CollabSession::timerCallback()
                     || std::any_of (snapshot.people.begin(), snapshot.people.end(), [] (const auto& p)
                        { return ! p.isSelf && p.kind == c::ParticipantKind::native && p.state == c::ConnectionState::connecting; })))
                 ? juce::jmin (options.punchHeartbeatMs, options.heartbeatIntervalMs) : options.heartbeatIntervalMs)) sendHeartbeat();
-        if (mapped && ! renewPending && now - lastRenew >= options.renewIntervalMs)
+        if ((mapped || webMapped) && ! renewPending && now - lastRenew >= options.renewIntervalMs)
         {
             renewPending = true; lastRenew = now;
             const auto id = impl->generation.load();
-            impl->enqueue ([this, id]
+            impl->enqueue ([this, id, renewNative = mapped, renewWeb = webMapped]
             {
                 if (impl->generation.load() != id) return;
-                impl->upnp->renew();
+                if (renewNative) impl->upnp->renew();
+                if (renewWeb) impl->webUpnp->renew();
                 impl->complete (id, [this] { renewPending = false; });
             });
         }

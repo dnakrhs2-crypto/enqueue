@@ -24,12 +24,18 @@ struct CollabSessionTestAccess
 {
     static CollabTransport& transport (CollabSession& s) { return s.transport; }
     static const RosterSnapshot& roster (const CollabSession& s) { return s.roster; }
+    static contracts::WebConnection webConnection (const CollabSession& s) { return s.webConnection; }
     static PeerInfo localInfo (const CollabSession& s) { return s.localInfo (s.snapshot.myNick); }
     static void heartbeat (CollabSession& s) { s.sendHeartbeat(); }
     static bool heartbeatPending (CollabSession& s) { return s.heartbeatPending; }
     static bool heartbeatStopped (CollabSession& s) { return s.heartbeatStopped; }
     static bool loopbackOnly (CollabSession& s) { return s.options.loopbackOnly; }
     static bool punching (CollabSession& s) { return s.punching; }
+    static void renewMappings (CollabSession& s)
+    {
+        s.lastRenew = juce::Time::getMillisecondCounterHiRes() - s.options.renewIntervalMs;
+        s.timerCallback();
+    }
     static bool legacyReady (CollabSession& s) { return ! s.switchingTransport && ! s.transportV2 && s.transport.getState() == CollabTransport::State::waiting; }
 };
 }
@@ -250,6 +256,7 @@ struct Fixture
         CollabSession::Options options;
         options.loopbackOnly = loopbackOnly; options.probeTimeoutMs = 250; options.connectTimeoutMs = 350;
         options.heartbeatIntervalMs = heartbeatMs; options.renewIntervalMs = 250;
+        options.webUpnpFactory = [state = webUpnp] { return std::make_unique<FakeUpnp> (state); };
         if (! stun.empty())
         {
             options.stunServers = stun; options.stunTimeoutMs = 500; options.punchHeartbeatMs = 100;
@@ -265,6 +272,7 @@ struct Fixture
     LiveMixSettings settings;
     CollabAudio audio;
     std::shared_ptr<UpnpState> upnp = std::make_shared<UpnpState>();
+    std::shared_ptr<UpnpState> webUpnp = std::make_shared<UpnpState>();
     std::unique_ptr<CollabSession> session;
 };
 struct Listener : juce::ChangeListener
@@ -370,7 +378,10 @@ public:
             expectEquals (host.session->getSnapshot().code, juce::String ("0842"));
             expect ((bool) service->last ("confirm")["reachable"]);
             expectEquals (host.upnp->port.load(), host.port());
-            expect (until ([&] { return service->count ("heartbeat") > 0 && host.upnp->renewals.load() > 0; }));
+            expectEquals (host.webUpnp->port.load(), host.port() + 1);
+            expectEquals (host.webUpnp->discovers.load(), 1);
+            expect (until ([&] { return service->count ("heartbeat") > 0 && host.upnp->renewals.load() > 0
+                && host.webUpnp->renewals.load() > 0; }));
             guest.session->joinRoom ("0842", ko ("참가자"));
             expect (guest.reaches (State::connected)); expect (host.reaches (State::connected));
             expectEquals (host.session->getSnapshot().peerNick, ko ("참가자"));
@@ -386,8 +397,10 @@ public:
             expectGreaterThan (guest.session->getSnapshot().estimatedOneWayMs, 1.0);
             host.session->leave(); expect (guest.reaches (State::off));
             expectEquals (guest.session->getSnapshot().message, ko ("방장이 방을 닫았습니다"));
-            expect (until ([&] { return service->count ("close") == 1 && host.upnp->removals.load() == 1 && host.port() == 0; }));
+            expect (until ([&] { return service->count ("close") == 1 && host.upnp->removals.load() == 1
+                && host.webUpnp->removals.load() == 1 && host.port() == 0; }));
             expect (! service->ranOnMessageThread.load()); expect (! host.upnp->ranOnMessageThread.load());
+            expect (! host.webUpnp->ranOnMessageThread.load()); expectEquals (guest.webUpnp->discovers.load(), 0);
             expectGreaterThan (listener.changes, 0); host.session->removeChangeListener (&listener);
         }
 
@@ -736,6 +749,10 @@ class V2Service
 {
 public:
     CollabRoom::RequestFunction requests() { return [this] (const auto& request) { return call (request); }; }
+    void holdHeartbeats() { std::lock_guard<std::mutex> lock (mutex); holdHeartbeatReplies = true; }
+    int heldHeartbeats() { std::lock_guard<std::mutex> lock (mutex); return heldHeartbeatReplies; }
+    void releaseHeartbeat() { std::lock_guard<std::mutex> lock (mutex); ++heartbeatPermits; wake.notify_all(); }
+    void resumeHeartbeats() { std::lock_guard<std::mutex> lock (mutex); holdHeartbeatReplies = false; wake.notify_all(); }
     juce::String pending (const juce::String& nick)
     {
         std::lock_guard<std::mutex> lock (mutex);
@@ -786,6 +803,8 @@ private:
     std::vector<std::pair<bool, juce::var>> events;
     std::map<juce::String, juce::var> requestsById;
     int nextId = 2, revision = 1, inviteGeneration = 0, eventId = 0, wireRate = 48000;
+    bool holdHeartbeatReplies = false;
+    int heldHeartbeatReplies = 0, heartbeatPermits = 0;
     juce::var room()
     {
         juce::Array<juce::var> list, reservations, names;
@@ -872,7 +891,17 @@ private:
             for (const auto& m : members) if (m.id != 1 && m.kind == "native")
                 peers.add (object ({ { "participantId", m.id }, { "connectionId", juce::String::repeatedString ("1", 32) },
                     { "candidates", juce::Array<juce::var> { object ({ { "ip", "127.0.0.1" }, { "port", m.port } }) } } }));
-            o->setProperty ("peers", peers); return response (value);
+            o->setProperty ("peers", peers);
+            const auto reply = response (value);
+            if (action == "heartbeat" && holdHeartbeatReplies)
+            {
+                // Freeze the response before accept changes the server room; let accept run while held.
+                ++heldHeartbeatReplies;
+                wake.notify_all();
+                wake.wait (lock, [&] { return ! holdHeartbeatReplies || heartbeatPermits > 0; });
+                if (heartbeatPermits > 0) --heartbeatPermits;
+            }
+            return reply;
         }
         if (action == "invite")
         {
@@ -884,6 +913,9 @@ private:
         }
         if (action == "accept")
         {
+            // Accept runs on the signaling thread; its preceding room must be captured first.
+            if (holdHeartbeatReplies)
+                wake.wait (lock, [&] { return ! holdHeartbeatReplies || heldHeartbeatReplies > 0; });
             const auto rid = body["requestId"].toString(); const auto pending = requestsById.find (rid);
             if (pending == requestsById.end()) return { 410, "{\"error\":\"expired\"}" };
             if (members.size() >= 3) return { 409, "{\"error\":\"full\"}" };
@@ -913,9 +945,9 @@ public:
     {
         { std::lock_guard<std::mutex> lock (mutex); stopping = true; } wake.notify_all(); worker.join();
     }
-    void start (const c::WebConnection& connection, WebGuestTransport::Options, WebGuestTransport::Callbacks value) override
+    void start (const c::WebConnection& connection, WebGuestTransport::Options options, WebGuestTransport::Callbacks value) override
     {
-        { std::lock_guard<std::mutex> lock (mutex); current = connection; callbacks = value; }
+        { std::lock_guard<std::mutex> lock (mutex); current = connection; callbacks = value; lastOptions = options; }
         ++starts;
         value.onLocalDescription (connection.generation, "offer", "fake-sdp");
         value.onLocalCandidate (connection.generation, "candidate:fake", "0", 0);
@@ -960,6 +992,10 @@ public:
         wake.wait (lock, [&] { return ! delivering; }); ++closes;
     }
     std::atomic<int> starts { 0 }, closes { 0 }, descriptions { 0 }, candidates { 0 }, ends { 0 }, audioPackets { 0 };
+    WebGuestTransport::Options getOptions()
+    {
+        std::lock_guard<std::mutex> lock (mutex); return lastOptions;
+    }
 private:
     void run()
     {
@@ -980,6 +1016,7 @@ private:
     c::WebConnection current;
     uint32_t lastRoster = 0;
     WebGuestTransport::Callbacks callbacks;
+    WebGuestTransport::Options lastOptions;
     std::deque<std::pair<uint32_t, std::vector<uint8_t>>> incoming;
     bool stopping = false, delivering = false;
     std::thread worker;
@@ -994,8 +1031,9 @@ struct V2Fixture
         CollabSession::Options options; options.loopbackOnly = true; options.stunServers.clear();
         options.probeTimeoutMs = 250; options.heartbeatIntervalMs = heartbeatMs; options.punchHeartbeatMs = 100;
         options.webRequest = service.requests(); options.webServer = "http://127.0.0.1:8899"; options.webEndpoint = web;
+        options.webUpnpFactory = [state = webUpnp] { return std::make_unique<FakeUpnp> (state); };
         session = std::make_unique<CollabSession> (engine, settings, std::make_unique<CollabRoom> (service.requests(), options.webServer),
-            std::make_unique<FakeUpnp> (std::make_shared<UpnpState>()), options);
+            std::make_unique<FakeUpnp> (upnp), options);
     }
     const CollabSession::PersonSnapshot* person (const CollabSession::Snapshot& snapshot, uint32_t id)
     {
@@ -1007,6 +1045,7 @@ struct V2Fixture
     LiveMixSettings settings;
     MixEngine engine;
     std::shared_ptr<FakeWebEndpoint> web = std::make_shared<FakeWebEndpoint>();
+    std::shared_ptr<UpnpState> upnp = std::make_shared<UpnpState>(), webUpnp = std::make_shared<UpnpState>();
     std::unique_ptr<CollabSession> session;
 };
 
@@ -1230,6 +1269,55 @@ public:
 };
 static LiveMixCollabRosterAudioInstallationTests liveMixCollabRosterAudioInstallationTests;
 
+class LiveMixCollabAcceptedWebHeartbeatTests : public juce::UnitTest
+{
+public:
+    LiveMixCollabAcceptedWebHeartbeatTests() : UnitTest ("LiveMix Collab accepted web heartbeat", "LiveMix") {}
+    void runTest() override
+    {
+        beginTest ("a pre-accept heartbeat delivered after startWeb preserves the web member and link");
+        V2Service service; V2Fixture host (service);
+        host.session->createRoom ("Host");
+        expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+        host.session->createWebInvite();
+        expect (until ([&] { return host.session->getSnapshot().inviteGeneration == 1; }));
+        const auto requestId = service.pending ("Browser");
+        expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+        expect (until ([&] { return ! CollabSessionTestAccess::heartbeatPending (*host.session); }));
+        const auto oldRevision = host.session->getSnapshot().roomRevision;
+
+        service.holdHeartbeats();
+        struct ResumeHeartbeats
+        {
+            V2Service& service;
+            ~ResumeHeartbeats() { service.resumeHeartbeats(); }
+        } resume { service };
+        // Queue accept before heartbeat so the session worker can hand it to the signaling thread.
+        host.session->acceptWebRequest (requestId);
+        CollabSessionTestAccess::heartbeat (*host.session);
+        expect (until ([&] { return service.heldHeartbeats() == 1; }));
+        expect (until ([&] { return CollabSessionTestAccess::webConnection (*host.session).generation != 0; }));
+        const auto connection = CollabSessionTestAccess::webConnection (*host.session);
+        expectEquals (host.session->getSnapshot().roomRevision, oldRevision + 1,
+                      "accept must install the server revision before starting the web endpoint");
+        expectEquals ((int) host.session->getSnapshot().personCount, 2);
+
+        service.releaseHeartbeat();
+        // Hold the fresh heartbeat too, so it cannot hide removal by the stale reply.
+        expect (until ([&] { return service.heldHeartbeats() == 2; }));
+        expectEquals ((int) host.session->getSnapshot().personCount, 2, "stale heartbeat must not remove the web member");
+        expect (findMember (CollabSessionTestAccess::roster (*host.session), connection.guestId) != nullptr);
+        expect (until ([&] { return CollabSessionTestAccess::transport (*host.session).getStats (connection.guestId).v2
+                                  && host.session->getSnapshot().state == State::connected; }),
+                "the open data channel must attach to the accepted web member");
+        expectEquals (host.web->starts.load(), 1);
+        host.web->sendTestAudio (connection.generation);
+        expect (until ([&] { return host.engine.getCollab().getStats (0).received > 0; }),
+                "web audio must reach the host through the installed link");
+    }
+};
+static LiveMixCollabAcceptedWebHeartbeatTests liveMixCollabAcceptedWebHeartbeatTests;
+
 class LiveMixCollabR8SessionTests : public juce::UnitTest
 {
 public:
@@ -1314,6 +1402,53 @@ public:
             if (one.data && two.data) expect (one.data->participant_id == 0 && two.data->participant_id == 0);
             expect (! service.onMessageThread.load());
         }
+        beginTest ("web mapping is independent, renewed, removed and passed only with a public address");
+        for (int scenario = 0; scenario < 4; ++scenario)
+        {
+            V2Service service; V2Fixture host (service);
+            host.webUpnp->result.externalIp = scenario == 1 ? "192.168.1.1" : "1.1.1.1";
+            host.webUpnp->result.mapped = scenario != 2;
+            host.upnp->result.mapped = scenario != 3;
+            host.session->createRoom ("Host");
+            expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            expectEquals (host.webUpnp->discovers.load(), 1);
+            expectEquals (host.webUpnp->port.load(), host.settings.getCollabPort() + 1);
+            CollabSessionTestAccess::renewMappings (*host.session);
+            expect (until ([&] { return scenario == 2 ? host.upnp->renewals.load() == 1 : host.webUpnp->renewals.load() == 1; }));
+            expectEquals (host.upnp->renewals.load(), scenario == 3 ? 0 : 1);
+            expectEquals (host.webUpnp->renewals.load(), scenario == 2 ? 0 : 1);
+            host.session->createWebInvite();
+            expect (until ([&] { return host.session->getSnapshot().inviteGeneration == 1; }));
+            const auto request = service.pending ("Browser");
+            expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            host.session->acceptWebRequest (request);
+            expect (until ([&] { return host.web->starts.load() == 1; }));
+            const auto options = host.web->getOptions();
+            expectEquals ((int) options.localPort, scenario == 2 ? 0 : host.settings.getCollabPort() + 1);
+            expectEquals (options.externalIp, scenario == 1 || scenario == 2 ? juce::String() : juce::String ("1.1.1.1"));
+            if (options.externalIp.isNotEmpty()) expectEquals (options.lanIp, host.webUpnp->result.lanIp);
+            host.session->leave();
+            expect (until ([&] { return host.upnp->removals.load() == 1 && host.webUpnp->removals.load() == 1; }));
+            expect (! host.webUpnp->ranOnMessageThread.load());
+        }
+
+        beginTest ("no router found for the room's port: the web port is not discovered a second time");
+        {
+            V2Service service; V2Fixture host (service);
+            host.upnp->result = {};   // found = false, mapped = false
+            host.session->createRoom ("Host");
+            expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            expectEquals (host.webUpnp->discovers.load(), 0);
+            host.session->createWebInvite();
+            expect (until ([&] { return host.session->getSnapshot().inviteGeneration == 1; }));
+            const auto request = service.pending ("Browser");
+            expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            host.session->acceptWebRequest (request);
+            expect (until ([&] { return host.web->starts.load() == 1; }));
+            expectEquals ((int) host.web->getOptions().localPort, 0);
+            host.session->leave();
+        }
+
         beginTest ("host plus native plus web: invite, reject, expiry, accept, signals and kick");
         {
             V2Service service; V2Fixture host (service), native (service);
@@ -1356,6 +1491,7 @@ public:
             expect (until ([&] { return host.engine.getCollab().getStats (1).received > 0; }));
             expectEquals ((int) host.engine.getCollab().getStats (1).received, 1);
             host.session.reset(); expectEquals ((int) service.last ("/close")["apiVersion"], 2);
+            expectEquals (host.webUpnp->removals.load(), 1);
             expect (! service.onMessageThread.load());
         }
         beginTest ("v2 web-only host remains open when native UDP is unavailable");

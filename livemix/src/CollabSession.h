@@ -88,6 +88,7 @@ public:
         CollabRoom::RequestFunction webRequest;
         juce::String webServer;
         std::shared_ptr<WebEndpoint> webEndpoint;
+        std::function<std::unique_ptr<CollabUpnp>()> webUpnpFactory = CollabUpnp::makeMiniUpnp;
         std::array<juce::String, 2> peerRingNames {}; // empty in the one-ring legacy test constructor
     };
     CollabSession (MixEngine&, LiveMixSettings&);
@@ -151,6 +152,7 @@ private:
     std::function<PeerInfo()> peerInfo;
     Snapshot snapshot;
     bool started = false, audioAttached = false, mapped = false, heartbeatPending = false, renewPending = false;
+    bool webMapped = false;
     bool punching = false; // hosting with a closed port: the guest is reached by hole punching
     bool heartbeatConnected = false, heartbeatStopped = false;
     bool heartbeatDirty = false;

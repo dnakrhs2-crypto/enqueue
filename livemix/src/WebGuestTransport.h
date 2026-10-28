@@ -12,7 +12,12 @@ class WebGuestTransport
 {
 public:
     enum class State { off, connecting, open, closed, failed };
-    struct Options { bool loopbackOnly = false; };
+    struct Options
+    {
+        bool loopbackOnly = false;
+        uint16_t localPort = 0; // successful UPnP mapping; zero keeps the default ICE port selection
+        juce::String externalIp, lanIp; // UPnP maps the same UDP port on both sides
+    };
     struct Callbacks
     {
         std::function<void(uint32_t, const juce::String& type, const juce::String& sdp)> onLocalDescription;
@@ -40,6 +45,7 @@ public:
     bool sendControl(uint32_t generation, const void* packet, size_t bytes);
     void close();
     Snapshot snapshot() const;
+    static bool isPublicIpv4(const juce::String&);
 
     // Lifecycle/signaling: one control thread, never a library callback.
     // send*: network producer only, NOT the audio callback. Copies into bounded,

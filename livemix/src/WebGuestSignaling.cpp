@@ -318,8 +318,8 @@ struct WebGuestSignaling::Impl
     {
         const auto reply = retry ([&] { return room->webAccept (code, hostToken, id); });
         if (! check (reply)) return;
-        CollabRoom::RoomSnapshot snapshot;
         Accepted accepted;
+        auto& snapshot = accepted.room;
         accepted.requestId = reply.json["requestId"].toString();
         accepted.connectionToken = reply.json["connectionToken"].toString();
         accepted.reservationExpiresAtMs = (juce::int64) reply.json["reservationExpiresAtMs"];
