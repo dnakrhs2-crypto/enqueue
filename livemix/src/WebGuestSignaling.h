@@ -18,6 +18,7 @@ public:
     struct Accepted
     {
         contracts::WebConnection connection;
+        CollabRoom::RoomSnapshot room;
         juce::String requestId, connectionToken;
         int64_t reservationExpiresAtMs = 0;
     };

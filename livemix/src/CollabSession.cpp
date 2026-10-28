@@ -672,8 +672,14 @@ void CollabSession::startSignaling()
     { impl->complete (id, [this, request] { removeWebRequest (request); }); };
     callbacks.onAccepted = [this, id] (const WebGuestSignaling::Accepted& accepted)
     {
-        // Only the token-free transport context crosses into the session/UI queue.
-        impl->complete (id, [this, connection = accepted.connection] { webAcceptPending = false; startWeb (connection); });
+        // Only token-free room and transport context cross into the session/UI queue.
+        impl->complete (id, [this, connection = accepted.connection, room = accepted.room]
+        {
+            webAcceptPending = false;
+            // Advance the server revision before opening the link so an old heartbeat cannot remove its member.
+            applyRoom (room);
+            startWeb (connection);
+        });
     };
     callbacks.onSignal = [this, id] (uint32_t generation, const juce::var& incoming)
     {

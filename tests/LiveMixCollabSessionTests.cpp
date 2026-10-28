@@ -24,6 +24,7 @@ struct CollabSessionTestAccess
 {
     static CollabTransport& transport (CollabSession& s) { return s.transport; }
     static const RosterSnapshot& roster (const CollabSession& s) { return s.roster; }
+    static contracts::WebConnection webConnection (const CollabSession& s) { return s.webConnection; }
     static PeerInfo localInfo (const CollabSession& s) { return s.localInfo (s.snapshot.myNick); }
     static void heartbeat (CollabSession& s) { s.sendHeartbeat(); }
     static bool heartbeatPending (CollabSession& s) { return s.heartbeatPending; }
@@ -748,6 +749,10 @@ class V2Service
 {
 public:
     CollabRoom::RequestFunction requests() { return [this] (const auto& request) { return call (request); }; }
+    void holdHeartbeats() { std::lock_guard<std::mutex> lock (mutex); holdHeartbeatReplies = true; }
+    int heldHeartbeats() { std::lock_guard<std::mutex> lock (mutex); return heldHeartbeatReplies; }
+    void releaseHeartbeat() { std::lock_guard<std::mutex> lock (mutex); ++heartbeatPermits; wake.notify_all(); }
+    void resumeHeartbeats() { std::lock_guard<std::mutex> lock (mutex); holdHeartbeatReplies = false; wake.notify_all(); }
     juce::String pending (const juce::String& nick)
     {
         std::lock_guard<std::mutex> lock (mutex);
@@ -798,6 +803,8 @@ private:
     std::vector<std::pair<bool, juce::var>> events;
     std::map<juce::String, juce::var> requestsById;
     int nextId = 2, revision = 1, inviteGeneration = 0, eventId = 0, wireRate = 48000;
+    bool holdHeartbeatReplies = false;
+    int heldHeartbeatReplies = 0, heartbeatPermits = 0;
     juce::var room()
     {
         juce::Array<juce::var> list, reservations, names;
@@ -884,7 +891,17 @@ private:
             for (const auto& m : members) if (m.id != 1 && m.kind == "native")
                 peers.add (object ({ { "participantId", m.id }, { "connectionId", juce::String::repeatedString ("1", 32) },
                     { "candidates", juce::Array<juce::var> { object ({ { "ip", "127.0.0.1" }, { "port", m.port } }) } } }));
-            o->setProperty ("peers", peers); return response (value);
+            o->setProperty ("peers", peers);
+            const auto reply = response (value);
+            if (action == "heartbeat" && holdHeartbeatReplies)
+            {
+                // Freeze the response before accept changes the server room; let accept run while held.
+                ++heldHeartbeatReplies;
+                wake.notify_all();
+                wake.wait (lock, [&] { return ! holdHeartbeatReplies || heartbeatPermits > 0; });
+                if (heartbeatPermits > 0) --heartbeatPermits;
+            }
+            return reply;
         }
         if (action == "invite")
         {
@@ -896,6 +913,9 @@ private:
         }
         if (action == "accept")
         {
+            // Accept runs on the signaling thread; its preceding room must be captured first.
+            if (holdHeartbeatReplies)
+                wake.wait (lock, [&] { return ! holdHeartbeatReplies || heldHeartbeatReplies > 0; });
             const auto rid = body["requestId"].toString(); const auto pending = requestsById.find (rid);
             if (pending == requestsById.end()) return { 410, "{\"error\":\"expired\"}" };
             if (members.size() >= 3) return { 409, "{\"error\":\"full\"}" };
@@ -1248,6 +1268,55 @@ public:
     }
 };
 static LiveMixCollabRosterAudioInstallationTests liveMixCollabRosterAudioInstallationTests;
+
+class LiveMixCollabAcceptedWebHeartbeatTests : public juce::UnitTest
+{
+public:
+    LiveMixCollabAcceptedWebHeartbeatTests() : UnitTest ("LiveMix Collab accepted web heartbeat", "LiveMix") {}
+    void runTest() override
+    {
+        beginTest ("a pre-accept heartbeat delivered after startWeb preserves the web member and link");
+        V2Service service; V2Fixture host (service);
+        host.session->createRoom ("Host");
+        expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+        host.session->createWebInvite();
+        expect (until ([&] { return host.session->getSnapshot().inviteGeneration == 1; }));
+        const auto requestId = service.pending ("Browser");
+        expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+        expect (until ([&] { return ! CollabSessionTestAccess::heartbeatPending (*host.session); }));
+        const auto oldRevision = host.session->getSnapshot().roomRevision;
+
+        service.holdHeartbeats();
+        struct ResumeHeartbeats
+        {
+            V2Service& service;
+            ~ResumeHeartbeats() { service.resumeHeartbeats(); }
+        } resume { service };
+        // Queue accept before heartbeat so the session worker can hand it to the signaling thread.
+        host.session->acceptWebRequest (requestId);
+        CollabSessionTestAccess::heartbeat (*host.session);
+        expect (until ([&] { return service.heldHeartbeats() == 1; }));
+        expect (until ([&] { return CollabSessionTestAccess::webConnection (*host.session).generation != 0; }));
+        const auto connection = CollabSessionTestAccess::webConnection (*host.session);
+        expectEquals (host.session->getSnapshot().roomRevision, oldRevision + 1,
+                      "accept must install the server revision before starting the web endpoint");
+        expectEquals ((int) host.session->getSnapshot().personCount, 2);
+
+        service.releaseHeartbeat();
+        // Hold the fresh heartbeat too, so it cannot hide removal by the stale reply.
+        expect (until ([&] { return service.heldHeartbeats() == 2; }));
+        expectEquals ((int) host.session->getSnapshot().personCount, 2, "stale heartbeat must not remove the web member");
+        expect (findMember (CollabSessionTestAccess::roster (*host.session), connection.guestId) != nullptr);
+        expect (until ([&] { return CollabSessionTestAccess::transport (*host.session).getStats (connection.guestId).v2
+                                  && host.session->getSnapshot().state == State::connected; }),
+                "the open data channel must attach to the accepted web member");
+        expectEquals (host.web->starts.load(), 1);
+        host.web->sendTestAudio (connection.generation);
+        expect (until ([&] { return host.engine.getCollab().getStats (0).received > 0; }),
+                "web audio must reach the host through the installed link");
+    }
+};
+static LiveMixCollabAcceptedWebHeartbeatTests liveMixCollabAcceptedWebHeartbeatTests;
 
 class LiveMixCollabR8SessionTests : public juce::UnitTest
 {

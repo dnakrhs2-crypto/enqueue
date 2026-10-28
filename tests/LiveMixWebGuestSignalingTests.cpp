@@ -199,6 +199,15 @@ public:
             expect (connection.session == UINT64_C (0xfedcba9876543210));
             expectEquals ((int) connection.guestId, 4); expectEquals ((int) connection.generation, 7);
             expectEquals ((int) connection.hostEpoch, 3); expectEquals ((int) connection.rosterRevision, 0);
+            const auto& acceptedRoom = seen.accepted[0].room;
+            expectEquals ((int) acceptedRoom.revision, 19);
+            expect (acceptedRoom.session == connection.session);
+            expectEquals ((int) acceptedRoom.members.size(), 2);
+            expect (std::any_of (acceptedRoom.members.begin(), acceptedRoom.members.end(), [&] (const auto& member)
+            {
+                return member.participantId == connection.guestId && member.connectionGeneration == connection.generation
+                    && member.kind == "web" && member.state == "connecting";
+            }));
             std::vector<juce::var> signals;
             std::vector<juce::String> hostCursors;
             for (const auto& r : service.requests())
