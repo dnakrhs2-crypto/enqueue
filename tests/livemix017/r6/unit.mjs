@@ -7,7 +7,7 @@ import * as packet from '../../../livemix/webjoin/audio/packet.js';
 import { Playout } from '../../../livemix/webjoin/audio/playout.js';
 import { GuestAudio } from '../../../livemix/webjoin/audio/worklet.js';
 import { GuestWorker } from '../../../livemix/webjoin/audio/worker.js';
-import { Signaling } from '../../../livemix/webjoin/signaling.js';
+import { Signaling, iceServersFor, STUN } from '../../../livemix/webjoin/signaling.js';
 import { parseInvite, createGuestClient } from '../../../livemix/webjoin/guest-client.js';
 
 const results = [];
@@ -326,6 +326,17 @@ await test('capture pools bound stalls, sample clock never rewinds', () => {
   // 10/28: a phone pausing 20 ms threw its own voice away - the page now keeps 400 ms (160 packets) on the way out.
   assert.ok(expired(0,401)); assert.ok(!expired(0,400)); assert.equal(audioPackets(48000),160); assert.equal(audioBudget(48000),46080);
   return {maxInFlight:audioPackets(48000),dropped:audio.captureDropped,resumedFrame:String(captured[0].firstFrame)};
+});
+await test('relay credentials from the room server are used only when complete and safe (10/28)', () => {
+  const turn = { urls: ['turn:turn.cloudflare.com:3478?transport=udp', 'turns:turn.cloudflare.com:443?transport=tcp'], username: 'u'.repeat(64), credential: 'c'.repeat(64) };
+  const stun = { urls: ['stun:stun.cloudflare.com:3478'] };
+  assert.deepEqual(iceServersFor([stun, turn]), [stun, turn]);
+  assert.equal(iceServersFor(undefined), null); assert.equal(iceServersFor('turn'), null); assert.equal(iceServersFor([stun]), null);
+  assert.equal(iceServersFor([{ urls: turn.urls }]), null);                                   // a relay without credentials
+  assert.deepEqual(iceServersFor([{ ...turn, urls: [...turn.urls, 'turn:x.example:53?transport=udp', 'http://x.example/'] }]), [turn]);
+  assert.equal(iceServersFor(Array(5).fill(turn)), null);
+  assert.equal(STUN.length, 2);
+  return { relay: 2, fallbacks: 5 };
 });
 await test('HTTP text/plain, stable signalId retry and accepted cursor switch', async () => {
   const calls=[];let failSignal=true; let s;

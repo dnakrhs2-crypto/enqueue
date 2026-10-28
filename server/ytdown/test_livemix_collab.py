@@ -453,6 +453,50 @@ class CollabV2Test(unittest.TestCase):
         web = next(e["data"] for e in events["events"] if e["type"] == "accepted")
         return req, host, web
 
+    # ── 중계(TURN) 접속 정보 (10/28: 사무실 PC 웹 -> 도이 집 방장, 직접 연결 실패) ──
+    RELAY = [{"urls": ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"]},
+             {"urls": ["turn:turn.cloudflare.com:3478?transport=udp", "turns:turn.cloudflare.com:443?transport=tcp",
+                       "turn:turn.cloudflare.com:53?transport=udp", "turn:turn.cloudflare.com:80?transport=tcp",
+                       "turns:turn.cloudflare.com:5349?transport=tcp", "http://evil.example/", 7],
+              "username": "u" * 64, "credential": "c" * 64},
+             {"urls": "turn:turn.cloudflare.com:3478?transport=udp"},                      # a relay without credentials
+             "nonsense"]
+
+    def test_clean_ice_keeps_only_safe_urls_and_complete_relays(self):
+        self.assertEqual(lc._clean_ice(self.RELAY), [
+            {"urls": ["stun:stun.cloudflare.com:3478"]},
+            {"urls": ["turn:turn.cloudflare.com:3478?transport=udp", "turns:turn.cloudflare.com:443?transport=tcp"],
+             "username": "u" * 64, "credential": "c" * 64}])
+        self.assertEqual(lc._clean_ice(None), [])
+
+    def test_an_accepted_pair_receives_relay_credentials_both_ways(self):
+        servers = lc._clean_ice(self.RELAY)
+        with lc._turn_lock:
+            lc._turn.update(servers=servers, expires=time.time() + lc.TURN_TTL_SEC)
+        room = self.open()
+        _, host, web = self.web_pair(room)
+        self.assertEqual(host["iceServers"], servers)
+        self.assertEqual(web["iceServers"], servers)
+        self.assertNotIn("iceServers", self.events(room, hostToken=room["hostToken"])["events"][0]["data"]["room"])
+
+    def test_without_relay_credentials_an_accept_is_unchanged(self):
+        room = self.open()
+        _, host, web = self.web_pair(room)
+        self.assertNotIn("iceServers", host)
+        self.assertNotIn("iceServers", web)
+
+    def test_credentials_close_to_expiry_are_not_handed_out(self):
+        with lc._turn_lock:
+            lc._turn.update(servers=lc._clean_ice(self.RELAY), expires=time.time() + 1800)
+        room = self.open()
+        _, host, _ = self.web_pair(room)
+        self.assertNotIn("iceServers", host)
+
+    def test_a_web_seat_outlives_the_pages_twenty_second_wait(self):
+        room = self.open()
+        _, host, _ = self.web_pair(room)
+        self.assertGreaterEqual(host["reservationExpiresAtMs"] - int(self.now * 1000), 25000)
+
     def test_three_native_same_profile_retries_and_private_addresses(self):
         room = self.open()
         self.assertEqual(self.create()["code"], room["code"])
@@ -558,6 +602,9 @@ class CollabV2Test(unittest.TestCase):
         req = self.request(room, invite, 11)
         first = self.accept(room, req)
         self.now += 15
+        self.assertEqual(self.accept(room, req), first)   # a web seat outlives the page's 20 s wait
+        self.beat(room)
+        self.now += lc.WEB_RESERVATION_SEC - 15
         self.assertEqual(self.accept(room, req, 410), {"error": "expired"})
         self.signal(room, first, {"type": "connected"}, status=410)
         self.beat(room)
