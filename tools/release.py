@@ -61,6 +61,25 @@ APPS = {
 }
 SITE_REPO = "dnakrhs2-crypto/enqueue"   # 곰튀김.com lives on this repo's gh-pages, both apps included
 APP = APPS["enqueue"]
+# CMakeLists.txt builds the LiveMix online backup's server account in from this file (LIVEMIX_BACKUP_ACCOUNT_FILE)
+LIVEMIX_BACKUP_ACCOUNT_FILE = "C:/Users/claude/SDKs/gocue_release/livemix_backup.json"
+
+
+def check_backup_account(exe, account_file=LIVEMIX_BACKUP_ACCOUNT_FILE):
+    """LiveMix: a build without the account file has no online backup - the backup window only says '이 프로그램에는
+    백업 서버가 설정되어 있지 않습니다'. 0.17.0-0.17.2 shipped like that (built on roomc, which had no copy of the file;
+    a user asked on 10/28). Stop before packaging unless the exe carries this PC's account: CMake puts the password in
+    as lowercase hex (string(HEX)), so that text is in the exe exactly when the account was built in."""
+    if APP["name"] != "LiveMix":
+        return
+    try:
+        password = json.loads(pathlib.Path(account_file).read_text(encoding="utf-8-sig"))["password"]
+    except (OSError, ValueError, KeyError) as error:
+        sys.exit("cannot read the LiveMix backup account file %s (%s)" % (account_file, error))
+    if password.encode("utf-8").hex().encode("ascii") not in pathlib.Path(exe).read_bytes():
+        sys.exit("%s has no online backup server account built in - the build PC had no %s; copy it there and rebuild"
+                 % (exe, account_file))
+    print("BACKUP: the online backup server account is built into", exe, flush=True)
 
 
 def read_version():
@@ -776,6 +795,7 @@ def package_legacy(args, version):
     for name in (APP["exe"], "WinSparkle.dll"):
         if not (source / name).is_file():
             sys.exit("missing package input: " + str(source / name))
+    check_backup_account(source / APP["exe"])
     output = ROOT / "out/release" / args.app
     output.mkdir(parents=True, exist_ok=True)
     output = pathlib.Path(tempfile.mkdtemp(prefix=version + "-", dir=output))
@@ -1190,6 +1210,7 @@ def main():
     for required in (APP["exe"], "WinSparkle.dll"):
         if not (source_dir / required).is_file():
             sys.exit("missing %s in %s (build Release with WINSPARKLE_DIR set)" % (required, source_dir))
+    check_backup_account(source_dir / APP["exe"])
 
     iscc = find_iscc()
     if iscc is None:

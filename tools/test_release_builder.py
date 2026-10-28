@@ -1,8 +1,10 @@
 """Tests for release.py's --builder (2026-10-18 roomc build server). No build, no SSH: the readiness check and the
 roomc build are fakes.  python tools/test_release_builder.py"""
 import importlib.util
+import json
 import pathlib
 import sys
+import tempfile
 import unittest
 
 sys.dont_write_bytecode = True   # tools/__pycache__/release.cpython-312.pyc is tracked: importing must not dirty the tree
@@ -118,6 +120,41 @@ class BuildDispatchTests(unittest.TestCase):
             self.assertEqual(calls, [("roomc", "local", False, True)])
         finally:
             release.run, release.pick_builder, release.build_on_roomc = saved
+
+
+class BackupAccountTests(unittest.TestCase):
+    """0.17.0-0.17.2 shipped without the online backup server account (roomc had no account file): the exe must carry
+    the account's password as CMake's lowercase hex before LiveMix is packaged."""
+    def setUp(self):
+        self.saved = release.APP
+        release.APP = release.APPS["livemix"]
+        self.dir = pathlib.Path(tempfile.mkdtemp())
+        self.account = self.dir / "account.json"
+        self.account.write_text(json.dumps({"url": "https://nas.example:5006", "share": "/b", "user": "u", "password": "pw한"}),
+                                encoding="utf-8")
+        self.exe = self.dir / "LiveMix.exe"
+
+    def tearDown(self):
+        release.APP = self.saved
+
+    def test_passes_when_the_account_is_built_in(self):
+        self.exe.write_bytes(b"MZ\0" + "pw한".encode("utf-8").hex().encode("ascii") + b"\0rest")
+        release.check_backup_account(self.exe, self.account)
+
+    def test_stops_when_the_build_had_no_account(self):
+        self.exe.write_bytes(b"MZ\0https://nas.example:5006\0rest")
+        with self.assertRaises(SystemExit):
+            release.check_backup_account(self.exe, self.account)
+
+    def test_stops_when_this_pc_has_no_account_file(self):
+        self.exe.write_bytes(b"MZ\0rest")
+        with self.assertRaises(SystemExit):
+            release.check_backup_account(self.exe, self.dir / "missing.json")
+
+    def test_other_apps_are_not_checked(self):
+        release.APP = release.APPS["enqueue"]
+        self.exe.write_bytes(b"MZ\0rest")
+        release.check_backup_account(self.exe, self.dir / "missing.json")
 
 
 if __name__ == "__main__":
