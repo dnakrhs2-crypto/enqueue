@@ -57,6 +57,9 @@ class Fail(Exception):
 
 
 def _log(action, **fields):
+    # The wall time to the millisecond (10/28): a web join's steps are judged against the page's 10 s connect limit.
+    t = time.time()
+    fields["t"] = time.strftime("%m-%d %H:%M:%S", time.localtime(t)) + ".%03d" % int(t * 1000 % 1000)
     print("[livemix_collab] " + json.dumps(dict(action=action, **fields), ensure_ascii=False), flush=True)
 
 
@@ -121,6 +124,16 @@ def _bool(body, key):
     if type(value) is not bool:
         raise Fail(400, "bad")
     return value
+
+
+def _who(h):
+    """Diagnostics only (10/28 web join logging): the caller's address and browser. Never raises, never refuses."""
+    try:
+        forwarded = h.headers.get("X-Forwarded-For")
+        ip = forwarded.split(",", 1)[0].strip() if forwarded else h.client_address[0]
+        return dict(publicIp=ip, ua=(h.headers.get("User-Agent") or "")[:200])
+    except Exception:
+        return dict(publicIp=None, ua=None)
 
 
 def _public_ip(h):
@@ -419,6 +432,7 @@ def _request_state(room, request, state):
 
 
 def _end_request(room, request, reason):
+    _log("web_request_end", code=room["code"], rid=request["requestId"][:8], reason=reason)
     _request_state(room, request, reason)
     _event(room, "ended", dict(requestId=request["requestId"], reason=reason),
            [("host",), ("request", request["requestId"])])
@@ -426,6 +440,8 @@ def _end_request(room, request, reason):
 
 def _end_member(room, pid, reason):
     member = room["members"].pop(pid)
+    if reason != "closed":   # a closing room is logged once as "close"
+        _log("member_end", code=room["code"], pid=pid, kind=member["kind"], state=member["state"], reason=reason)
     room["reservations"].pop(pid, None)
     peer = room["nativePeers"].pop(pid, None)
     if peer:
@@ -519,6 +535,8 @@ def _native_join(body, h, now, v2):
     if (len(room["members"]) >= 2 and not compatible) or (has_web and not _supports(candidate, True)):
         raise Fail(409, "incompatible" if v2 else "full")
     member = _reserve(room, nick, "native", client, now)
+    _log("join_v2", code=room["code"], pid=member["participantId"], nick=nick, publicIp=ip, hostIp=room["publicIp"],
+         appVersion=client["appVersion"], stun=stun is not None, port=port)
     peer = dict(nick=nick, inst=inst, publicIp=ip, stun=stun, port=port, joinedAt=now,
                 connectionId=client["connectionId"])
     room["nativePeers"][member["participantId"]] = peer
@@ -641,6 +659,8 @@ def _native(action, body, h, now, v2):
                 continue
             member = room["members"][pid]
             if member["state"] != state["state"] or member["streamEpoch"] != state["streamEpoch"]:
+                if member["state"] != state["state"]:
+                    _log("member_state", code=room["code"], pid=pid, kind=member["kind"], state=state["state"], by="heartbeat")
                 member.update(state=state["state"], streamEpoch=state["streamEpoch"])
                 if state["state"] == "connected":
                     room["reservations"].pop(pid, None)
@@ -724,6 +744,7 @@ def _web(action, body, h, now):
             raise Fail(410, "invite")
         _web_compatible(room)
         if body.get("action") == "inspect":
+            _log("web_inspect", code=room["code"], hostIp=room["publicIp"], **_who(h))
             return dict(apiVersion=2, hostNick=room["nick"], session=room["session"], wireRate=room["wireRate"],
                         roomMode=_mode(room), revision=room["revision"])
         if body.get("action") != "join":
@@ -748,6 +769,7 @@ def _web(action, body, h, now):
         room["pendingWebRequests"][rid] = dict(requestId=rid, requestToken=token, state="pending",
                 nick=nick, expiresAtMs=expires, connectionId=client["connectionId"], client=client,
                 inviteGeneration=generation, reply=reply)
+        _log("web_request", code=room["code"], rid=rid[:8], nick=nick, hostIp=room["publicIp"], **_who(h))
         return reply
     if action in ("accept", "reject"):
         req = _request_by_id(room, body)
@@ -777,6 +799,7 @@ def _web(action, body, h, now):
         _changed(room)
         connection["acceptedRoom"] = _snapshot(room)
         _event(room, "accepted", _accepted(room, req, "web"), [("request", req["requestId"])])
+        _log("web_accept", code=room["code"], rid=req["requestId"][:8], pid=pid, gen=generation)
         return _accepted(room, req, "host")
     if action == "kick":
         pid, generation = _uint(body.get("participantId"), 2), _uint(body.get("connectionGeneration"))
@@ -796,6 +819,16 @@ def _web(action, body, h, now):
     elif action == "signal":
         return _signal(room, body)
     return dict(ok=True, apiVersion=2)
+
+
+def _candidate_kind(signal):
+    """Diagnostic summary of an ICE candidate without its addresses: protocol/type/family (mdns = a .local name)."""
+    parts = (signal.get("candidate") or "").split()
+    if len(parts) < 8:
+        return None
+    address = parts[4]
+    family = "mdns" if address.endswith(".local") else ("ipv6" if ":" in address else "ipv4")
+    return "%s/%s/%s" % (parts[2].lower(), parts[7], family)
 
 
 def _signal(room, body):
@@ -845,6 +878,7 @@ def _signal(room, body):
     else:
         raise Fail(400, "bad")
     sent["last"] = sid
+    _log("web_signal", code=room["code"], gen=connection["generation"], role=role, kind=kind, cand=_candidate_kind(signal))
     result = dict(ok=True, apiVersion=2, signalId=sid)
     sent["replies"][sid] = result
     _event(room, "signal", dict(connectionGeneration=connection["generation"], signalId=sid,
@@ -953,6 +987,10 @@ def handle_post(h):
                 result = copy.deepcopy(result)
         return _send(h, 200, result)
     except Fail as e:
+        if action not in ("web/events", "heartbeat"):
+            # Refusals only (no tokens): which step failed for whom, to follow a real failed join.
+            _log("refused", path=action, status=e.code, error=e.error, code=body.get("code") if isinstance(body.get("code"), str) else None,
+                 publicIp=_who(h)["publicIp"])
         return _send(h, e.code, {"error": e.error})
 
 
