@@ -137,10 +137,13 @@ public:
             ++block; sources = audio.renderSources (120);
             ringsExact = ringsExact && ring1.matches (sources.remote[0], 120) && ring2.matches (sources.remote[1], 120);
         };
-        for (int n = 0; n < 1200; ++n)
+        // A web person's buffer starts at 100 ms and steps down to its need over about 64 s, slightly speeding playback
+        // meanwhile (0.17.4); the tones are compared after it has settled, one second at 90 s.
+        constexpr int blocks = 36400;
+        for (int n = 0; n < blocks; ++n)
         {
             render();
-            if (n >= 800)
+            if (n >= blocks - 400)
             {
                 captured[0].insert (captured[0].end(), sources.remote[0].left, sources.remote[0].left + 120);
                 captured[1].insert (captured[1].end(), sources.remote[0].right, sources.remote[0].right + 120);
@@ -153,10 +156,18 @@ public:
         expect (sources.remote[0].kind == c::ParticipantKind::native && sources.remote[1].kind == c::ParticipantKind::web);
         expect (sources.remote[0].connected && sources.remote[1].connected);
         expect (sources.remote[0].left != sources.remote[0].right && sources.remote[1].left == sources.remote[1].right);
+        // The web person's playout corrects its clock within a few tens of ppm after the step-down, a tenth of a hertz at
+        // 2300 Hz; the level is the peak within 1 Hz, while the crosstalk checks below stay at the exact frequencies.
+        const auto peak = [] (const std::vector<float>& signal, double hz)
+        {
+            double best = 0;
+            for (double f = hz - 1.0; f <= hz + 1.0; f += 0.05) best = std::max (best, amplitude (signal, 48000, f));
+            return best;
+        };
         for (int channel = 0; channel < 3; ++channel)
         {
             const double hz[] { 700, 1300, 2300 }, level[] { 0.25, 0.375, 0.125 };
-            expectWithinAbsoluteError (amplitude (captured[(size_t) channel], 48000, hz[channel]), level[channel], 0.001);
+            expectWithinAbsoluteError (peak (captured[(size_t) channel], hz[channel]), level[channel], 0.001);
             for (int other = 0; other < 3; ++other)
                 if (other != channel) expectLessThan (amplitude (captured[(size_t) channel], 48000, hz[other]), 0.0001);
         }
@@ -324,11 +335,12 @@ public:
     LiveMixCollabSourcesClockTests() : UnitTest ("LiveMix Collab sources independent device clocks", "LiveMix") {}
     void runTest() override
     {
-        beginTest ("native +500 ppm and web -1000 ppm use separate ASRC and loss histories for one simulated minute");
+        // The web person's buffer first steps down from 100 ms (about 64 s, 0.17.4); its clock is read once that is done.
+        beginTest ("native +500 ppm and web -1000 ppm use separate ASRC and loss histories for two and a half simulated minutes");
         CollabAudio audio; audio.prepare (48000, 120); audio.applyRoster (room(), 1);
         const double skew[] { 500, -1000 };
         uint64_t next[] { 0, 0 };
-        for (int block = 0; block < 24000; ++block)
+        for (int block = 0; block < 60000; ++block)
         {
             const double now = block * 120.0 / 48000;
             for (int slot = 0; slot < 2; ++slot)
