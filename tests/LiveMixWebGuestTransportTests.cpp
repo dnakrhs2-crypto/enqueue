@@ -1,6 +1,7 @@
 #include "../livemix/src/WebGuestTransport.h"
 #include "livemix017/r1/Packets.h"
 #include <rtc/rtc.hpp>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -24,10 +25,16 @@ struct Peers
     std::vector<uint32_t> receivedGenerations;
     std::atomic<bool> browserOpen { false }, negotiated { false }, callbackError { false };
     std::atomic<int> gatheringComplete { 0 };
-    int earlyCandidates = 0;
+    int earlyCandidates = 0, offers = 0;
     bool answerApplied = false, hostOnlyCandidates = true, applicationOnly = false;
+    const bool mappedOnly;
+    std::string offerMid;
+    std::vector<rtc::Candidate> hostCandidates;
+    std::vector<WebGuestTransport::State> hostStates;
 
-    Peers(WebGuestTransport& transport, uint32_t generation) : host(transport), context(fixture::connection(generation))
+    Peers(WebGuestTransport& transport, uint32_t generation, WebGuestTransport::Options options = { true },
+          bool onlyMapped = false)
+        : host(transport), context(fixture::connection(generation)), mappedOnly(onlyMapped)
     {
         rtc::Configuration configuration;
         configuration.disableAutoNegotiation = true;
@@ -35,6 +42,7 @@ struct Peers
         browser = std::make_shared<rtc::PeerConnection>(configuration);
         browser->onLocalCandidate([this](rtc::Candidate candidate)
         {
+            if (mappedOnly) return; // the host must learn this peer from its incoming connectivity check
             post([this, candidate]
             {
                 if (!answerApplied) ++earlyCandidates;
@@ -49,7 +57,7 @@ struct Peers
             {
                 auto answer = browser->localDescription().value();
                 answer.extractCandidates(); // connectivity must use the early trickled candidates
-                host.endRemoteCandidates(context.generation);
+                if (!mappedOnly) host.endRemoteCandidates(context.generation);
                 host.applyRemoteDescription(context.generation, "answer", std::string(answer));
                 answerApplied = true;
             });
@@ -87,6 +95,8 @@ struct Peers
             {
                 if (gen != context.generation) { callbackError.store(true); return; }
                 rtc::Description offer(sdp.toStdString(), type.toStdString());
+                ++offers; offerMid = offer.bundleMid();
+                if (mappedOnly && !offer.candidates().empty()) { callbackError.store(true); return; }
                 applicationOnly = offer.hasApplication() && offer.mediaCount() == 1 && type == "offer";
                 browser->setRemoteDescription(offer);
                 browser->setLocalDescription(rtc::Description::Type::Answer);
@@ -98,7 +108,17 @@ struct Peers
             {
                 if (gen != context.generation || index != 0) { callbackError.store(true); return; }
                 rtc::Candidate candidate(text.toStdString(), mid.toStdString());
+                if (offers != 1 || candidate.mid() != offerMid) { callbackError.store(true); return; }
+                candidate.resolve(rtc::Candidate::ResolveMode::Simple);
+                hostCandidates.push_back(candidate);
                 hostOnlyCandidates &= candidate.type() == rtc::Candidate::Type::Host;
+                if (mappedOnly)
+                {
+                    if (candidate.type() != rtc::Candidate::Type::ServerReflexive) return;
+                    // Local stand-in for a router forwarding the advertised public address to this socket.
+                    // Neither host candidates nor browser candidates are exchanged in this test.
+                    candidate.changeAddress("127.0.0.1");
+                }
                 browser->addRemoteCandidate(candidate);
             });
         };
@@ -107,6 +127,10 @@ struct Peers
             if (gen != context.generation) callbackError.store(true);
             gatheringComplete.fetch_add(1);
         };
+        callbacks.onState = [this](uint32_t, WebGuestTransport::State state)
+        {
+            post([this, state] { hostStates.push_back(state); });
+        };
         callbacks.onPacket = [this](uint32_t gen, const uint8_t* bytes, size_t size, uint64_t timestamp)
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -114,7 +138,7 @@ struct Peers
             receivedGenerations.push_back(gen);
             if (timestamp == 0) callbackError.store(true);
         };
-        host.startAcceptedGuest(context, { true }, std::move(callbacks));
+        host.startAcceptedGuest(context, options, std::move(callbacks));
     }
     ~Peers()
     {
@@ -175,6 +199,92 @@ public:
     WebGuestTransportTests() : UnitTest("LiveMix WebGuest transport", "LiveMix") {}
     void runTest() override
     {
+        beginTest("only public IPv4 addresses can be advertised as UPnP candidates");
+        {
+            for (const auto* ip : { "1.1.1.1", "8.8.8.8", "100.63.255.255", "100.128.0.1", "172.15.1.1", "172.32.1.1" })
+                expect(WebGuestTransport::isPublicIpv4(ip));
+            for (const auto* ip : { "", "router", "1.2.3", "1.2.3.256", "1.2.3.-1", "1.2.3.4 extra", "01.2.3.4",
+                                   "::1", "::ffff:8.8.8.8", "0.0.0.0", "10.1.2.3", "127.0.0.1", "172.16.0.1",
+                                   "172.31.255.254", "192.168.1.1", "100.64.0.1", "100.127.255.254", "169.254.1.1",
+                                   "224.0.0.1", "255.255.255.255", "192.0.2.1", "198.51.100.1", "203.0.113.1", "198.18.0.1" })
+                expect(!WebGuestTransport::isPublicIpv4(ip));
+        }
+
+        beginTest("a mapped UDP port produces one srflx candidate after the offer and accepts an unannounced peer");
+        {
+            juce::DatagramSocket reservation;
+            expect(reservation.bindToPort(0));
+            const auto port = (uint16_t) reservation.getBoundPort();
+            reservation.shutdown();
+            juce::String lanIp;
+            for (const auto& ip : juce::IPAddress::getAllAddresses(false))
+                if (!ip.isNull() && ip.address[0] != 127 && !(ip.address[0] == 169 && ip.address[1] == 254))
+                { lanIp = ip.toString(); break; }
+            expect(lanIp.isNotEmpty());
+            WebGuestTransport host;
+            Peers pair(host, 7, { true, port, "1.1.1.1", lanIp }, true);
+            const bool connected = pair.connect();
+            expect(connected);
+            expectEquals(pair.offers, 1);
+            int mapped = 0, bases = 0;
+            for (const auto& candidate : pair.hostCandidates)
+            {
+                expect(candidate.port() == port);
+                if (candidate.type() == rtc::Candidate::Type::Host) ++bases;
+                if (candidate.type() != rtc::Candidate::Type::ServerReflexive) continue;
+                ++mapped;
+                expect(candidate.address() == "1.1.1.1");
+                expectEquals(int(candidate.priority() >> 24), 100);
+                const auto text = juce::String(candidate.candidate());
+                expect(text.contains(" typ srflx raddr " + lanIp + " rport ") && text.endsWith(" rport " + juce::String(port)));
+                expect(std::any_of(pair.hostCandidates.begin(), pair.hostCandidates.end(), [&](const auto& base)
+                {
+                    return base.type() == rtc::Candidate::Type::Host && base.address()
+                        && text.contains(" raddr " + juce::String(*base.address()) + " rport ");
+                }));
+            }
+            expectGreaterThan(bases, 0); expectEquals(mapped, 1);
+            expectEquals(pair.earlyCandidates, 0);
+            if (connected)
+            {
+                pair.send(fixture::audio(true, 1, pair.context));
+                const auto audio = fixture::audio(false, 1, pair.context);
+                expect(host.sendAudio(7, audio.data(), audio.size()));
+                expect(pair.packets(1, 1));
+            }
+        }
+
+        beginTest("a busy mapped port retries with a default port and publishes only the successful offer");
+        {
+            juce::DatagramSocket occupied;
+            expect(occupied.setEnablePortReuse(false)); expect(occupied.bindToPort(0));
+            const auto port = (uint16_t) occupied.getBoundPort();
+            WebGuestTransport host;
+            Peers pair(host, 7, { true, port, "1.1.1.1", {} });
+            expect(pair.connect()); expectEquals(pair.offers, 1);
+            expect(std::find(pair.hostStates.begin(), pair.hostStates.end(), WebGuestTransport::State::failed) == pair.hostStates.end());
+            expect(std::find(pair.hostStates.begin(), pair.hostStates.end(), WebGuestTransport::State::closed) == pair.hostStates.end());
+            expect(!pair.hostCandidates.empty());
+            for (const auto& candidate : pair.hostCandidates)
+            {
+                expect(candidate.port() != port);
+                expect(candidate.type() == rtc::Candidate::Type::Host);
+            }
+        }
+
+        beginTest("mapped private, shared and link-local addresses keep ordinary ICE without a synthetic candidate");
+        for (const auto* ip : { "10.1.2.3", "172.16.1.1", "192.168.1.1", "100.64.0.1", "169.254.1.1" })
+        {
+            juce::DatagramSocket reservation;
+            expect(reservation.bindToPort(0));
+            const auto port = (uint16_t) reservation.getBoundPort(); reservation.shutdown();
+            WebGuestTransport host;
+            Peers pair(host, 7, { true, port, ip, {} });
+            expect(pair.connect()); expect(pair.hostOnlyCandidates);
+            expect(!pair.hostCandidates.empty());
+            for (const auto& candidate : pair.hostCandidates) expect(candidate.port() == port);
+        }
+
         beginTest("backlog keeps newest audio and counts old/expired packets");
         {
             using Queue = WebGuestTransport::AudioQueue;

@@ -215,7 +215,7 @@ class GuestClient {
         this.attachRelay(e.channel, generation);
       }
     };
-    this.connectTimer = setTimeout(() => { if (current() && this.state !== "connected") void this.fail("connect_timeout"); }, 10000);
+    this.connectTimer = setTimeout(() => { if (current() && this.state !== "connected") void this.fail("connect_timeout"); }, 20000);
   }
   localSignal(signal) { this.worker?.postMessage({ type: "localSignal", generation: this.generation, signal }); }
   async remoteDescription(m) {

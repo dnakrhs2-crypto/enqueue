@@ -30,6 +30,11 @@ struct CollabSessionTestAccess
     static bool heartbeatStopped (CollabSession& s) { return s.heartbeatStopped; }
     static bool loopbackOnly (CollabSession& s) { return s.options.loopbackOnly; }
     static bool punching (CollabSession& s) { return s.punching; }
+    static void renewMappings (CollabSession& s)
+    {
+        s.lastRenew = juce::Time::getMillisecondCounterHiRes() - s.options.renewIntervalMs;
+        s.timerCallback();
+    }
     static bool legacyReady (CollabSession& s) { return ! s.switchingTransport && ! s.transportV2 && s.transport.getState() == CollabTransport::State::waiting; }
 };
 }
@@ -250,6 +255,7 @@ struct Fixture
         CollabSession::Options options;
         options.loopbackOnly = loopbackOnly; options.probeTimeoutMs = 250; options.connectTimeoutMs = 350;
         options.heartbeatIntervalMs = heartbeatMs; options.renewIntervalMs = 250;
+        options.webUpnpFactory = [state = webUpnp] { return std::make_unique<FakeUpnp> (state); };
         if (! stun.empty())
         {
             options.stunServers = stun; options.stunTimeoutMs = 500; options.punchHeartbeatMs = 100;
@@ -265,6 +271,7 @@ struct Fixture
     LiveMixSettings settings;
     CollabAudio audio;
     std::shared_ptr<UpnpState> upnp = std::make_shared<UpnpState>();
+    std::shared_ptr<UpnpState> webUpnp = std::make_shared<UpnpState>();
     std::unique_ptr<CollabSession> session;
 };
 struct Listener : juce::ChangeListener
@@ -370,7 +377,10 @@ public:
             expectEquals (host.session->getSnapshot().code, juce::String ("0842"));
             expect ((bool) service->last ("confirm")["reachable"]);
             expectEquals (host.upnp->port.load(), host.port());
-            expect (until ([&] { return service->count ("heartbeat") > 0 && host.upnp->renewals.load() > 0; }));
+            expectEquals (host.webUpnp->port.load(), host.port() + 1);
+            expectEquals (host.webUpnp->discovers.load(), 1);
+            expect (until ([&] { return service->count ("heartbeat") > 0 && host.upnp->renewals.load() > 0
+                && host.webUpnp->renewals.load() > 0; }));
             guest.session->joinRoom ("0842", ko ("참가자"));
             expect (guest.reaches (State::connected)); expect (host.reaches (State::connected));
             expectEquals (host.session->getSnapshot().peerNick, ko ("참가자"));
@@ -386,8 +396,10 @@ public:
             expectGreaterThan (guest.session->getSnapshot().estimatedOneWayMs, 1.0);
             host.session->leave(); expect (guest.reaches (State::off));
             expectEquals (guest.session->getSnapshot().message, ko ("방장이 방을 닫았습니다"));
-            expect (until ([&] { return service->count ("close") == 1 && host.upnp->removals.load() == 1 && host.port() == 0; }));
+            expect (until ([&] { return service->count ("close") == 1 && host.upnp->removals.load() == 1
+                && host.webUpnp->removals.load() == 1 && host.port() == 0; }));
             expect (! service->ranOnMessageThread.load()); expect (! host.upnp->ranOnMessageThread.load());
+            expect (! host.webUpnp->ranOnMessageThread.load()); expectEquals (guest.webUpnp->discovers.load(), 0);
             expectGreaterThan (listener.changes, 0); host.session->removeChangeListener (&listener);
         }
 
@@ -913,9 +925,9 @@ public:
     {
         { std::lock_guard<std::mutex> lock (mutex); stopping = true; } wake.notify_all(); worker.join();
     }
-    void start (const c::WebConnection& connection, WebGuestTransport::Options, WebGuestTransport::Callbacks value) override
+    void start (const c::WebConnection& connection, WebGuestTransport::Options options, WebGuestTransport::Callbacks value) override
     {
-        { std::lock_guard<std::mutex> lock (mutex); current = connection; callbacks = value; }
+        { std::lock_guard<std::mutex> lock (mutex); current = connection; callbacks = value; lastOptions = options; }
         ++starts;
         value.onLocalDescription (connection.generation, "offer", "fake-sdp");
         value.onLocalCandidate (connection.generation, "candidate:fake", "0", 0);
@@ -960,6 +972,10 @@ public:
         wake.wait (lock, [&] { return ! delivering; }); ++closes;
     }
     std::atomic<int> starts { 0 }, closes { 0 }, descriptions { 0 }, candidates { 0 }, ends { 0 }, audioPackets { 0 };
+    WebGuestTransport::Options getOptions()
+    {
+        std::lock_guard<std::mutex> lock (mutex); return lastOptions;
+    }
 private:
     void run()
     {
@@ -980,6 +996,7 @@ private:
     c::WebConnection current;
     uint32_t lastRoster = 0;
     WebGuestTransport::Callbacks callbacks;
+    WebGuestTransport::Options lastOptions;
     std::deque<std::pair<uint32_t, std::vector<uint8_t>>> incoming;
     bool stopping = false, delivering = false;
     std::thread worker;
@@ -994,8 +1011,9 @@ struct V2Fixture
         CollabSession::Options options; options.loopbackOnly = true; options.stunServers.clear();
         options.probeTimeoutMs = 250; options.heartbeatIntervalMs = heartbeatMs; options.punchHeartbeatMs = 100;
         options.webRequest = service.requests(); options.webServer = "http://127.0.0.1:8899"; options.webEndpoint = web;
+        options.webUpnpFactory = [state = webUpnp] { return std::make_unique<FakeUpnp> (state); };
         session = std::make_unique<CollabSession> (engine, settings, std::make_unique<CollabRoom> (service.requests(), options.webServer),
-            std::make_unique<FakeUpnp> (std::make_shared<UpnpState>()), options);
+            std::make_unique<FakeUpnp> (upnp), options);
     }
     const CollabSession::PersonSnapshot* person (const CollabSession::Snapshot& snapshot, uint32_t id)
     {
@@ -1007,6 +1025,7 @@ struct V2Fixture
     LiveMixSettings settings;
     MixEngine engine;
     std::shared_ptr<FakeWebEndpoint> web = std::make_shared<FakeWebEndpoint>();
+    std::shared_ptr<UpnpState> upnp = std::make_shared<UpnpState>(), webUpnp = std::make_shared<UpnpState>();
     std::unique_ptr<CollabSession> session;
 };
 
@@ -1314,6 +1333,53 @@ public:
             if (one.data && two.data) expect (one.data->participant_id == 0 && two.data->participant_id == 0);
             expect (! service.onMessageThread.load());
         }
+        beginTest ("web mapping is independent, renewed, removed and passed only with a public address");
+        for (int scenario = 0; scenario < 4; ++scenario)
+        {
+            V2Service service; V2Fixture host (service);
+            host.webUpnp->result.externalIp = scenario == 1 ? "192.168.1.1" : "1.1.1.1";
+            host.webUpnp->result.mapped = scenario != 2;
+            host.upnp->result.mapped = scenario != 3;
+            host.session->createRoom ("Host");
+            expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            expectEquals (host.webUpnp->discovers.load(), 1);
+            expectEquals (host.webUpnp->port.load(), host.settings.getCollabPort() + 1);
+            CollabSessionTestAccess::renewMappings (*host.session);
+            expect (until ([&] { return scenario == 2 ? host.upnp->renewals.load() == 1 : host.webUpnp->renewals.load() == 1; }));
+            expectEquals (host.upnp->renewals.load(), scenario == 3 ? 0 : 1);
+            expectEquals (host.webUpnp->renewals.load(), scenario == 2 ? 0 : 1);
+            host.session->createWebInvite();
+            expect (until ([&] { return host.session->getSnapshot().inviteGeneration == 1; }));
+            const auto request = service.pending ("Browser");
+            expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            host.session->acceptWebRequest (request);
+            expect (until ([&] { return host.web->starts.load() == 1; }));
+            const auto options = host.web->getOptions();
+            expectEquals ((int) options.localPort, scenario == 2 ? 0 : host.settings.getCollabPort() + 1);
+            expectEquals (options.externalIp, scenario == 1 || scenario == 2 ? juce::String() : juce::String ("1.1.1.1"));
+            if (options.externalIp.isNotEmpty()) expectEquals (options.lanIp, host.webUpnp->result.lanIp);
+            host.session->leave();
+            expect (until ([&] { return host.upnp->removals.load() == 1 && host.webUpnp->removals.load() == 1; }));
+            expect (! host.webUpnp->ranOnMessageThread.load());
+        }
+
+        beginTest ("no router found for the room's port: the web port is not discovered a second time");
+        {
+            V2Service service; V2Fixture host (service);
+            host.upnp->result = {};   // found = false, mapped = false
+            host.session->createRoom ("Host");
+            expect (until ([&] { return host.session->getSnapshot().canCreateWebInvite; }));
+            expectEquals (host.webUpnp->discovers.load(), 0);
+            host.session->createWebInvite();
+            expect (until ([&] { return host.session->getSnapshot().inviteGeneration == 1; }));
+            const auto request = service.pending ("Browser");
+            expect (until ([&] { return host.session->getSnapshot().webRequestCount == 1; }));
+            host.session->acceptWebRequest (request);
+            expect (until ([&] { return host.web->starts.load() == 1; }));
+            expectEquals ((int) host.web->getOptions().localPort, 0);
+            host.session->leave();
+        }
+
         beginTest ("host plus native plus web: invite, reject, expiry, accept, signals and kick");
         {
             V2Service service; V2Fixture host (service), native (service);
@@ -1356,6 +1422,7 @@ public:
             expect (until ([&] { return host.engine.getCollab().getStats (1).received > 0; }));
             expectEquals ((int) host.engine.getCollab().getStats (1).received, 1);
             host.session.reset(); expectEquals ((int) service.last ("/close")["apiVersion"], 2);
+            expectEquals (host.webUpnp->removals.load(), 1);
             expect (! service.onMessageThread.load());
         }
         beginTest ("v2 web-only host remains open when native UDP is unavailable");

@@ -239,6 +239,23 @@ struct WebGuestTransport::Impl
 WebGuestTransport::WebGuestTransport() : impl(std::make_unique<Impl>()) {}
 WebGuestTransport::~WebGuestTransport() { close(); }
 
+bool WebGuestTransport::isPublicIpv4(const juce::String& text)
+{
+    const auto parts = juce::StringArray::fromTokens(text, ".", "");
+    if (parts.size() != 4) return false;
+    for (const auto& part : parts)
+        if (part.isEmpty() || part.length() > 3 || !part.containsOnly("0123456789")
+            || part.getIntValue() > 255 || juce::String(part.getIntValue()) != part) return false;
+    const int a = parts[0].getIntValue(), b = parts[1].getIntValue(), c = parts[2].getIntValue();
+    // Exclude private/shared, link-local, loopback, documentation, benchmark and reserved networks.
+    return a != 0 && a != 10 && a != 127 && a < 224
+        && !(a == 100 && b >= 64 && b <= 127) && !(a == 169 && b == 254)
+        && !(a == 172 && b >= 16 && b <= 31)
+        && !(a == 192 && (b == 168 || (b == 0 && (c == 0 || c == 2)) || (b == 88 && c == 99)))
+        && !(a == 198 && (b == 18 || b == 19 || (b == 51 && c == 100)))
+        && !(a == 203 && b == 0 && c == 113);
+}
+
 void WebGuestTransport::startAcceptedGuest(const c::WebConnection& context, Options options, Callbacks callbacks)
 {
     close();
@@ -254,11 +271,21 @@ void WebGuestTransport::startAcceptedGuest(const c::WebConnection& context, Opti
         connection->changeState(State::failed);
         return;
     }
+    // 0.24.6 binds libjuice's UDP socket during setLocalDescription's gathering, not in the constructor.
+    // Hold callbacks until that succeeds so a busy mapped port cannot publish an obsolete offer.
+    std::unique_lock<std::recursive_mutex> startup(connection->callbackGate);
     try
     {
         rtc::Configuration configuration;
         configuration.disableAutoNegotiation = true;
         configuration.maxMessageSize = c::maxPacketBytes;
+        if (options.localPort != 0)
+        {
+            configuration.portRangeBegin = configuration.portRangeEnd = options.localPort;
+            // UPnP forwards IPv4. Windows can bind IPv6 on a port already occupied by an IPv4 socket;
+            // bind IPv4 explicitly so that collision takes the unrestricted-port retry below.
+            configuration.bindAddress = "0.0.0.0";
+        }
         if (!options.loopbackOnly)
             for (const auto* server : c::iceServers) configuration.iceServers.emplace_back(server);
         auto peer = std::make_shared<rtc::PeerConnection>(configuration);
@@ -272,13 +299,30 @@ void WebGuestTransport::startAcceptedGuest(const c::WebConnection& context, Opti
                                                        std::string(description));
             });
         });
-        peer->onLocalCandidate([weak](rtc::Candidate candidate)
+        peer->onLocalCandidate([weak, mappedCandidateSent = false](rtc::Candidate candidate) mutable
         {
             Impl::callback(weak, [&](auto& value)
             {
                 if (value.options.loopbackOnly && candidate.type() != rtc::Candidate::Type::Host) return;
                 if (value.callbacks.onLocalCandidate)
+                {
                     value.callbacks.onLocalCandidate(value.context.generation, candidate.candidate(), candidate.mid(), 0);
+                    const auto& opts = value.options;
+                    if (!mappedCandidateSent && opts.localPort != 0 && isPublicIpv4(opts.externalIp)
+                        && candidate.type() == rtc::Candidate::Type::Host
+                        && candidate.transportType() == rtc::Candidate::TransportType::Udp
+                        && candidate.family() == rtc::Candidate::Family::Ipv4 && candidate.port() == opts.localPort
+                        && (opts.lanIp.isEmpty() || candidate.address() == opts.lanIp.toStdString()))
+                    {
+                        mappedCandidateSent = true;
+                        // RFC 8445: srflx type preference 100, retaining the base candidate's local preference/component.
+                        const auto priority = (100u << 24) | (candidate.priority() & 0x00ffffffu);
+                        const auto mapped = "candidate:livemixupnp 1 udp " + juce::String(priority) + " "
+                            + opts.externalIp + " " + juce::String(opts.localPort) + " typ srflx raddr "
+                            + juce::String(*candidate.address()) + " rport " + juce::String(opts.localPort);
+                        value.callbacks.onLocalCandidate(value.context.generation, mapped, candidate.mid(), 0);
+                    }
+                }
             });
         });
         peer->onGatheringStateChange([weak](rtc::PeerConnection::GatheringState state)
@@ -346,10 +390,20 @@ void WebGuestTransport::startAcceptedGuest(const c::WebConnection& context, Opti
                                              binary->size(), nowNs());
             });
         });
-        connection->sender = std::thread([connection] { connection->runSender(); });
         peer->setLocalDescription(rtc::Description::Type::Offer);
+        connection->sender = std::thread([connection] { connection->runSender(); });
     }
-    catch (const std::exception&) { connection->changeState(State::failed); }
+    catch (const std::exception&)
+    {
+        if (options.localPort == 0) { connection->changeState(State::failed); return; }
+        // Retire queued callbacks without reporting a failed/closed guest. close() still releases this attempt.
+        connection->state.store(State::closed);
+        startup.unlock();
+        options.localPort = 0;
+        options.externalIp.clear();
+        options.lanIp.clear();
+        startAcceptedGuest(context, options, connection->callbacks); // one retry with the original ICE configuration
+    }
 }
 
 void WebGuestTransport::applyRemoteDescription(uint32_t generation, const juce::String& type, const juce::String& sdp)
