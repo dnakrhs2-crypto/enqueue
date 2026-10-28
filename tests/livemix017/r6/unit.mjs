@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { ASRC, Drift } from '../../../livemix/webjoin/audio/asrc.js';
-import { FrameFIFO, TransferPool, normalChannelClose, expired, audioBudget } from '../../../livemix/webjoin/audio/buffers.js';
+import { FrameFIFO, TransferPool, normalChannelClose, expired, audioBudget, audioPackets } from '../../../livemix/webjoin/audio/buffers.js';
 import * as packet from '../../../livemix/webjoin/audio/packet.js';
 import { Playout } from '../../../livemix/webjoin/audio/playout.js';
 import { GuestAudio } from '../../../livemix/webjoin/audio/worklet.js';
@@ -317,13 +317,14 @@ await test('capture pools bound stalls, sample clock never rewinds', () => {
   audio.message({type:'configure',generation:1,wireRate:48000,deviceRate:48000,streamEpoch:1});
   const input=new Float32Array(128),l=new Float32Array(128),r=new Float32Array(128);
   for(let i=0;i<1000;i++) audio.process(input,l,r);
-  assert.equal(captured.length,8); assert.ok(audio.captureDropped>1000);
+  assert.equal(captured.length,audioPackets(48000)); assert.ok(audio.captureDropped>500);
   const oldFrame=audio.frame;
   for(const m of captured) audio.message({type:'recycle',pool:'capture',generation:1,buffer:m.buffer});
   captured.length=0; audio.process(input,l,r);
   assert.ok(captured[0].firstFrame>=BigInt(oldFrame));
-  assert.ok(expired(0,21)); assert.ok(!expired(0,20)); assert.equal(audioBudget(48000),2304);
-  return {maxInFlight:8,dropped:audio.captureDropped,resumedFrame:String(captured[0].firstFrame)};
+  // 10/28: a phone pausing 20 ms threw its own voice away - the page now keeps 400 ms (160 packets) on the way out.
+  assert.ok(expired(0,401)); assert.ok(!expired(0,400)); assert.equal(audioPackets(48000),160); assert.equal(audioBudget(48000),46080);
+  return {maxInFlight:audioPackets(48000),dropped:audio.captureDropped,resumedFrame:String(captured[0].firstFrame)};
 });
 await test('HTTP text/plain, stable signalId retry and accepted cursor switch', async () => {
   const calls=[];let failSignal=true; let s;
@@ -385,12 +386,14 @@ await test('main relay age/buffer limits recycle leases and normal abort ends cl
   });
   try {
     let result=await deliver(Date.now()-1000);assert.equal(result.sent,false);assert.equal(result.buffer.byteLength,288);
-    channel.bufferedAmount=2304;result=await deliver(Date.now());assert.equal(result.sent,false);
+    channel.bufferedAmount=audioBudget(48000);result=await deliver(Date.now());assert.equal(result.sent,false);
+    channel.bufferedAmount=2304;result=await deliver(Date.now()-100);assert.equal(result.sent,true);   // 10/28: a 100 ms old packet behind 8 queued ones still goes
+    sent.length=0;
     channel.bufferedAmount=0;result=await deliver(Date.now());assert.equal(result.sent,true);assert.equal(sent.length,1);
     channel.onerror({error:{name:'OperationError',message:'User-Initiated Abort'}});
     await client.finishTask;assert.equal(states.at(-1).state,'ended');assert.equal(errors.length,0);
   } finally {await client.dispose();workerPort?.close();Date.now=realNow;}
-  return {oldAudioSent:0,overBudgetAudioSent:0,normalAudioSent:1,recycledBytes:3*288,normalAbortErrors:0};
+  return {oldAudioSent:0,overBudgetAudioSent:0,normalAudioSent:2,recycledBytes:4*288,normalAbortErrors:0};
 });
 await test('microphone permission precedes join and cleanup releases actual resources', async () => {
   const navigatorDescriptor=Object.getOwnPropertyDescriptor(globalThis,'navigator');

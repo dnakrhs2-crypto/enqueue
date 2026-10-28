@@ -680,8 +680,11 @@ struct CollabTransport::Impl
         {
             if (! l.enabled) continue;
             if (! starHost) acknowledgeInstalledRoster (l);
+            // A web guest's page stops sending while its phone is in the background (10/28: dropped after three
+            // seconds). Its DataChannel, ICE consent (30 s) and bye end a guest that really left, so silence alone
+            // never removes a web link.
             if ((! l.txV2 && now - l.started >= 10000000000ULL)
-                || (l.txV2 && l.lastReceived != 0 && now - l.lastReceived >= 3000000000ULL))
+                || (l.txV2 && ! l.web && l.lastReceived != 0 && now - l.lastReceived >= 3000000000ULL))
             { leaveLink (l, State::disconnected); continue; }
             if (! l.web && ! l.bound && now - l.lastHello >= 100000000ULL)
             {

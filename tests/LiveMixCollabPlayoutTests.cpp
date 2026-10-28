@@ -178,6 +178,89 @@ public:
         }
     }
 };
+// A phone guest's voice as a host receives it (10/28: everyone on a PC heard the phone guest cut out). The browser hands
+// its packets over in 20 ms bursts; every packet that would leave during a radio stall leaves when the stall ends; a page
+// in the background stops its clock for a while and resumes with the next frame.
+struct PhoneUplink
+{
+    double stallEvery = 0, stallMs = 0, pauseAt = -1, pauseSeconds = 0, skewPpm = 0;
+    double release (uint64_t packet) const
+    {
+        double captured = (packet + 1) * 120.0 / (48000.0 * (1.0 + skewPpm * 1.0e-6));
+        if (pauseAt >= 0 && captured >= pauseAt) captured += pauseSeconds;
+        double at = std::ceil (captured * 50.0 - 1.0e-9) / 50.0;
+        if (stallEvery > 0 && at >= stallEvery)
+        {
+            const double phase = std::fmod (at, stallEvery);
+            if (phase < stallMs / 1000.0) at += stallMs / 1000.0 - phase;
+        }
+        return at;
+    }
+};
+struct PhoneRun { uint64_t underruns = 0, lateUnderruns = 0; double targetMs = 0, targetAt = 0; };
+PhoneRun runPhone (CollabPlayout::Profile profile, const PhoneUplink& link, double seconds, double lateFrom, double targetAt = -1)
+{
+    // gom's host: 44.1 kHz, 1024-frame ASIO blocks; the room's wire rate is 48 kHz.
+    constexpr int deviceRate = 44100, block = 1024;
+    CollabPlayout play (profile); play.prepare (deviceRate, block, 48000);
+    std::vector<float> left ((size_t) block), right ((size_t) block);
+    PhoneRun run; uint64_t next = 0;
+    for (int b = 0; b * (double) block / deviceRate <= seconds; ++b)
+    {
+        const double now = b * (double) block / deviceRate;
+        for (; link.release (next) <= now; ++next)
+        {
+            auto p = tone (next, 0.25f, 0, true, 48000); p.arrival = (uint64_t) (link.release (next) * 1.0e9); push (play, p);
+        }
+        const auto before = play.getStats().underruns;
+        play.pull (left.data(), right.data(), block);
+        if (now >= lateFrom) run.lateUnderruns += play.getStats().underruns - before;
+        if (targetAt >= 0 && run.targetAt == 0 && now >= targetAt) run.targetAt = play.getStats().targetMs;
+    }
+    run.underruns = play.getStats().underruns; run.targetMs = play.getStats().targetMs;
+    return run;
+}
+
+class LiveMixCollabWebPlayoutTests : public juce::UnitTest
+{
+public:
+    LiveMixCollabWebPlayoutTests() : UnitTest ("LiveMix Collab web playout", "LiveMix") {}
+    void runTest() override
+    {
+        beginTest ("a phone's 20 ms bursts and 90 ms Wi-Fi stalls every 3 s play through; the native playout kept cutting out");
+        {
+            PhoneUplink wifi; wifi.stallEvery = 3; wifi.stallMs = 90; wifi.skewPpm = 300;
+            const auto native = runPhone (CollabPlayout::Profile::native, wifi, 120, 60);
+            const auto web = runPhone (CollabPlayout::Profile::web, wifi, 120, 30);
+            logMessage ("native underruns " + juce::String ((int) native.underruns) + ", web underruns " + juce::String ((int) web.underruns)
+                        + ", web target " + juce::String (web.targetMs, 1) + " ms");
+            expectGreaterThan ((int) native.underruns, 10);
+            expectLessOrEqual ((int) web.underruns, 2);
+            expectEquals ((int) web.lateUnderruns, 0);
+            expectLessOrEqual (web.targetMs, 170.0);
+        }
+
+        beginTest ("350 ms LTE stalls every 10 s: the first is learnt, the rest play through below the 400 ms ceiling");
+        {
+            PhoneUplink lte; lte.stallEvery = 10; lte.stallMs = 350; lte.skewPpm = -200;
+            const auto web = runPhone (CollabPlayout::Profile::web, lte, 180, 40);
+            logMessage ("web underruns " + juce::String ((int) web.underruns) + ", target " + juce::String (web.targetMs, 1) + " ms");
+            expectLessOrEqual ((int) web.underruns, 3);
+            expectEquals ((int) web.lateUnderruns, 0);
+            expectLessOrEqual (web.targetMs, 400.0);
+        }
+
+        beginTest ("six seconds in the background resume without holding the buffer at its ceiling");
+        {
+            PhoneUplink pause; pause.pauseAt = 20; pause.pauseSeconds = 6;
+            const auto web = runPhone (CollabPlayout::Profile::web, pause, 90, 40, 70);
+            logMessage ("web underruns " + juce::String ((int) web.underruns) + ", target at 70 s " + juce::String (web.targetAt, 1) + " ms");
+            expectEquals ((int) web.lateUnderruns, 0);
+            expectLessThan (web.targetAt, 150.0);
+        }
+    }
+};
 static LiveMixCollabPlayoutTests liveMixCollabPlayoutTests;
 static LiveMixCollabClockTests liveMixCollabClockTests;
+static LiveMixCollabWebPlayoutTests liveMixCollabWebPlayoutTests;
 }

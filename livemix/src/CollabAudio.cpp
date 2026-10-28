@@ -212,7 +212,8 @@ void CollabAudio::applyRoster (const RosterSnapshot& roster, c::ParticipantId se
             slot.playout = previous.playout;
         if (! slot.playout)
         {
-            slot.playout = std::make_shared<CollabPlayout>();
+            slot.playout = std::make_shared<CollabPlayout> (slot.kind == c::ParticipantKind::web ? CollabPlayout::Profile::web
+                                                                                                : CollabPlayout::Profile::native);
             if (ready.load()) slot.playout->prepare (publishedRate.load(), (int) monitor[0].left.size(), wireRate.load());
         }
     }

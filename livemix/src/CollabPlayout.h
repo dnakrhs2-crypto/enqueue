@@ -11,6 +11,11 @@ class CollabPlayout
 {
 public:
     enum class State { off, buffering, playing };
+    // A web guest speaks from a phone or a browser: its packets leave in bursts and its radio stalls for tens to hundreds
+    // of milliseconds, then plays on. Its playout sizes the buffer from the arrival spread measured all through the call,
+    // as the web page's own playout does (livemix/webjoin/audio/playout.js). A LiveMix participant keeps the native one.
+    enum class Profile { native, web };
+    explicit CollabPlayout (Profile p = Profile::native) noexcept : profile (p) {}
     struct Stats
     {
         State state;
@@ -35,6 +40,11 @@ private:
         std::array<float, framesPerPacket * channels> pcm {};
     };
     void measure (const Header&, uint64_t arrivalNs) noexcept;
+    void measureWeb (const Header&, uint64_t arrivalNs) noexcept;
+    void resetWebSpread() noexcept;
+    double startTargetMs() const noexcept { return profile == Profile::web ? webStartMs : 10.0; }
+    double startFloorMs() const noexcept { return profile == Profile::web ? webFloorMs : packetMs; }
+    double ceilingMs() const noexcept { return profile == Profile::web ? webCeilingMs : 120.0; }
     bool pushPacket (const Header&, const uint8_t*, uint64_t arrivalNs, bool mono) noexcept;
     void resetPlayback (uint64_t epoch, bool newSender) noexcept;
     bool startPlayback (int frames) noexcept;
@@ -67,6 +77,24 @@ private:
     bool measuring = true;
     std::array<double, 1024> delays {};
     std::array<double, 1024> frameTimes {};
+
+    // Web profile (10/28: a phone's voice cut out at the host while this playout started at 10 ms and grew by one
+    // packet per dropout). The freshest arrival of the last two seconds is the zero of the delay spread; the largest
+    // spread of the last five minutes plus a packet is the buffer, between 20 and 400 ms (Fold7 10/27: Wi-Fi 96 ms,
+    // LTE 352 ms stalls). A call starts at 100 ms. Receiver-owned; the audio thread reads only webSpreadMs.
+    const Profile profile;
+    static constexpr double webStartMs = 100.0, webFloorMs = 20.0, webCeilingMs = 400.0, webStepDownSeconds = 2.0;
+    static constexpr size_t baseBuckets = 8, peakSeconds = 300;
+    static constexpr uint64_t baseBucketNs = 250000000ULL, restartGapNs = 1000000000ULL;
+    std::array<int64_t, baseBuckets> baseBucket {};
+    std::array<double, baseBuckets> baseDelay {};
+    std::array<int64_t, peakSeconds> peakSecond {};
+    std::array<double, peakSeconds> peakSpread {};
+    int64_t spreadSecond = -1;
+    double spreadPeak = 0, base = 0;
+    bool haveBase = false, haveArrival = false;
+    uint64_t lastArrival = 0;
+    std::atomic<double> webSpreadMs { 0 };
 
     // Audio-owned playback, PLC and controller state.
     uint64_t audioEpoch = 0, nextFrame = 0;

@@ -19,7 +19,8 @@ void CollabPlayout::prepare (double rate, int maxBlock, uint32_t roomRate)
     producerEpoch = audioEpoch = 0; sender = 0;
     seenRebuffer = rebufferRequest.load(); seenMeasurement = measurementRequest.load();
     measuring = true; delayCount = 0; measuredFloor.store (packetMs); measuredVersion.store (0); seenVersion = 0;
-    target = 10.0; floor = packetMs; stableSeconds = lossClock = 0.0; holdFloor = holdSeconds = 0.0; lossBucket = 0;
+    resetWebSpread();
+    target = startTargetMs(); floor = startFloorMs(); stableSeconds = lossClock = 0.0; holdFloor = holdSeconds = 0.0; lossBucket = 0;
     recentTotal.fill (0); recentLost.fill (0);
     received.store (0); lost.store (0); late.store (0); underruns.store (0);
     playing = false; packetPosition = framesPerPacket; packetReal = concealed = false;
@@ -81,6 +82,49 @@ void CollabPlayout::measure (const Header& h, uint64_t now) noexcept
     measuredVersion.fetch_add (1); measuring = false;
 }
 
+void CollabPlayout::resetWebSpread() noexcept
+{
+    baseBucket.fill (-1); peakSecond.fill (-1);
+    spreadSecond = -1; spreadPeak = 0; haveBase = haveArrival = false; lastArrival = 0;
+    webSpreadMs.store (0);
+}
+
+void CollabPlayout::measureWeb (const Header& h, uint64_t arrivalNs) noexcept
+{
+    const auto request = measurementRequest.load();
+    if (request != seenMeasurement) { seenMeasurement = request; resetWebSpread(); }
+    // A pause over a second - the guest's page in the background, a radio handover - starts a new zero: the backlog it
+    // then delivers at once is not network spread, and must not keep the buffer at its ceiling for five minutes.
+    if (haveArrival && arrivalNs > lastArrival + restartGapNs) { baseBucket.fill (-1); haveBase = false; }
+    lastArrival = haveArrival ? std::max (lastArrival, arrivalNs) : arrivalNs; haveArrival = true;
+    const double delay = (double) arrivalNs / 1.0e6 - (double) h.firstFrame * 1000.0 / wireRate;
+    if (haveBase)
+    {
+        const double spread = std::max (0.0, delay - base);
+        const auto second = (int64_t) (arrivalNs / 1000000000ULL);
+        const auto i = (size_t) (second % (int64_t) peakSeconds);
+        if (peakSecond[i] != second) { peakSecond[i] = second; peakSpread[i] = spread; }
+        else peakSpread[i] = std::max (peakSpread[i], spread);
+        if (second != spreadSecond)
+        {
+            spreadSecond = second; spreadPeak = 0;
+            for (size_t j = 0; j < peakSeconds; ++j)
+                if (peakSecond[j] >= 0 && second - peakSecond[j] < (int64_t) peakSeconds) spreadPeak = std::max (spreadPeak, peakSpread[j]);
+        }
+        else spreadPeak = std::max (spreadPeak, spread);
+        webSpreadMs.store (spreadPeak);
+    }
+    // The zero moves after the spread: a stall longer than its window still counts in full.
+    const auto bucket = (int64_t) (arrivalNs / baseBucketNs);
+    const auto b = (size_t) (bucket % (int64_t) baseBuckets);
+    if (baseBucket[b] != bucket) { baseBucket[b] = bucket; baseDelay[b] = delay; }
+    else baseDelay[b] = std::min (baseDelay[b], delay);
+    base = std::numeric_limits<double>::infinity();
+    for (size_t j = 0; j < baseBuckets; ++j)
+        if (baseBucket[j] >= 0 && bucket - baseBucket[j] < (int64_t) baseBuckets) base = std::min (base, baseDelay[j]);
+    haveBase = true;
+}
+
 bool CollabPlayout::push (const Header& h, const uint8_t* payload, uint64_t arrivalNs) noexcept
 {
     if (! slots || payload == nullptr || h.kind != Kind::audio || h.frames != framesPerPacket
@@ -102,10 +146,10 @@ bool CollabPlayout::pushPacket (const Header& h, const uint8_t* payload, uint64_
     if (producerEpoch == 0 || sender != h.sender)
     {
         sender = h.sender; ++producerEpoch;
-        delayCount = 0; measuring = true;
+        delayCount = 0; measuring = true; resetWebSpread();
     }
     // Late packets belong to the delay distribution too, but duplicates must not weight its tail.
-    measure (h, arrivalNs);
+    if (profile == Profile::web) measureWeb (h, arrivalNs); else measure (h, arrivalNs);
     if (cursorEpoch.load() == producerEpoch && h.firstFrame < cursor.load()) { late.fetch_add (1); return false; }
     auto& slot = slots[(h.firstFrame / framesPerPacket) % slotCount];
     unsigned expected = slot.state.load (std::memory_order_acquire);
@@ -177,7 +221,7 @@ void CollabPlayout::resetPlayback (uint64_t epoch, bool newSender) noexcept
     if (newSender)
     {
         cursorEpoch.store (0);
-        target = 10.0; floor = packetMs; holdFloor = holdSeconds = 0.0; resetDrift();
+        target = startTargetMs(); floor = startFloorMs(); holdFloor = holdSeconds = 0.0; resetDrift();
         recentTotal.fill (0); recentLost.fill (0); lossPercent.store (0);
     }
 }
@@ -238,7 +282,7 @@ bool CollabPlayout::loadPacket() noexcept
     if (! found && readyFrames.load() == 0)
     {
         recordPacket (true); underruns.fetch_add (1);
-        target = std::min (120.0, target + packetMs); holdFloor = target; holdSeconds = underrunHoldSeconds; beginRefill();
+        target = std::min (ceilingMs(), target + packetMs); holdFloor = target; holdSeconds = underrunHoldSeconds; beginRefill();
         return false;
     }
     recordPacket (! found);
@@ -275,7 +319,7 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
     if (request != seenRebuffer)
     {
         seenRebuffer = request; measurementRequest.fetch_add (1);
-        resetPlayback (audioEpoch, false); target = 10.0; floor = packetMs; holdFloor = holdSeconds = 0.0;
+        resetPlayback (audioEpoch, false); target = startTargetMs(); floor = startFloorMs(); holdFloor = holdSeconds = 0.0;
     }
     const auto measurement = measuredVersion.load();
     if (measurement != seenVersion)
@@ -295,6 +339,15 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
         const int n = std::min (blockSize, frames - offset);
         std::fill_n (output.data(), n * channels, 0.0f);
         concealed = false;
+        double needed = 0;
+        if (profile == Profile::web)
+        {
+            // The fill is read after each device block, so a stall must be covered by the spread plus one whole block
+            // (gom's 1024 frames at 44.1 kHz = 23 ms). A larger need applies at once: a refill waits for it, playback slews to it.
+            needed = std::clamp (std::max (webSpreadMs.load() + packetMs + 1000.0 * blockSize / deviceRate,
+                                           holdSeconds > 0 ? holdFloor : 0.0), webFloorMs, webCeilingMs);
+            if (needed > target) target = needed;
+        }
         if (! playing) startPlayback (n);
         int made = 0;
         while (playing && made < n)
@@ -320,8 +373,13 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
         if (playing && ! concealed && fadeIn == 0)
         {
             stableSeconds += dt;
+            if (profile == Profile::web)
+            {
+                // After a calm stretch a web guest's buffer steps back toward what the last five minutes needed.
+                if (stableSeconds >= webStepDownSeconds) { target = std::max (needed, target - packetMs); stableSeconds = 0; }
+            }
             // 10/16 two-PC test: each return to the 5.4 ms first-second floor ended in the next delay spike's dropout
-            if (stableSeconds >= 30.0)
+            else if (stableSeconds >= 30.0)
             {
                 target = std::max ({ floor, holdSeconds > 0 ? holdFloor : floor, target - packetMs * 0.5 });
                 stableSeconds = 0;

@@ -194,7 +194,8 @@ struct FakeWeb
             Mailbox<64>::Message m;
             while (! stopping.load())
             {
-                while (controls.pop (m))
+                // A page in the background answers nothing (its queued controls wait, as the browser's would).
+                while (! paused.load() && controls.pop (m))
                 {
                     c::HeaderV2 h; const uint8_t* payload = nullptr;
                     if (! readPacketV2 (m.data.data(), m.bytes, h, payload)) { ++trace->errors; continue; }
@@ -224,7 +225,7 @@ struct FakeWeb
     uint32_t id;
     std::unique_ptr<Trace> trace;
     Mailbox<64> controls, injections;
-    std::atomic<bool> stopping { false }, holdAck { false }, congested { false };
+    std::atomic<bool> stopping { false }, holdAck { false }, congested { false }, paused { false };
     std::atomic<unsigned> rosters { 0 }, revision { 0 };
     std::thread worker;
     CollabTransport::WebLinkSend senders()
@@ -373,6 +374,26 @@ public:
                 expectEquals (web->trace->errors.load(), 0u, label);
                 host.transport.stop(); web.reset();
             }
+        }
+
+        beginTest ("a web guest silent for six seconds (a phone in the background) keeps its place and is heard again");
+        {
+            // 10/28: the host dropped a phone guest three seconds after its page went to the background.
+            Node host (1);
+            expect (host.transport.open (0, true).isEmpty());
+            auto r = room ({ 1, 3 }, true);
+            host.start (r, {});
+            auto web = std::make_unique<FakeWeb> (host.transport, 3);
+            host.transport.setWebLink (3, 33, web->senders());
+            expect (until ([&] { return host.transport.getStats (3).v2; }));
+            web->paused = true;
+            std::this_thread::sleep_for (std::chrono::milliseconds (6000));
+            expectEquals (host.trace->states[3].load(), (int) CollabTransport::State::connected);
+            web->paused = false;
+            const auto mono = audioHeader (r, 3, 5, true); const auto pcm = samples (3, true);
+            web->inject (mono, pcm.data());
+            expect (until ([&] { return host.trace->origins[3].load() == 1; }));
+            host.transport.stop(); web.reset();
         }
 
         beginTest ("native handshake retries, address/origin/revision validation, restart ACK and independent disconnect");

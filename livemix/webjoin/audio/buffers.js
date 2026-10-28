@@ -1,7 +1,10 @@
 // Bounded storage shared by the transport and render threads. No shared memory.
 export const FRAMES = 120;
-export const MAX_AGE_MS = 20;
-export const audioPackets = rate => Math.ceil(rate * 0.020 / FRAMES);
+// How long the guest's own voice may wait on its way out. A phone's audio thread, worker and radio pause for tens to
+// hundreds of milliseconds; with 20 ms here (until 10/28) the page threw that voice away itself, and everyone on a PC
+// heard the phone guest cut out. The host's web playout absorbs the delay, up to 400 ms.
+export const MAX_AGE_MS = 400;
+export const audioPackets = rate => Math.ceil(rate * MAX_AGE_MS / 1000 / FRAMES);
 export const audioBudget = rate => audioPackets(rate) * 288;
 export const expired = (createdAtMs, now = Date.now()) => now - createdAtMs > MAX_AGE_MS;
 
