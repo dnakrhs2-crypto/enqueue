@@ -131,6 +131,19 @@ struct CollabTransport::Impl
     size_t rttCount = 0, rttIndex = 0;
     double rttMs = 0;
     bool loopback = false;
+    int defaultTtl = 0;
+    struct HelloWarmup
+    {
+        int ttl = 0;
+        uint64_t until = 0;
+        void start (int value, int milliseconds)
+        {
+            ttl = value;
+            until = value > 0 && milliseconds > 0 ? nowNs() + (uint64_t) milliseconds * 1000000ULL : 0;
+        }
+        int currentTtl() const { return nowNs() < until ? ttl : 0; }
+        void received() { until = 0; }
+    } helloWarmup;
     std::vector<sockaddr_in> punchTargets;
     uint64_t punchUntil = 0, lastPunch = 0;
     std::atomic<uint64_t> punched { 0 };
@@ -160,6 +173,7 @@ struct CollabTransport::Impl
         bool enabled = false, web = false, bound = false, offered = false, offerAccepted = false;
         bool txV2 = false, rxV2 = false;
         bool rosterAckPending = false;
+        HelloWarmup helloWarmup;
         State state = State::off;
         sockaddr_in address {};
         std::vector<sockaddr_in> candidates;
@@ -309,7 +323,8 @@ struct CollabTransport::Impl
         std::array<uint8_t, 128> payload {};
         if (kind == Kind::hello || kind == Kind::welcome) h.payloadBytes = (uint16_t) writePeerInfo (payload.data(), starMe);
         if (kind == Kind::ping || kind == Kind::pong) { h.payloadBytes = 8; writeTimestamp (payload.data(), stamp); }
-        send (h, payload.data(), to); ++linkSent[indexOf (l)];
+        send (h, payload.data(), to, ! starHost && kind == Kind::hello ? l.helloWarmup.currentTtl() : 0);
+        ++linkSent[indexOf (l)];
     }
     void sendOffer (Link& l, uint64_t now)
     {
@@ -469,6 +484,9 @@ struct CollabTransport::Impl
         if (lp == nullptr || lp->web) return;
         auto& l = *lp;
         if (l.bound && ! sameAddress (l.address, d.address)) return;
+        if (! starHost && (l.bound || h.kind == Kind::punch
+            || std::any_of (l.candidates.begin(), l.candidates.end(), [&] (const auto& a) { return sameAddress (a, d.address); })))
+            l.helloWarmup.received();
         if (h.kind == Kind::punch && ! starHost && ! l.bound)
         {
             if (l.candidates.size() < 16 && std::none_of (l.candidates.begin(), l.candidates.end(),
@@ -521,6 +539,10 @@ struct CollabTransport::Impl
         auto* lp = linkFor (starHost ? h.linkSender : c::hostParticipant);
         if (lp == nullptr || lp->web != fromWeb) return;
         auto& l = *lp;
+        if (! starHost && ! fromWeb && h.linkSender == l.id
+            && (l.bound ? sameAddress (l.address, d.address)
+                        : std::any_of (l.candidates.begin(), l.candidates.end(), [&] (const auto& a) { return sameAddress (a, d.address); })))
+            l.helloWarmup.received();
         if ((fromWeb && (! starHost || d.generation != l.generation || d.generation == 0))
             || (! fromWeb && (! l.bound || ! sameAddress (l.address, d.address)))
             || h.linkSender != l.id || (starHost && h.origin != l.id)) return;
@@ -771,12 +793,17 @@ struct CollabTransport::Impl
         const AudioAccess access (*this);
         if (access.audio != nullptr) access.audio->setConnected (value == State::connected);
     }
-    void send (Header h, const uint8_t* payload, const sockaddr_in& address)
+    void send (Header h, const uint8_t* payload, const sockaddr_in& address, int ttl = 0)
     {
         std::array<uint8_t, maxDatagram> packet;
         const auto size = writePacket (packet.data(), packet.size(), h, payload);
+        // v1 sends hold control; v2 sends belong to the single transmitter. Restore after this
+        // datagram so punches, replies, audio and later sessions retain the socket's own TTL.
+        const bool changed = ttl > 0 && defaultTtl > 0
+            && setsockopt (socket, IPPROTO_IP, IP_TTL, reinterpret_cast<const char*> (&ttl), sizeof (ttl)) == 0;
         if (size > 0 && sendto (socket, reinterpret_cast<const char*> (packet.data()), (int) size, 0,
                               reinterpret_cast<const sockaddr*> (&address), sizeof (address)) == (int) size) sent.fetch_add (1);
+        if (changed) setsockopt (socket, IPPROTO_IP, IP_TTL, reinterpret_cast<const char*> (&defaultTtl), sizeof (defaultTtl));
     }
     void sendControl (Kind kind, const sockaddr_in& to, uint64_t stamp = 0)
     {
@@ -789,7 +816,7 @@ struct CollabTransport::Impl
             h.payloadBytes = (uint16_t) writePeerInfo (payload.data(), me);
         }
         if (kind == Kind::ping || kind == Kind::pong) { h.payloadBytes = 8; writeTimestamp (payload.data(), stamp); }
-        send (h, payload.data(), to);
+        send (h, payload.data(), to, ! host && kind == Kind::hello ? helloWarmup.currentTtl() : 0);
     }
     void acceptPeer (const Header& h, const PeerInfo& info, const sockaddr_in& from, uint64_t now)
     {
@@ -813,6 +840,8 @@ struct CollabTransport::Impl
             sockaddr_in from {}; int addressBytes = sizeof (from);
             const int bytes = recvfrom (socket, reinterpret_cast<char*> (data.data()), (int) data.size(), 0,
                                         reinterpret_cast<sockaddr*> (&from), &addressBytes);
+            // Low-TTL hellos can produce ICMP Time Exceeded (WSAENETRESET). It is not
+            // a host packet or a link failure; keep receiving without changing state.
             if (bytes <= 0) continue;
             if (isStunSuccess (data.data(), (size_t) bytes))
             {
@@ -842,6 +871,10 @@ struct CollabTransport::Impl
                 continue;
             }
             if (! roleStarted || h.session != session || h.sender == sender) continue;
+            if (! host && ((havePeer && h.sender == peerSender && sameAddress (peerAddress, from))
+                || (! havePeer && (h.kind == Kind::punch
+                    || std::any_of (candidates.begin(), candidates.end(), [&] (const auto& a) { return sameAddress (a, from); })))))
+                helloWarmup.received();
             if (h.kind == Kind::punch)
             {
                 // The host knocked through its own router: answer on the very address it came from as well
@@ -981,6 +1014,9 @@ juce::String CollabTransport::open (int wantedPort, bool loopbackOnly)
     if (! i.winsock || wantedPort < 0 || wantedPort > 65535) return failure();
     i.socket = socket (AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (i.socket == INVALID_SOCKET) return failure();
+    i.defaultTtl = 0;
+    int ttlBytes = sizeof (i.defaultTtl);
+    getsockopt (i.socket, IPPROTO_IP, IP_TTL, reinterpret_cast<char*> (&i.defaultTtl), &ttlBytes);
     const int size = 64 * 1024;
     const DWORD timeout = 50;
     setsockopt (i.socket, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*> (&size), sizeof (size));
@@ -1019,6 +1055,7 @@ void CollabTransport::startHost (uint64_t session, const PeerInfo& me)
     }
     auto& i = *impl; const juce::ScopedLock lock (i.control);
     i.session = session; i.me = me; i.host = true; i.roleStarted = true; i.havePeer = false;
+    i.helloWarmup = {};
     i.sender = (uint32_t) juce::Random::getSystemRandom().nextInt(); if (i.sender == 0) i.sender = 1;
     i.lastHello = i.lastPing = 0; i.rttCount = i.rttIndex = 0; i.rttMs = 0;
     i.sent.store (0); i.received.store (0); i.sequence.store (0);
@@ -1098,12 +1135,13 @@ CollabTransport::Mapping CollabTransport::discoverPublic (const std::vector<Addr
     i.stunQueries.clear();
     return result;
 }
-void CollabTransport::startGuest (uint64_t session, const std::vector<Address>& candidates, const PeerInfo& me)
+void CollabTransport::startGuest (uint64_t session, const std::vector<Address>& candidates, const PeerInfo& me,
+                                int helloTtl, int helloTtlMs)
 {
     if (impl->useV2.load())
     {
         { const Impl::AudioAccess access (*impl); if (access.audio != nullptr) access.audio->startSession(); }
-        impl->post ([i = impl.get(), session, candidates, me]
+        impl->post ([i = impl.get(), session, candidates, me, helloTtl, helloTtlMs]
         {
             if (i->selfId == c::hostParticipant || i->roster.session != session) return;
             i->starHost = false; i->starStarted = true; i->starMe = me; i->starMe.wireRate = i->roster.wireRate;
@@ -1111,6 +1149,7 @@ void CollabTransport::startGuest (uint64_t session, const std::vector<Address>& 
             if (auto* l = i->linkFor (c::hostParticipant))
             {
                 l->started = nowNs();
+                l->helloWarmup.start (helloTtl, helloTtlMs);
                 if (l->candidates.empty())
                     for (const auto& a : candidates) { sockaddr_in to {}; if (resolve (a, to)) l->candidates.push_back (to); }
             }
@@ -1121,6 +1160,7 @@ void CollabTransport::startGuest (uint64_t session, const std::vector<Address>& 
     startHost (session, me);
     auto& i = *impl; const juce::ScopedLock lock (i.control);
     i.host = false; i.candidates.clear();
+    i.helloWarmup.start (helloTtl, helloTtlMs);
     for (const auto& address : candidates) { sockaddr_in addr {}; if (resolve (address, addr)) i.candidates.push_back (addr); }
     i.changeState (State::connecting); SetEvent (i.wake);
 }

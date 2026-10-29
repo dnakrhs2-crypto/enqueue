@@ -7,6 +7,8 @@
 #include "LiveMixSettings.h"
 #include "MixEngine.h"
 #include "LiveMixCollabTestHelpers.h"
+#include "LiveMixCollabUdpPeer.h"
+#include "app/AppVersion.h"
 #include "lm_obs_metadata.h"
 #include "ui/UiUtils.h"
 #include "ui/CollabWindow.h"
@@ -741,6 +743,173 @@ public:
     }
 };
 static LiveMixCollabSessionTests liveMixCollabSessionTests;
+
+namespace
+{
+struct PunchGuest
+{
+    PunchGuest (bool v2, const juce::String& nativeState = "punch", bool sameNetwork = false,
+                CollabSession::Options options = {})
+        : settings (directory.file), audio ("Local\\LiveMix.Punch.Test." + juce::Uuid().toString())
+    {
+        audio.prepare (48000, 120);
+        options.loopbackOnly = true; options.stunServers.clear();
+        auto joined = object ({ { "session", sessionHex }, { "hostNick", "Host" }, { "sameNetwork", sameNetwork },
+            { "candidates", juce::Array<juce::var> { object ({ { "ip", "127.0.0.1" }, { "port", host.port } }) } } });
+        if (nativeState.isNotEmpty())
+        {
+            auto* o = joined.getDynamicObject();
+            juce::Array<juce::var> caps, members;
+            for (const auto& cap : livemix::collab::contracts::capabilityNames) caps.add (cap.name);
+            for (int id : { 1, 2 })
+                members.add (object ({ { "participantId", id }, { "kind", "native" }, { "nick", id == 1 ? "Host" : "Guest" },
+                    { "appVersion", v2 ? "0.17.0" : "0.16.0" }, { "protocols", v2 ? juce::Array<juce::var> { 1, 2 } : juce::Array<juce::var> { 1 } },
+                    { "capabilities", v2 ? caps : juce::Array<juce::var>() }, { "connectionGeneration", id },
+                    { "streamEpoch", 1 }, { "state", id == 1 ? "connected" : "connecting" } }));
+            o->setProperty ("apiVersion", 2); o->setProperty ("code", "0842"); o->setProperty ("roomMode", v2 ? "v2" : "legacy2");
+            o->setProperty ("wireRate", 48000); o->setProperty ("revision", 1); o->setProperty ("nativeState", nativeState);
+            o->setProperty ("capabilities", v2 ? caps : juce::Array<juce::var>()); o->setProperty ("members", members);
+            o->setProperty ("reservations", juce::Array<juce::var>());
+            o->setProperty ("participantId", 2); o->setProperty ("connectionGeneration", 2); o->setProperty ("streamEpoch", 1);
+        }
+        session = std::make_unique<CollabSession> (audio, settings,
+            std::make_unique<CollabRoom> ([joined] (const auto&) { return response (joined); }, "http://127.0.0.1:8899"),
+            std::make_unique<FakeUpnp> (std::make_shared<UpnpState>()), options);
+    }
+    void join() { session->joinRoom ("0842", "Guest"); }
+    int port() { return CollabSessionTestAccess::transport (*session).getLocalPort(); }
+    void send (Kind kind)
+    {
+        Header h; h.kind = kind; h.session = sessionNumber; h.sender = 1;
+        std::array<uint8_t, 128> payload {};
+        if (kind == Kind::welcome) h.payloadBytes = (uint16_t) writePeerInfo (payload.data(), { "Host", "0.17.0" });
+        host.send (port(), h, payload.data());
+    }
+    TempDirectory directory;
+    LiveMixSettings settings;
+    CollabAudio audio;
+    collabtest::UdpPeer host;
+    std::unique_ptr<CollabSession> session;
+};
+}
+
+class LiveMixCollabPunchTests : public juce::UnitTest
+{
+public:
+    LiveMixCollabPunchTests() : UnitTest ("LiveMix Collab punch start", "LiveMix") {}
+    void runTest() override
+    {
+        beginTest ("peer info advertises the target build version while server compatibility stays unchanged");
+        {
+            auto service = std::make_shared<FakeService>(); Fixture guest (service);
+            expectEquals (CollabSessionTestAccess::localInfo (*guest.session).appVersion, appVersionString());
+            service->openAt (freePort()); guest.session->joinRoom ("0842", "Guest");
+            expect (until ([&] { return service->count ("join") > 0; }));
+            expectEquals (service->last ("join")["appVersion"].toString(), juce::String ("0.17.0"));
+        }
+        for (const bool v2 : { true, false })
+        {
+            const juce::String mode = v2 ? "v2: " : "legacy2: ";
+            beginTest (mode + "punch guest starts with TTL 3 and answers host punch with default TTL");
+            {
+                PunchGuest guest (v2); expect (guest.host.ready); guest.join();
+                int ttl = 0;
+                expect (until ([&] { return guest.host.receive (Kind::hello, ttl); })); expectEquals (ttl, 3);
+                guest.send (Kind::punch);
+                expect (until ([&] { return guest.host.receive (Kind::hello, ttl); })); expectEquals (ttl, guest.host.defaultTtl);
+                guest.send (Kind::welcome);
+                expect (until ([&] { return guest.session->getSnapshot().state == State::connected; }));
+                expect (until ([&] { return guest.host.receive (Kind::ping, ttl); })); expectEquals (ttl, guest.host.defaultTtl);
+            }
+            beginTest (mode + "without host packets TTL returns to default after three seconds");
+            {
+                PunchGuest guest (v2); guest.join(); int ttl = 0;
+                expect (until ([&] { return guest.host.receive (Kind::hello, ttl); })); expectEquals (ttl, 3);
+                const auto first = juce::Time::getMillisecondCounterHiRes();
+                expect (until ([&] { return guest.host.receive (Kind::hello, ttl) && ttl == guest.host.defaultTtl; }, 4200));
+                const auto elapsed = juce::Time::getMillisecondCounterHiRes() - first;
+                expectGreaterThan (elapsed, 2800.0); expectLessThan (elapsed, 4200.0);
+                expect (guest.session->getSnapshot().state == State::joining);
+            }
+            beginTest (mode + "reachable host and same-network join use default TTL immediately");
+            for (bool sameNetwork : { false, true })
+            {
+                PunchGuest guest (v2, sameNetwork ? "punch" : "reachable", sameNetwork); guest.join(); int ttl = 0;
+                expect (until ([&] { return guest.host.receive (Kind::hello, ttl); })); expectEquals (ttl, guest.host.defaultTtl);
+            }
+            beginTest (mode + "never-connected link reports connection failure and permits rejoin");
+            {
+                CollabSession::Options options;
+                // Exercise the v2 transport's real ten-second deadline, not only the session timer.
+                options.connectTimeoutMs = v2 ? 15000 : 400;
+                PunchGuest guest (v2, "punch", false, options); guest.join();
+                expect (until ([&] { auto s = guest.session->getSnapshot().state; return s == State::error || s == State::off; }, 11500));
+                expect (guest.session->getSnapshot().state == State::error);
+                expectEquals (guest.session->getSnapshot().message, ko ("방장 PC에 연결하지 못했습니다"));
+                expect (until ([&] { return guest.port() == 0; }));
+                guest.join();
+                expect (until ([&] { return CollabSessionTestAccess::transport (*guest.session).getState() == CollabTransport::State::connecting; }));
+                guest.send (Kind::welcome);
+                expect (until ([&] { return guest.session->getSnapshot().state == State::connected; }));
+                guest.send (Kind::bye);
+                expect (until ([&] { return guest.session->getSnapshot().state == State::off; }));
+                expectEquals (guest.session->getSnapshot().message, ko ("방장이 방을 닫았습니다"));
+            }
+            beginTest (mode + "a connected host that falls silent reports disconnection, not room closure");
+            {
+                PunchGuest guest (v2); guest.join(); int ttl = 0;
+                expect (until ([&] { return guest.host.receive (Kind::hello, ttl); }));
+                guest.send (Kind::welcome);
+                expect (until ([&] { return guest.session->getSnapshot().state == State::connected; }));
+                expect (until ([&] { return guest.session->getSnapshot().state != State::connected; }, 11500));
+                if (v2)
+                {
+                    expect (guest.session->getSnapshot().state == State::off);
+                    expectEquals (guest.session->getSnapshot().message, ko ("연결 끊김"));
+                }
+                else expect (guest.session->getSnapshot().state == State::disconnected);
+            }
+        }
+        beginTest ("a join without a room snapshot retains the legacy default TTL");
+        {
+            PunchGuest guest (false, {}); guest.join(); int ttl = 0;
+            expect (until ([&] { return guest.host.receive (Kind::hello, ttl); })); expectEquals (ttl, guest.host.defaultTtl);
+        }
+        beginTest ("host punch and welcome keep the socket's default TTL");
+        for (bool v2 : { true, false })
+        {
+            CollabTransport host; expect (host.open (0, true).isEmpty());
+            collabtest::UdpPeer guest; expect (guest.ready); int ttl = 0;
+            if (v2) host.configureV2 (1, collabtest::rosterFor ({ 1, 2 }), { { 2, 2, { { "127.0.0.1", guest.port } } } }, {});
+            host.startHost (sessionNumber, { "Host" });
+            host.punch ({ { "127.0.0.1", guest.port } }, 1000);
+            expect (until ([&] { return guest.receive (Kind::punch, ttl); })); expectEquals (ttl, guest.defaultTtl);
+            Header hello; hello.kind = Kind::hello; hello.session = sessionNumber; hello.sender = 2;
+            std::array<uint8_t, 128> payload {}; hello.payloadBytes = (uint16_t) writePeerInfo (payload.data(), { "Guest" });
+            guest.send (host.getLocalPort(), hello, payload.data());
+            expect (until ([&] { return guest.receive (Kind::welcome, ttl); })); expectEquals (ttl, guest.defaultTtl);
+        }
+    }
+};
+static LiveMixCollabPunchTests liveMixCollabPunchTests;
+
+class LiveMixCollabPunchOptionsTests : public juce::UnitTest
+{
+public:
+    LiveMixCollabPunchOptionsTests() : UnitTest ("LiveMix Collab punch options", "LiveMix") {}
+    void runTest() override
+    {
+        for (bool v2 : { true, false })
+        {
+            beginTest (juce::String (v2 ? "v2" : "legacy2") + " uses the configured hello TTL and duration");
+            CollabSession::Options options; options.punchHelloTtl = 5; options.punchHelloMs = 600;
+            PunchGuest guest (v2, "punch", false, options); guest.join(); int ttl = 0;
+            expect (until ([&] { return guest.host.receive (Kind::hello, ttl); })); expectEquals (ttl, 5);
+            expect (until ([&] { return guest.host.receive (Kind::hello, ttl) && ttl == guest.host.defaultTtl; }, 1600));
+        }
+    }
+};
+static LiveMixCollabPunchOptionsTests liveMixCollabPunchOptionsTests;
 
 namespace
 {

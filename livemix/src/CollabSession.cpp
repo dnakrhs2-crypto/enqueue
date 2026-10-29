@@ -1,6 +1,7 @@
 #include "CollabSession.h"
 #include "LiveMixSettings.h"
 #include "MixEngine.h"
+#include "app/AppVersion.h"
 #include "ui/UiUtils.h"
 #include <algorithm>
 #include <chrono>
@@ -197,7 +198,7 @@ PeerInfo CollabSession::localInfo (const juce::String& nick) const
 {
     auto info = peerInfo ? peerInfo() : PeerInfo {};
     info.nickname = nick; info.deviceRate = (uint32_t) audio.getDeviceRate();
-    info.appVersion = "0.17.0";
+    info.appVersion = appVersionString();
     info.wireRate = (uint32_t) settings.getCollabRate();
     return info;
 }
@@ -333,7 +334,7 @@ void CollabSession::joinRoom (const juce::String& code, const juce::String& nick
             snapshot.nativeAvailable = true;
             guestGeneration = joined.connectionGeneration;
             applyRoom (joined.room);
-            startTransport (me, joined.candidates);
+            startTransport (me, joined.candidates, joined.room.nativeState == "punch" && ! joined.sameNetwork);
         });
     });
 }
@@ -346,6 +347,7 @@ void CollabSession::leave()
     webGeneration.store (0);
     if (audioAttached) audio.detach();
     audioAttached = started = mapped = heartbeatPending = renewPending = punching = false;
+    hostEverConnected = false;
     webMapped = false;
     heartbeatConnected = heartbeatStopped = heartbeatDirty = false;
     heartbeatFailures = 0;
@@ -545,7 +547,7 @@ void CollabSession::publishPeople()
     if (engine != nullptr) engine->setRecordingContext (open, identities);
 }
 
-void CollabSession::startTransport (const PeerInfo& local, const std::vector<CollabTransport::Address>& candidates)
+void CollabSession::startTransport (const PeerInfo& local, const std::vector<CollabTransport::Address>& candidates, bool punchGuest)
 {
     transportV2 = snapshot.roomMode == c::RoomMode::v2;
     const auto id = impl->generation.load(); const auto serial = ++transportSerial;
@@ -566,7 +568,8 @@ void CollabSession::startTransport (const PeerInfo& local, const std::vector<Col
         transport.configureV2 (snapshot.selfId, roster, nativePeers, std::move (callbacks));
     }
     if (snapshot.isHost) transport.startHost (snapshot.session, me);
-    else transport.startGuest (snapshot.session, candidates, me);
+    else transport.startGuest (snapshot.session, candidates, me,
+                               punchGuest ? options.punchHelloTtl : 0, punchGuest ? options.punchHelloMs : 0);
     // v2's source clock must run even while waiting for its first native/web link.
     if (transportV2)
     {
@@ -598,9 +601,11 @@ void CollabSession::peerChanged (c::ParticipantId pid, CollabTransport::State st
 {
     const auto* member = findMember (roster, pid);
     if (member == nullptr) return;
+    if (! snapshot.isHost && pid == c::hostParticipant && state == CollabTransport::State::connected)
+        hostEverConnected = true;
     if (state == CollabTransport::State::peerLeft || state == CollabTransport::State::disconnected)
     {
-        if (! snapshot.isHost) { leave(); setState (State::off, ko ("방장이 방을 닫았습니다")); return; }
+        if (! snapshot.isHost) { finishGuestLink (state); return; }
         for (const auto& m : roomSnapshot.members)
             if (m.participantId == pid && std::none_of (leftMembers.begin(), leftMembers.end(), [&] (const auto& left) { return left.participantId == pid; }))
                 leftMembers.push_back ({ pid, m.connectionGeneration, "left", member->streamEpoch });
@@ -626,6 +631,16 @@ void CollabSession::peerChanged (c::ParticipantId pid, CollabTransport::State st
         if (pid == webConnection.guestId) sendWebSignal (webConnection.generation, signal ("connected"));
         sendHeartbeat();
     }
+}
+
+void CollabSession::finishGuestLink (CollabTransport::State state)
+{
+    if (state != CollabTransport::State::peerLeft && ! hostEverConnected)
+    {
+        fail (ko ("방장 PC에 연결하지 못했습니다")); return;
+    }
+    leave();
+    setState (State::off, state == CollabTransport::State::peerLeft ? ko ("방장이 방을 닫았습니다") : ko ("연결 끊김"));
 }
 
 void CollabSession::refreshWebActions()
@@ -1002,6 +1017,7 @@ void CollabSession::timerCallback()
     const auto previous = snapshot.state;
     if (stats.state == CollabTransport::State::connected)
     {
+        if (! snapshot.isHost) hostEverConnected = true;
         if (! audioAttached)
         {
             snapshot.wireRate = stats.wireRate;
@@ -1029,11 +1045,12 @@ void CollabSession::timerCallback()
     }
     else if (stats.state == CollabTransport::State::disconnected)
     {
+        if (! snapshot.isHost && ! hostEverConnected) { finishGuestLink (stats.state); return; }
         if (snapshot.state != State::disconnected) setState (State::disconnected);
     }
     else if (stats.state == CollabTransport::State::peerLeft)
     {
-        if (! snapshot.isHost) { leave(); setState (State::off, ko ("방장이 방을 닫았습니다")); return; }
+        if (! snapshot.isHost) { finishGuestLink (stats.state); return; }
         if (snapshot.state != State::hostWaiting)
         {
             if (roomSnapshot.apiVersion == 2)

@@ -85,6 +85,7 @@ public:
         // same server as stun.l.google.com).
         std::vector<CollabTransport::Address> stunServers { { "stun.l.google.com", 19302 }, { "stun.cloudflare.com", 3478 } };
         int stunTimeoutMs = 1500, punchHeartbeatMs = 1000, punchMs = 10000;
+        int punchHelloTtl = 3, punchHelloMs = 3000;
         CollabRoom::RequestFunction webRequest;
         juce::String webServer;
         std::shared_ptr<WebEndpoint> webEndpoint;
@@ -123,9 +124,10 @@ private:
     void applyRoster (const RosterSnapshot&);
     void publishPeople();
     void refreshWebActions();
-    void startTransport (const PeerInfo&, const std::vector<CollabTransport::Address>& = {});
+    void startTransport (const PeerInfo&, const std::vector<CollabTransport::Address>& = {}, bool punchGuest = false);
     void switchHostTransport();
     void peerChanged (contracts::ParticipantId, CollabTransport::State);
+    void finishGuestLink (CollabTransport::State);
     void startSignaling();
     void startWeb (contracts::WebConnection);
     void endWeb (bool notifyServer);
@@ -154,6 +156,7 @@ private:
     bool started = false, audioAttached = false, mapped = false, heartbeatPending = false, renewPending = false;
     bool webMapped = false;
     bool punching = false; // hosting with a closed port: the guest is reached by hole punching
+    bool hostEverConnected = false;
     bool heartbeatConnected = false, heartbeatStopped = false;
     bool heartbeatDirty = false;
     int heartbeatFailures = 0;

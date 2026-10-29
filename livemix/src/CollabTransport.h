@@ -45,7 +45,9 @@ public:
     int getLocalPort() const noexcept;
     Mapping discoverPublic (const std::vector<Address>& stunServers, int timeoutMs); // blocking; worker thread
     void startHost (uint64_t session, const PeerInfo& me);
-    void startGuest (uint64_t session, const std::vector<Address>& candidates, const PeerInfo& me);
+    // Only a punch-room guest primes its NAT with low-TTL hellos. Zero keeps the socket default.
+    void startGuest (uint64_t session, const std::vector<Address>& candidates, const PeerInfo& me,
+                     int helloTtl = 0, int helloTtlMs = 0);
     /** Host whose port is closed: knock on the guest's public addresses until the guest's hello comes back
         through the opened path (UDP hole punching), for 'milliseconds' from now. */
     void punch (const std::vector<Address>& targets, int milliseconds);
