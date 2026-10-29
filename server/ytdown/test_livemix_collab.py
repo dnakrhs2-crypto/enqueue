@@ -11,6 +11,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -19,7 +20,16 @@ from contextlib import closing, redirect_stdout
 from email.message import Message
 from unittest import mock
 
-import livemix_collab as lc
+# Import itself restores persisted rooms. Never let even test collection read the
+# production file; stop its writer before this temporary directory is removed.
+with tempfile.TemporaryDirectory() as _import_dir:
+    with mock.patch.dict(os.environ, {"LIVEMIX_ROOMS_STATE": str(Path(_import_dir) / "rooms.json")}):
+        with redirect_stdout(io.StringIO()):
+            if __package__:
+                from . import livemix_collab as lc
+            else:
+                import livemix_collab as lc
+            lc.reset_for_tests()
 
 HOST_IP, GUEST_IP = "203.0.113.17", "198.51.100.28"
 HOST_PORT = 12000
@@ -849,13 +859,413 @@ class CollabV2Test(unittest.TestCase):
         self.assertEqual(acquired, [True])
 
 
-class StandaloneHTTPTest(unittest.TestCase):
-    def test_real_http_create_invite_accept_signals_and_leave(self):
+class CollabPersistenceTest(unittest.TestCase):
+    response = CollabTest.response
+    send = CollabTest.send
+    post = CollabTest.post
+    client = CollabV2Test.client
+    create = CollabV2Test.create
+    host = CollabV2Test.host
+    open = CollabV2Test.open
+    join = CollabV2Test.join
+    beat = CollabV2Test.beat
+    state = CollabV2Test.state
+    invite = CollabV2Test.invite
+    request = CollabV2Test.request
+    accept = CollabV2Test.accept
+    events = CollabV2Test.events
+    signal = CollabV2Test.signal
+    web_pair = CollabV2Test.web_pair
+
+    def setUp(self):
+        CollabTest.setUp(self)
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.path = self.directory / "state" / "rooms.json"
+        self.addCleanup(lc.reset_for_tests)  # join the writer before removing its directory
+        self.enterContext(mock.patch.object(lc, "EVENT_WAIT_SEC", 0))
+
+    def enable(self):
+        lc.reset_for_tests(now=lambda: self.now, state_path=self.path)
+
+    def save(self):
+        lc._save_state()
+        self.assertTrue(self.path.is_file())
+        return json.loads(self.path.read_text(encoding="utf-8"))
+
+    def restart(self, downtime=120):
+        self.save()
+        self.now += downtime
+        self.enable()
+        self.assertEqual((lc._rooms, lc._closed, lc._closed_rooms), ({}, {}, {}))
+        lc._load_state()
+
+    def test_restart_preserves_tokens_cursors_signals_and_connected_guests(self):
+        self.enable()
+        room = self.open()
+        native = self.join(room)
+        req, host, web = self.web_pair(room)
+        self.signal(room, host, dict(type="connected"))
+        self.beat(room, [self.state(native), self.state(host)])
+        cursor = self.events(room, hostToken=room["hostToken"])["cursor"]
+        auth = dict(connectionToken=web["connectionToken"], connectionGeneration=web["connectionGeneration"])
+        self.assertEqual(self.events(room, cursor, **auth)["events"], [])
+        offer = dict(type="offer", sdp="v=0\r\n")
+        reply = self.signal(room, host, offer, 2)
+        pending = self.request(room, self.invite(room), 11)
+        expected_host = self.events(room, cursor, hostToken=room["hostToken"])
+        expected_web = self.events(room, cursor, **auth)
+        old_condition = lc._rooms[room["code"]]["condition"]
+        self.restart()
+        restored = lc._rooms[room["code"]]
+        self.assertIsNot(restored["condition"], old_condition)
+        self.assertEqual(restored["seen"], self.now)
+        self.assertEqual(len(self.beat(room, [self.state(native), self.state(host)])["members"]), 3)
+        # The offline pending request expires normally; events issued before it are unchanged.
+        got = self.events(room, cursor, hostToken=room["hostToken"])
+        self.assertEqual(got["events"][:len(expected_host["events"])], expected_host["events"])
+        self.assertEqual(self.events(room, cursor, **auth)["events"], expected_web["events"])
+        self.assertEqual(self.signal(room, host, offer, 2), reply)  # integer reply-cache keys
+        self.assertEqual(self.accept(room, req), host)
+        request_events = self.events(room, req["cursor"], requestToken=req["requestToken"])
+        self.assertIn(web, [e["data"] for e in request_events["events"] if e["type"] == "accepted"])
+        self.accept(room, pending, 410)
+        before = got["cursor"]
+        new_req = self.request(room, self.invite(room), 12)
+        new_events = self.events(room, before, hostToken=room["hostToken"])
+        self.assertIn(new_req["requestId"], [e["data"].get("requestId") for e in new_events["events"]])
+        self.assertTrue(all(int(e["id"]) > int(before) for e in new_events["events"]))
+        self.signal(room, web, dict(type="answer", sdp="v=0\r\n"))
+        host_events = self.events(room, before, connectionToken=host["connectionToken"],
+                                  connectionGeneration=host["connectionGeneration"])
+        self.assertIn("signal", [e["type"] for e in host_events["events"]])
+        self.assertEqual(self.create()["code"], room["code"])
+
+    def test_restart_allows_native_and_web_rejoins_without_reusing_ids(self):
+        self.enable()
+        room = self.open()
+        native = self.join(room)
+        invite = self.invite(room)
+        req = self.request(room, invite)
+        host = self.accept(room, req)
+        web = next(e["data"] for e in self.events(room, req["cursor"], requestToken=req["requestToken"])["events"]
+                   if e["type"] == "accepted")
+        self.signal(room, host, dict(type="connected"))
+        self.beat(room, [self.state(native, "left")])
+        self.restart()
+        self.assertEqual(self.join(room, 2, 410), {"error": "expired"})
+        newer = self.join(room, 3)
+        self.assertGreater(newer["participantId"], host["participantId"])
+        self.assertGreater(newer["connectionGeneration"], host["connectionGeneration"])
+        self.post("web/leave", dict(apiVersion=2, code=room["code"], connectionToken=web["connectionToken"],
+                                   connectionGeneration=web["connectionGeneration"]))
+        again = self.accept(room, self.request(room, invite, 11))
+        self.assertGreater(again["participantId"], newer["participantId"])
+        self.assertGreater(again["connectionGeneration"], newer["connectionGeneration"])
+        self.signal(room, again, dict(type="connected"))
+        self.assertEqual(len(self.beat(room, [self.state(newer)])["members"]), 3)
+        self.assertGreater(self.invite(room)["inviteGeneration"], invite["inviteGeneration"])
+
+    def test_legacy_heartbeat_restores_guest_alias_and_detached_guest(self):
+        for modern_guest in (False, True):
+            with self.subTest(modern_guest=modern_guest):
+                self.enable()
+                room = self.post("create", dict(nick="old host", inst="old", port=HOST_PORT,
+                                                stun=dict(ip=HOST_IP, port=40000)))
+                auth = dict(code=room["code"], hostToken=room["hostToken"])
+                self.post("confirm", dict(auth, reachable=False, punch=True))
+                if modern_guest:
+                    self.join(room)
+                else:
+                    self.post("join", dict(code=room["code"], nick="old guest", inst="guest", port=13000),
+                              client_ip=GUEST_IP)
+                self.post("heartbeat", dict(auth, connected=True))
+                model = lc._rooms[room["code"]]
+                pid = next(iter(model["nativePeers"]))
+                self.assertIs(model["guest"], model["nativePeers"][pid])
+                saved = self.save()["rooms"][room["code"]]
+                self.assertEqual(saved["guestParticipantId"], pid)
+                self.assertNotIn("guest", saved)  # only one copy of the shared dict
+                self.restart()
+                model = lc._rooms[room["code"]]
+                self.assertIs(model["guest"], model["nativePeers"][pid])
+                self.assertEqual(self.post("heartbeat", dict(auth, connected=True)), {"ok": True})
+                self.post("heartbeat", dict(auth, connected=False))
+                self.assertEqual(model["nativePeers"], {})
+                self.assertEqual(model["guest"] is None, modern_guest)
+                # Legacy punch retains a detached guest after disconnect; keep that too.
+                guest = model["guest"]
+                self.restart(0)
+                self.assertEqual(lc._rooms[room["code"]]["guest"], guest)
+                self.post("join", dict(code=room["code"], nick="rejoin", inst="guest", port=13000))
+
+    def test_closed_codes_events_and_code_allocation_survive_restart(self):
+        self.enable()
+        with mock.patch.object(lc.secrets, "choice", side_effect=lambda choices: choices[0]):
+            room, closed = self.open(), self.open(99)
+            self.host("close", closed)
+            ended = lc._closed_rooms[closed["code"]]["events"][:]
+            self.restart()
+            self.assertEqual(lc._closed_rooms[closed["code"]]["events"], ended)
+            self.assertEqual(self.join(closed, status=410), {"error": "closed"})
+            self.events(closed, "1", 410, hostToken=closed["hostToken"])
+            self.assertEqual(self.join(dict(code="9999"), status=404), {"error": "room"})
+            new = self.open(100)
+            self.assertEqual([room["code"], closed["code"], new["code"]], ["0000", "0001", "0002"])
+            self.now += lc.CLOSED_KEEP - 120
+            # GC may mutate state even when the requested room returns an error.
+            self.join(dict(code="9999"), status=404)
+            saved = self.save()
+            self.assertNotIn(closed["code"], saved["closed"])
+            self.assertNotIn(closed["code"], saved["closedRooms"])
+
+    def test_pending_request_can_be_accepted_after_short_restart(self):
+        self.enable()
+        room = self.open()
+        invite = self.invite(room)
+        req = self.request(room, invite)
+        self.restart(10)
+        self.assertEqual(self.request(room, invite), req)
+        self.assertEqual(lc._rooms[room["code"]]["pendingWebRequests"][req["requestId"]]["expiresAtMs"], req["expiresAtMs"])
+        host = self.accept(room, req)
+        events = self.events(room, req["cursor"], requestToken=req["requestToken"])
+        self.assertIn(host["connectionGeneration"], [e["data"].get("connectionGeneration") for e in events["events"]])
+
+    def test_offline_pending_and_reservations_keep_their_deadlines(self):
+        self.enable()
+        room = self.open()
+        native = self.join(room)
+        invite = self.invite(room)
+        accepted_req, pending = self.request(room, invite), self.request(room, invite, 11)
+        accepted = self.accept(room, accepted_req)
+        deadlines = {pid: r["expiresAtMs"] for pid, r in lc._rooms[room["code"]]["reservations"].items()}
+        self.restart()
+        restored = lc._rooms[room["code"]]
+        self.assertEqual({pid: r["expiresAtMs"] for pid, r in restored["reservations"].items()}, deadlines)
+        self.assertEqual(restored["pendingWebRequests"][pending["requestId"]]["expiresAtMs"], pending["expiresAtMs"])
+        self.assertEqual(len(self.beat(room)["members"]), 1)
+        self.accept(room, pending, 410)
+        self.accept(room, accepted_req, 410)
+        self.signal(room, accepted, dict(type="connected"), status=410)
+        self.assertGreater(self.join(room, 3)["participantId"], native["participantId"])
+
+    def test_missing_corrupt_and_old_files_start_empty_with_one_log(self):
+        self.enable()
+        room = self.open()
+        saved = self.save()
+        for content in (None, "{broken", "[]", "{}", json.dumps(dict(saved, version=99)),
+                        json.dumps(dict(saved, savedAt=self.now - 901))):
+            with self.subTest(content=content):
+                self.enable()
+                if content is None:
+                    self.path.unlink(missing_ok=True)
+                else:
+                    self.path.write_text(content, encoding="utf-8")
+                with mock.patch.object(lc, "_log") as log:
+                    lc._load_state()
+                log.assert_called_once()
+                self.assertEqual((lc._rooms, lc._closed, lc._closed_rooms), ({}, {}, {}))
+                self.assertEqual(self.join(room, status=404), {"error": "room"})
+        with mock.patch.object(Path, "read_text", side_effect=PermissionError), mock.patch.object(lc, "_log") as log:
+            lc._load_state()
+        log.assert_called_once()
+        self.assertEqual((lc._rooms, lc._closed, lc._closed_rooms), ({}, {}, {}))
+        self.path.write_text(json.dumps(dict(saved, savedAt=self.now - 900)), encoding="utf-8")
+        lc._load_state()
+        self.beat(room)
+
+    def test_reset_disables_disk_access_until_a_test_supplies_a_path(self):
+        self.enable()
+        room = self.open()
+        self.save()
+        lc.reset_for_tests(now=lambda: self.now)
+        with mock.patch.object(Path, "read_text", side_effect=AssertionError("unexpected state read")), \
+             mock.patch.object(lc, "_write_state", side_effect=AssertionError("unexpected state write")):
+            lc._load_state()
+            self.open()
+            lc._save_state()
+        self.assertIsNone(lc._state_path)
+        self.enable()
+        lc._load_state()
+        self.beat(room)
+
+    def test_background_write_does_not_hold_room_lock_or_block_heartbeat(self):
+        self.enable()
+        room = self.open()
+        entered, release = threading.Event(), threading.Event()
+        observed = []
+        write = lc._write_state
+        def slow_write(path, payload):
+            free = lc._lock.acquire(blocking=False)
+            observed.append((free, threading.current_thread() is threading.main_thread()))
+            if free:
+                lc._lock.release()
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test did not release writer")
+            write(path, payload)
+        with mock.patch.object(lc, "_write_state", side_effect=slow_write):
+            lc._start_state_writer()
+            try:
+                self.assertTrue(entered.wait(3))
+                with ThreadPoolExecutor(1) as pool:
+                    self.assertEqual(pool.submit(self.beat, room).result(2)["code"], room["code"])
+            finally:
+                release.set()
+                lc._stop_state_writer()
+        self.assertEqual(observed, [(True, False)])
+        self.assertTrue(self.path.is_file())
+
+    def test_changes_coalesce_at_one_second_and_replace_complete_json(self):
+        self.enable()
+        room = self.open()
+        self.save()
+        previous = self.path.read_text(encoding="utf-8")
+        replaced = threading.Event()
+        replacements = []
+        replace = lc.os.replace
+        def atomic_replace(source, destination):
+            payload = json.loads(Path(source).read_text(encoding="utf-8"))
+            replacements.append((time.monotonic(), payload, Path(destination).read_text(encoding="utf-8")))
+            replace(source, destination)
+            replaced.set()
+        self.now += 10
+        self.beat(room)
+        with mock.patch.object(lc.os, "replace", side_effect=atomic_replace):
+            lc._start_state_writer()
+            try:
+                self.assertTrue(replaced.wait(3))
+                replaced.clear()
+                self.now += 10
+                self.invite(room)
+                self.beat(room)
+                self.assertTrue(replaced.wait(3))
+            finally:
+                lc._stop_state_writer()
+        self.assertEqual(len(replacements), 2)
+        self.assertEqual(replacements[0][2], previous)
+        self.assertGreaterEqual(replacements[1][0] - replacements[0][0], 1)
+        final = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(final, replacements[1][1])
+        self.assertEqual(final["rooms"][room["code"]]["seen"], self.now)
+        self.assertEqual(final["rooms"][room["code"]]["inviteGeneration"], 1)
+
+    def test_write_failure_is_logged_and_requests_still_succeed(self):
+        self.enable()
+        # A directory cannot be replaced by a file (PermissionError on Windows).
+        self.path.mkdir(parents=True)
+        room = self.open()
+        self.beat(room)
+        with mock.patch.object(lc, "_log") as log:
+            lc._save_state()
+        log.assert_called_once()
+        self.beat(room)
+        self.join(room)
+        self.request(room, self.invite(room))
+
+    def test_host_event_snapshot_is_saved_without_turn_cache(self):
+        self.enable()
+        room = self.open()
+        self.save()
+        lc._turn.update(servers=[dict(urls="stun:unused", credential="cache-only-secret")], expires=self.now + 10000)
+        cursor = self.events(room, hostToken=room["hostToken"])["cursor"]
+        saved = self.save()
+        self.assertEqual(saved["rooms"][room["code"]]["eventId"], int(cursor))
+        self.assertNotIn("cache-only-secret", self.path.read_text(encoding="utf-8"))
+        self.restart(0)
+        self.assertIsNone(lc._turn["servers"])
+
+    def test_import_restores_and_starts_writer_at_default_or_override_path(self):
+        # Exercise production import, without calling any persistence helper.
+        script = '''
+import json, time
+from pathlib import Path
+import livemix_collab as lc
+if not lc._rooms:
+    lc._start_probe = lambda *a: None
+    with lc._lock:
+        lc._native("create", dict(nick="import", inst="import", port=12000),
+                   type("H", (), {"headers": {}, "client_address": ("127.0.0.1", 1)})(), time.time(), False)
+code = next(iter(lc._rooms))
+with lc._lock:
+    lc._native("heartbeat", dict(code=code, hostToken=lc._rooms[code]["hostToken"], connected=False), None, time.time(), False)
+print("ROOM=" + code, flush=True)
+time.sleep(2)
+'''
+        for override in (False, True):
+            with self.subTest(override=override):
+                local = self.directory / ("override" if override else "default")
+                state_path = local / ("custom.json" if override else "LiveMixRoomServer/rooms.json")
+                env = dict(os.environ, LOCALAPPDATA=str(local))
+                env.pop("LIVEMIX_ROOMS_STATE", None)
+                if override:
+                    env["LIVEMIX_ROOMS_STATE"] = str(state_path)
+                def run():
+                    result = subprocess.run([sys.executable, "-B", "-c", script], env=env,
+                                            cwd=Path(lc.__file__).parent, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    return next(line for line in result.stdout.splitlines() if line.startswith("ROOM="))
+                first = run()
+                self.assertTrue(state_path.is_file())
+                saved = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertIn(first[5:], saved["rooms"])
+                self.assertEqual(run(), first)
+
+    def test_serve_restores_host_heartbeat_from_saved_file(self):
+        self.enable()
+        self.now = time.time()
+        room = self.open()
+        self.save()
+        port = StandaloneHTTPTest.start_server(self, self.path)
+        with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as conn:
+            conn.request("POST", lc.PREFIX + "heartbeat", json.dumps(dict(apiVersion=2, code=room["code"],
+                         hostToken=room["hostToken"], connected=False, memberStates=[])))
+            response = conn.getresponse()
+            payload = response.read()
+            self.assertEqual(response.status, 200, payload)
+            self.assertEqual(json.loads(payload)["session"], room["session"])
+
+    def test_restored_web_invite_warms_relay_credentials_before_the_first_accept(self):
+        # A restored invite never passes web/invite, where the relay credentials are warmed. Without a warm-up at
+        # load the first accept after a restart hands out no relay, so a web guest that needs TURN cannot connect.
+        servers = lc._clean_ice(CollabV2Test.RELAY)
+        self.enable()
+        room = self.open()
+        invite = self.invite(room)
+        self.save()
+        self.now += 120
+        self.enable()
+        def fetched():   # stands in for the Cloudflare request: tests never fetch real relay credentials
+            with lc._turn_lock:
+                lc._turn.update(servers=servers, expires=time.time() + lc.TURN_TTL_SEC, fetching=False)
+        with lc._turn_lock:
+            lc._turn["failedAt"] = 0.0
+        with mock.patch.object(lc, "_fetch_turn", fetched):
+            lc._load_state()
+            deadline = time.monotonic() + 2
+            while lc._turn["servers"] is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            host = self.accept(room, self.request(room, invite))
+            self.assertEqual(host["iceServers"], servers)
+
+    def test_serve_without_override_never_reads_or_writes_the_live_file(self):
+        # A local test server (--serve) runs on the same PC as the live server: it must not restore the live
+        # rooms nor overwrite the live file with test rooms.
+        self.enable()
+        self.now = time.time()
+        room = self.open()
+        self.save()
+        local = self.directory / "localappdata"
+        live = local / "LiveMixRoomServer" / "rooms.json"
+        live.parent.mkdir(parents=True)
+        live.write_bytes(self.path.read_bytes())
+        before = live.read_bytes()
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
+        env = dict(os.environ, LOCALAPPDATA=str(local), LIVEMIX_TURN_KEY_FILE=str(self.directory / "missing-turn-key.json"))
+        env.pop("LIVEMIX_ROOMS_STATE", None)
         process = subprocess.Popen([sys.executable, str(Path(lc.__file__).resolve()), "--serve", "127.0.0.1:%d" % port],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         self.addCleanup(lambda: (process.terminate(), process.wait(timeout=5)))
         deadline = time.monotonic() + 10
@@ -867,6 +1277,46 @@ class StandaloneHTTPTest(unittest.TestCase):
                 if time.monotonic() >= deadline or process.poll() is not None:
                     self.fail("standalone server did not start")
                 time.sleep(0.05)
+        def post(action, body):
+            with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as conn:
+                conn.request("POST", lc.PREFIX + action, json.dumps(body))
+                response = conn.getresponse()
+                return response.status, json.loads(response.read())
+        status, _ = post("heartbeat", dict(apiVersion=2, code=room["code"], hostToken=room["hostToken"],
+                                           connected=False, memberStates=[]))
+        self.assertEqual(status, 404)   # the live room was not restored into the test server
+        status, created = post("create", dict(self.client(7), nick="serve", inst="serve", port=12001))
+        self.assertEqual(status, 200, created)
+        time.sleep(lc.STATE_SAVE_SEC + 1)
+        self.assertEqual(live.read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in live.parent.iterdir()), ["rooms.json"])
+
+
+class StandaloneHTTPTest(unittest.TestCase):
+    def start_server(self, state_path):
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        process = subprocess.Popen([sys.executable, str(Path(lc.__file__).resolve()), "--serve", "127.0.0.1:%d" % port],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=dict(os.environ, LIVEMIX_ROOMS_STATE=str(state_path),
+                         LIVEMIX_TURN_KEY_FILE=str(state_path.parent / "missing-turn-key.json")),
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        self.addCleanup(lambda: (process.terminate(), process.wait(timeout=5)))
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                with socket.create_connection(("127.0.0.1", port), 1):
+                    break
+            except OSError:
+                if time.monotonic() >= deadline or process.poll() is not None:
+                    self.fail("standalone server did not start")
+                time.sleep(0.05)
+        return port
+
+    def test_real_http_create_invite_accept_signals_and_leave(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        port = self.start_server(Path(directory) / "rooms.json")
         def post(endpoint, **body):
             with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as conn:
                 conn.request("POST", lc.PREFIX + endpoint, json.dumps(dict(apiVersion=2, **body), ensure_ascii=False).encode(),

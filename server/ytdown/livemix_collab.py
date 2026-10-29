@@ -4,7 +4,7 @@
 POST /api/livemix/collab/{create,confirm,heartbeat,join,close}
 로그인 없이 hostToken으로 방장 요청을 확인한다. 오디오는 중계하지 않는다.
 방장은 10초마다 heartbeat를 보내며, 45초 동안 없으면 방을 닫는다.
-닫힌 코드는 10분간 410으로 응답한다. 서버를 다시 켜면 메모리 상태는 사라진다.
+닫힌 코드는 10분간 410으로 응답한다. 방 상태를 로컬 파일에 저장해 서버 재시작 때 복원한다.
 
 홀 펀칭(2026-10-16, 0.15.3~): 방장·참가자가 STUN으로 알아낸 자기 공인 주소(stun)를 보낸다. 방장 포트 시험이
 실패해도 confirm에 punch가 오고 방장 stun이 있으면 방을 열어 두고, 방장 heartbeat 응답에 참가자 주소를 실어 준다
@@ -42,6 +42,7 @@ CAPABILITIES = ["packet_v2", "roster_ack", "star_3", "pcm16_mono", "web_guest"]
 MAX_ROOMS = 500
 HOST_DROP_SEC = 45
 CLOSED_KEEP = 600
+STATE_SAVE_SEC, STATE_MAX_AGE_SEC = 1, 15 * 60
 GUEST_PUNCH_SEC = 30              # heartbeat가 참가자 주소를 돌려주는 시간(참가 뒤)
 CODE_RE = re.compile(r"[0-9]{4}")
 INST_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -54,6 +55,10 @@ _rooms = {}                       # code → 방
 _closed = {}                      # code → 닫힌 시각
 _closed_rooms = {}                # events live for the same 600 seconds as closed codes
 _now = time.time                  # reset_for_tests(now=...)로 시험 시계 주입
+_state_path = None
+_state_dirty = False
+_state_thread = None
+_state_stop = None
 
 
 class Fail(Exception):
@@ -69,6 +74,125 @@ def _log(action, **fields):
     print("[livemix_collab] " + json.dumps(dict(action=action, **fields), ensure_ascii=False), flush=True)
 
 
+# Persistence uses one writer. Only the JSON snapshot takes _lock; directory
+# creation, file writes and atomic replacement all happen after releasing it.
+def _mark_state_dirty():
+    """Called with _lock held, including mutations made by event polling / GC."""
+    global _state_dirty
+    if _state_path is not None:
+        _state_dirty = True
+
+
+def _stored_room(room):
+    # Keep the room's tokens, counters, events and accepted-pair replies intact.
+    # The global TURN cache is separate and is never part of this snapshot.
+    saved = {key: value for key, value in room.items() if key != "condition"}
+    saved["retiredConnections"] = sorted(room["retiredConnections"])
+    saved["events"] = [[event, sorted(targets)] for event, targets in room["events"]]
+    # Legacy hosts share this dict with nativePeers. _end_member tests identity;
+    # two JSON copies would leave a departed modern guest attached to the host.
+    for pid, peer in room["nativePeers"].items():
+        if room["guest"] is peer:
+            del saved["guest"]
+            saved["guestParticipantId"] = pid
+            break
+    return saved
+
+
+def _restored_room(saved, now):
+    room = dict(saved)
+    for key in ("members", "reservations", "nativePeers", "connections"):
+        room[key] = {int(k): value for k, value in room[key].items()}
+    for connection in room["connections"].values():
+        for sent in connection["signals"].values():
+            sent["replies"] = {int(k): value for k, value in sent["replies"].items()}
+    room["retiredConnections"] = set(room["retiredConnections"])
+    room["events"] = [(event, {tuple(target) for target in targets}) for event, targets in room["events"]]
+    if "guestParticipantId" in room:
+        room["guest"] = room["nativePeers"][room.pop("guestParticipantId")]
+    room["condition"] = threading.Condition()
+    room["seen"] = now  # downtime is not a missed host heartbeat; absolute seat/request deadlines stay intact
+    return room
+
+
+def _load_state():
+    """Startup only (or after reset_for_tests); decode fully before installing."""
+    if _state_path is None:
+        return
+    rooms, closed, closed_rooms = {}, {}, {}
+    try:
+        saved = json.loads(_state_path.read_text(encoding="utf-8"))
+        now = _now()
+        if saved["version"] != 1:
+            raise ValueError("state version")
+        if now - saved["savedAt"] > STATE_MAX_AGE_SEC:
+            _log("state_ignored", reason="stale")
+        else:
+            rooms = {code: _restored_room(room, now) for code, room in saved["rooms"].items()}
+            closed = {code: float(at) for code, at in saved["closed"].items()}
+            closed_rooms = {code: _restored_room(room, now) for code, room in saved["closedRooms"].items()}
+            _log("state_restored", rooms=len(rooms), closed=len(closed), savedSecondsAgo=round(now - saved["savedAt"], 1))
+    except Exception as e:
+        rooms, closed, closed_rooms = {}, {}, {}
+        _log("state_ignored", error=type(e).__name__)
+    with _lock:
+        _rooms.clear()
+        _rooms.update(rooms)
+        _closed.clear()
+        _closed.update(closed)
+        _closed_rooms.clear()
+        _closed_rooms.update(closed_rooms)
+    if any(room.get("inviteToken") for room in rooms.values()):
+        _turn_servers()   # a restored invite skips web/invite's warm-up: fetch the relay before its first accept
+
+
+def _write_state(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _save_state():
+    global _state_dirty
+    try:
+        with _lock:
+            if _state_path is None or not _state_dirty:
+                return
+            path = _state_path
+            payload = json.dumps(dict(version=1, savedAt=_now(),
+                    rooms={code: _stored_room(room) for code, room in _rooms.items()},
+                    closed=_closed,
+                    closedRooms={code: _stored_room(room) for code, room in _closed_rooms.items()}),
+                    ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+            _state_dirty = False
+        _write_state(path, payload)
+    except Exception as e:
+        # A failed save never fails an HTTP request. The next mutation schedules another save.
+        _log("state_write_failed", error=type(e).__name__)
+
+
+def _state_writer(stop):
+    while not stop.wait(STATE_SAVE_SEC):
+        _save_state()
+
+
+def _start_state_writer():
+    global _state_thread, _state_stop
+    if _state_path is not None and _state_thread is None:
+        _state_stop = threading.Event()
+        _state_thread = threading.Thread(target=_state_writer, args=(_state_stop,), name="livemix-rooms", daemon=True)
+        _state_thread.start()
+
+
+def _stop_state_writer():
+    global _state_thread, _state_stop
+    if _state_thread is not None:
+        _state_stop.set()
+        _state_thread.join()  # outside _lock; no old write can outlive a test's temporary directory
+        _state_thread = _state_stop = None
+
+
 # ── 정리 (_lock 안에서) ───────────────────────────────────────────────────
 def _close(code, now, reason):
     room = _rooms.pop(code, None)
@@ -77,6 +201,7 @@ def _close(code, now, reason):
             _end_room(room)
             _closed_rooms[code] = room
         _closed[code] = now
+        _mark_state_dirty()
         _log("close", code=code, nick=room["nick"], publicIp=room["publicIp"], reason=reason)
     return room
 
@@ -90,6 +215,7 @@ def _gc(now):
     for code in [code for code, closed_at in _closed.items() if now - closed_at >= CLOSED_KEEP]:
         del _closed[code]
         _closed_rooms.pop(code, None)
+        _mark_state_dirty()
 
 
 def _new_code():
@@ -248,6 +374,7 @@ def _create(body, h, now):
     _rooms[code] = {"code": code, "nick": nick, "inst": inst, "port": port, "lan": lan, "upnp": upnp,
                     "publicIp": public_ip, "session": session, "hostToken": host_token, "nonce": nonce,
                     "state": "checking", "seen": now, "connected": False, "guest": None, "stun": stun, "punch": False}
+    _mark_state_dirty()
     _log("create", code=code, nick=nick, inst=inst, publicIp=public_ip, port=port, lan=lan, upnp=upnp,
          **({"stun": stun} if stun else {}))
     _start_probe(public_ip, port, nonce)
@@ -270,6 +397,7 @@ def _confirm(body, h, now):
          **({"punch": True} if keep else {}))
     if reachable or keep:
         room["state"], room["punch"] = "open", keep
+        _mark_state_dirty()
     else:
         _close(code, now, reason or "unreachable")
     return {"ok": True, "punch": True} if keep else {"ok": True}
@@ -280,6 +408,7 @@ def _heartbeat(body, h, now):
     room = _room(code)
     _host(room, body.get("hostToken"))
     room["seen"], room["connected"] = now, connected
+    _mark_state_dirty()
     guest = room["guest"]
     if room["punch"] and guest is not None and now - guest["joinedAt"] < GUEST_PUNCH_SEC:
         candidates = [guest["stun"]] if guest["stun"] else []
@@ -413,6 +542,7 @@ def _event(room, kind, data, targets):
     room["eventId"] += 1
     event = dict(id=str(room["eventId"]), type=kind, data=copy.deepcopy(data))
     room["events"].append((event, set(targets)))
+    _mark_state_dirty()
     with room["condition"]:
         room["condition"].notify_all()
     return event
@@ -621,6 +751,7 @@ def _native(action, body, h, now, v2):
             raise Fail(400, "bad")
         keep = not reachable and punch and room["stun"] is not None
         room["state"], room["punch"] = "open", keep
+        _mark_state_dirty()
         result = dict(ok=True, punch=keep)
         if not room["ended"]:
             state = "punch" if room["punch"] else ("reachable" if body["reachable"] else "unavailable")
@@ -658,6 +789,7 @@ def _native(action, body, h, now, v2):
                 raise Fail(409, "generation")
             current.append(state)
         room["seen"], room["connected"] = now, body["connected"]
+        _mark_state_dirty()
         for state in current:
             pid = state["participantId"]
             if state["state"] == "left":
@@ -817,6 +949,7 @@ def _web(action, body, h, now):
                 _end_request(room, request, "invalidated")
         room["inviteGeneration"] += 1
         room["inviteToken"] = secrets.token_hex(32)
+        _mark_state_dirty()
         return dict(apiVersion=2, inviteToken=room["inviteToken"], inviteGeneration=room["inviteGeneration"],
                     hostNick=room["nick"], session=room["session"], wireRate=room["wireRate"], revision=room["revision"])
     if action == "request":
@@ -1076,14 +1209,21 @@ def handle_post(h):
         return _send(h, e.code, {"error": e.error})
 
 
-def reset_for_tests(now=None):
-    """본보기처럼 메모리만 초기화한다. now로 인자 없는 시계 함수를 주입할 수 있다."""
-    global _now
+def reset_for_tests(now=None, state_path=None):
+    """Clear memory and disable disk access, unless a test supplies its own temporary path.
+
+    Does not load or start a writer; persistence tests opt in explicitly. The test
+    module must also set LIVEMIX_ROOMS_STATE to a temporary path before importing.
+    """
+    global _now, _state_path, _state_dirty
+    _stop_state_writer()
     with _lock:
         _rooms.clear()
         _closed.clear()
         _closed_rooms.clear()
         _now = time.time if now is None else now
+        _state_path = Path(state_path) if state_path is not None else None
+        _state_dirty = False
     with _turn_lock:   # tests never fetch real relay credentials; a test that needs them sets _turn itself
         _turn.update(servers=None, expires=0.0, fetching=False, failedAt=float("inf"))
 
@@ -1118,6 +1258,16 @@ def main():
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+
+
+# web_server.py's import (the live server) keeps rooms in the default file. A --serve process is a local test
+# server on the same PC: it must never read or overwrite the live file, so it saves only to LIVEMIX_ROOMS_STATE.
+if os.environ.get("LIVEMIX_ROOMS_STATE"):
+    _state_path = Path(os.environ["LIVEMIX_ROOMS_STATE"])
+elif __name__ != "__main__":
+    _state_path = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "LiveMixRoomServer" / "rooms.json"
+_load_state()
+_start_state_writer()
 
 
 if __name__ == "__main__":
