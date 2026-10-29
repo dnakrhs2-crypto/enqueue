@@ -1,5 +1,6 @@
 #pragma once
 #include "CollabProtocol.h"
+#include "CollabPlc.h"
 #include "lm_asrc.h"
 #include <atomic>
 #include <memory>
@@ -49,7 +50,7 @@ private:
     void resetPlayback (uint64_t epoch, bool newSender) noexcept;
     bool startPlayback (int frames) noexcept;
     bool loadPacket() noexcept;
-    void beginRefill() noexcept;
+    void beginRefill (bool missing = false) noexcept;
     void resetDrift() noexcept;
     int queued() const noexcept;
     void recordPacket (bool missing) noexcept;
@@ -57,6 +58,8 @@ private:
     std::unique_ptr<Slot[]> slots;
     std::vector<double> asrcStorage;
     std::vector<float> output;
+    CollabPlc plc;
+    bool refillLoss = false;
     lm_asrc* asrc = nullptr;
     lm_drift drift {};
     double deviceRate = defaultWireRate;
