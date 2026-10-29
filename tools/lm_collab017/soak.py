@@ -33,16 +33,21 @@ NETWORKS={'local':'사무실 192.168.0.135 / 공인 222.251.250.72',
 PCS={'local':{'root':str(ROOT),'python':sys.executable,'channel':None},
      'roomc':{'root':'C:/Users/dance/lm_soak','python':'python','channel':'chrome'},
      'gompc':{'root':'C:/Users/doomin/lm_soak','python':'C:/Users/doomin/lm_soak/venv/Scripts/python.exe','channel':'chrome'}}
+# 10/29 runs: a web guest is never paired with a host across local/roomc (the gn tunnel) unless relayed, and the
+# office (local, gompc) hosts LiveMix guests from roomc only with 0.17.6+ guests (its router drops a flow whose
+# far side spoke first; 0.17.6 guests open theirs with low-TTL hellos).
 CASES={
     'W3-roomc':{'host':'roomc','native':['local'],'web':'gompc','record':'wav'},
-    'W3-local44':{'host':'local','native':['gompc'],'web':'roomc','wireRate':44100},
-    'N3':{'host':'local','native':['roomc','gompc']},
+    'W3-gompc44':{'host':'gompc','native':['local'],'web':'roomc','wireRate':44100},
+    'N3':{'host':'roomc','native':['local','gompc']},
     'W2-relay':{'host':'roomc','web':'local','forceRelay':True},
-    'W3-churn':{'host':'roomc','native':['gompc'],'web':'local','churnAt':240,'churnGap':60},
-    'RTT-native':{'host':'gompc','native':['roomc'],'rtt':True},
-    'RTT-web':{'host':'local','web':'roomc','rtt':True},
+    'W3-churn':{'host':'roomc','native':['local'],'web':'gompc','churnAt':240,'churnGap':60},
+    'RTT-native':{'host':'roomc','native':['gompc'],'rtt':True},
+    'RTT-web':{'host':'gompc','web':'roomc','rtt':True},
+    'W3-office-out':{'host':'gompc','native':['roomc'],'web':'roomc'},
+    'N2-punch':{'host':'roomc','native':['gompc'],'hostNoUpnp':True},
 }
-DEFAULT_CASES='W3-roomc,W3-local44,N3,W2-relay+RTT-native,W3-churn+RTT-web'
+DEFAULT_CASES='W3-roomc,W3-gompc44,N3,W2-relay+RTT-native,W3-churn+RTT-web,W3-office-out+N2-punch'
 
 
 def module(path, name):
@@ -380,6 +385,11 @@ def load_cases(args):
         if case.get('wireRate',48000) not in (44100,48000):raise ValueError('invalid wire rate')
         if case.get('churnAt') is not None and not 0<case['churnAt']<case['churnAt']+case.get('churnGap',60)<args.seconds:
             raise ValueError(name+': seconds must include leave and rejoin')
+        # 10/29: this PC routes roomc's LAN (192.168.1.0/24) through the 'gn' tunnel. A web guest and a host on
+        # local and roomc can pair their private addresses over it instead of the internet; only a forced relay
+        # measures the real path. LiveMix guests get public candidates only, so they are not affected.
+        if case.get('web') and {case['web'],case['host']}=={'local','roomc'} and not case.get('forceRelay'):
+            print(f'WARNING {name}: web and host on local/roomc may connect through the gn tunnel (use forceRelay or gompc)',flush=True)
     return cases,waves
 
 

@@ -23,7 +23,7 @@ python tools/lm_collab017/soak.py cleanup
 
 ```powershell
 python tools/lm_collab017/soak.py prepare
-python tools/lm_collab017/soak.py run --cases 'W3-roomc,W3-local44,N3,W2-relay+RTT-native,W3-churn+RTT-web' --seconds 600 --output tools/lm_collab017/artifacts/soak-600-01
+python tools/lm_collab017/soak.py run --seconds 600 --output tools/lm_collab017/artifacts/soak-600-01   # --cases 기본값 = DEFAULT_CASES
 python tools/lm_collab017/soak.py cleanup
 ```
 
@@ -36,12 +36,19 @@ python tools/lm_collab017/soak.py cleanup
 | 케이스 | 구성 | 조건 |
 | --- | --- | --- |
 | W3-roomc | roomc 방장 / local Native / gompc 웹 | 48k, 방장 WAV 4파일 검사 |
-| W3-local44 | local 방장 / gompc Native / roomc 웹 | 44.1k 방, 사무실 두 PC는 같은 공인 IP |
-| N3 | local 방장 / roomc Native / gompc Native | Native 세 명 |
+| W3-gompc44 | gompc 방장 / local Native(같은 공유기) / roomc 웹 | 44.1k 방 |
+| N3 | roomc 방장 / local Native / gompc Native | Native 세 명 |
 | W2-relay | roomc 방장 / local 웹 | 웹 TURN 강제, 실제 선택 후보로 확인 |
-| W3-churn | roomc 방장 / gompc Native / local 웹 | 측정 240초에 웹 퇴장, 300초에 같은 초대로 재입장 요청 |
-| RTT-native | gompc 방장 / roomc 반사 Native | 방장 콜백 시계로 표시음 왕복 |
-| RTT-web | local 방장 / roomc 반사 웹 | 방장 콜백 시계로 표시음 왕복 |
+| W3-churn | roomc 방장 / local Native / gompc 웹 | 측정 240초에 웹 퇴장, 300초에 같은 초대로 재입장 요청 |
+| RTT-native | roomc 방장 / gompc 반사 Native | 방장 콜백 시계로 표시음 왕복 |
+| RTT-web | gompc 방장 / roomc 반사 웹 | 방장 콜백 시계로 표시음 왕복 |
+| W3-office-out | gompc 방장 / roomc Native / roomc 웹 | 사무실 방장에 바깥 LiveMix — 0.17.6 이상 참가자만 연결 |
+| N2-punch | roomc 방장(UPnP 끔) / gompc Native | 펀칭 방 |
+
+★10/29 실측 함정: 이 PC는 roomc 사설망(192.168.1.0/24)을 'gn' 터널로 간다 → 웹과 방장을 local·roomc에 나눠 두면
+사설 주소끼리 터널로 붙을 수 있어 실제 인터넷 경로가 아니다(중계 강제만 예외, `load_cases`가 경고). 사무실 공유기는
+바깥에서 먼저 온 흐름을 막아, 0.17.5 이하 참가자는 사무실 방장에게 바깥에서 못 들어온다. 크롬 가짜 마이크 파일은
+실행보다 길게(되감기 틈 = 끊김), 웹 목소리는 시계 차가 1,500ppm 넘을 수 있어 끊김은 `continuity()['compensated']`로 본다.
 
 `--case-file extra.json`은 아래 형태의 케이스 사전을 추가하거나 덮어쓴다. PC는 local/roomc/gompc,
 방은 총 2~3명, 웹은 최대 한 명이다. 짧은 churn 시험은 `churnAt`/`churnGap`을 명시적으로 줄여야 한다.
