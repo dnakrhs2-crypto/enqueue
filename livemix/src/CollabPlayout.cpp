@@ -15,6 +15,7 @@ void CollabPlayout::prepare (double rate, int maxBlock, uint32_t roomRate)
     asrc = reinterpret_cast<lm_asrc*> (asrcStorage.data());
     lm_asrc_init (asrc, channels, wireRate, rate);
     output.assign ((size_t) blockSize * channels, 0.0f);
+    plc.prepare (rate); refillLoss = false;
     readyFrames.store (0); publishedEpoch.store (0); cursorEpoch.store (0); cursor.store (0);
     producerEpoch = audioEpoch = 0; sender = 0;
     seenRebuffer = rebufferRequest.load(); seenMeasurement = measurementRequest.load();
@@ -193,8 +194,10 @@ int CollabPlayout::queued() const noexcept
     return std::max (0, readyFrames.load()) + (packetReal ? framesPerPacket - packetPosition : 0);
 }
 
-void CollabPlayout::beginRefill() noexcept
+void CollabPlayout::beginRefill (bool missing) noexcept
 {
+    refillLoss = missing;
+    if (! missing) plc.reset(); // manual/epoch/target resets keep their existing release
     const bool hadAudio = playing || lastOutput[0] != 0.0f || lastOutput[1] != 0.0f;
     playing = false; packetPosition = framesPerPacket; packetReal = false;
     releaseTail = lastOutput;
@@ -258,6 +261,7 @@ bool CollabPlayout::startPlayback (int frames) noexcept
     nextFrame = earliest; cursor.store (nextFrame); cursorEpoch.store (audioEpoch);
     skipAtStart = std::clamp (queued() - wanted, 0, framesPerPacket - 1);
     playing = true; fadeIn = framesPerPacket; state.store (State::playing);
+    refillLoss = false;
     return true;
 }
 
@@ -282,7 +286,7 @@ bool CollabPlayout::loadPacket() noexcept
     if (! found && readyFrames.load() == 0)
     {
         recordPacket (true); underruns.fetch_add (1);
-        target = std::min (ceilingMs(), target + packetMs); holdFloor = target; holdSeconds = underrunHoldSeconds; beginRefill();
+        target = std::min (ceilingMs(), target + packetMs); holdFloor = target; holdSeconds = underrunHoldSeconds; beginRefill (true);
         return false;
     }
     recordPacket (! found);
@@ -300,7 +304,10 @@ bool CollabPlayout::loadPacket() noexcept
         for (int i = start; i < framesPerPacket && fadeIn > 0; ++i)
         {
             const float gain = 1.0f - (float) --fadeIn / framesPerPacket;
-            for (int ch = 0; ch < channels; ++ch) packet[(size_t) i * channels + ch] *= gain;
+            // Still count the original fade for the buffer/clock controller. PLC
+            // recovery overlaps real audio at the output instead of fading it twice.
+            if (! plc.needsRecovery())
+                for (int ch = 0; ch < channels; ++ch) packet[(size_t) i * channels + ch] *= gain;
         }
     }
     lastInput = { packet[packet.size() - 2], packet.back() };
@@ -350,24 +357,31 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
         }
         if (! playing) startPlayback (n);
         int made = 0;
+        std::array<float, 2> unmaskedTail {};
         while (playing && made < n)
         {
             if (packetPosition == framesPerPacket && ! loadPacket()) break;
             int used = 0;
-            made += lm_asrc_process (asrc, packet.data() + (size_t) packetPosition * channels, framesPerPacket - packetPosition,
-                                     &used, output.data() + (size_t) made * channels, n - made);
+            auto* audio = output.data() + (size_t) made * channels;
+            const int produced = lm_asrc_process (asrc, packet.data() + (size_t) packetPosition * channels, framesPerPacket - packetPosition,
+                                                 &used, audio, n - made);
+            if (produced > 0) unmaskedTail = { audio[(size_t) produced * 2 - 2], audio[(size_t) produced * 2 - 1] };
+            if (packetReal) plc.receive (audio, produced); else plc.conceal (audio, produced);
+            made += produced;
             packetPosition += used;
         }
         if (! playing && releaseRemaining > 0)
         {
             // A mid-block underrun releases from this block's last sample, never from the preceding block.
-            if (made > 0) releaseTail = { output[(size_t) made * 2 - 2], output[(size_t) made * 2 - 1] };
+            if (made > 0) releaseTail = unmaskedTail;
             for (int i = made; i < n && releaseRemaining > 0; ++i)
             {
                 const float gain = (float) --releaseRemaining / releaseFrames;
                 for (int ch = 0; ch < channels; ++ch) output[(size_t) i * 2 + ch] = releaseTail[(size_t) ch] * gain;
             }
         }
+        if (! playing) unmaskedTail = { output[(size_t) n * 2 - 2], output[(size_t) n * 2 - 1] };
+        if (! playing && refillLoss) plc.conceal (output.data() + (size_t) made * channels, n - made);
         const double dt = n / deviceRate;
         holdSeconds = std::max (0.0, holdSeconds - dt);
         if (playing && ! concealed && fadeIn == 0)
@@ -400,7 +414,8 @@ void CollabPlayout::pull (float* left, float* right, int frames) noexcept
             recentTotal[lossBucket] = recentLost[lossBucket] = 0;
         }
         for (int i = 0; i < n; ++i) { left[offset + i] = output[(size_t) i * 2]; right[offset + i] = output[(size_t) i * 2 + 1]; }
-        lastOutput = { left[offset + n - 1], right[offset + n - 1] };
+        // beginRefill's release gate must not be prolonged by synthetic audio.
+        lastOutput = unmaskedTail;
     }
     uint32_t total = 0, missing = 0;
     for (size_t i = 0; i < recentTotal.size(); ++i) { total += recentTotal[i]; missing += recentLost[i]; }

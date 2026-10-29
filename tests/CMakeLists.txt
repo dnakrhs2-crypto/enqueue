@@ -1,6 +1,30 @@
 juce_add_console_app(EnqueueTests PRODUCT_NAME "EnqueueTests")
 gocue_add_app_version(EnqueueTests)
 
+# A small Debug CRT allocation check for the new audio-thread PLC paths.
+add_executable(LiveMixCollabPlcRealtimeTest EXCLUDE_FROM_ALL
+    LiveMixCollabPlcRealtime.cpp ../livemix/src/CollabPlc.cpp)
+target_include_directories(LiveMixCollabPlcRealtimeTest PRIVATE ../livemix/src)
+set_property(TARGET LiveMixCollabPlcRealtimeTest PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+# Same recovery assertions against the frozen pre-FIX1 product C++; expected to
+# fail. Built/run explicitly to retain the before evidence, never in the suite.
+add_executable(LiveMixCollabPlcRecoveryBeforeTest EXCLUDE_FROM_ALL
+    LiveMixCollabPlcRecoveryTests.cpp reference/plcBeforeFix1/CollabPlc.cpp)
+target_include_directories(LiveMixCollabPlcRecoveryBeforeTest PRIVATE reference/plcBeforeFix1)
+target_compile_definitions(LiveMixCollabPlcRecoveryBeforeTest PRIVATE LM_PLC_RECOVERY_STANDALONE=1)
+set_property(TARGET LiveMixCollabPlcRecoveryBeforeTest PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+foreach(_plc_burst_target IN ITEMS LiveMixCollabPlcBurstBeforeTest LiveMixCollabPlcBurstTest)
+    add_executable(${_plc_burst_target} EXCLUDE_FROM_ALL LiveMixCollabPlcBurstTests.cpp)
+    target_compile_definitions(${_plc_burst_target} PRIVATE LM_PLC_BURST_STANDALONE=1)
+    set_property(TARGET ${_plc_burst_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endforeach()
+target_sources(LiveMixCollabPlcBurstBeforeTest PRIVATE reference/plcBeforeFix2/CollabPlc.cpp)
+target_compile_definitions(LiveMixCollabPlcBurstBeforeTest PRIVATE LM_PLC_BURST_BEFORE=1)
+target_sources(LiveMixCollabPlcBurstTest PRIVATE ../livemix/src/CollabPlc.cpp)
+target_include_directories(LiveMixCollabPlcBurstTest PRIVATE ../livemix/src)
+
 # Like the GUI apps, refresh JUCE's VERSIONINFO when the project version changes.
 get_target_property(_enqueue_tests_generated_dir EnqueueTests JUCE_GENERATED_SOURCES_DIRECTORY)
 set(_enqueue_tests_rc_file "${_enqueue_tests_generated_dir}/EnqueueTests_resources.rc")
@@ -88,6 +112,10 @@ target_sources(EnqueueTests PRIVATE
     LiveMixAsrcTests.cpp
     LiveMixCollabProtocolTests.cpp
     LiveMixCollabPlayoutTests.cpp
+    LiveMixCollabPlcTests.cpp
+    LiveMixCollabPlcRecoveryTests.cpp
+    LiveMixCollabPlcBurstTests.cpp
+    reference/CollabPlayout0176.cpp
     LiveMixCollabSenderTests.cpp
     LiveMixCollabTransportTests.cpp
     LiveMixCollabEngineTests.cpp
