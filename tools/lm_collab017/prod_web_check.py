@@ -55,8 +55,14 @@ def main():
             for line in (root / "host.log").read_text(encoding="utf-8", errors="replace").splitlines():
                 if line.startswith("INVITE_FILE "):
                     path = Path(line[len("INVITE_FILE "):].strip())
-                    if path.is_file() and path.read_text(encoding="utf-8-sig").strip():
-                        invite = path.read_text(encoding="utf-8-sig").strip()
+                    try:
+                        text = path.read_text(encoding="utf-8-sig").strip() if path.is_file() else ""
+                    except OSError:
+                        # 10/29: the probe replaces this file on every status pass; a read that lands on the
+                        # replace is refused by Windows (PermissionError) and the next poll reads it.
+                        text = ""
+                    if text:
+                        invite = text
             time.sleep(0.3)
         web_rc = None
         if invite:

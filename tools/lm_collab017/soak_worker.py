@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import time
 import zipfile
 
 sys.dont_write_bytecode = True
@@ -92,7 +93,12 @@ def main(request):
                 'computer':os.environ.get('COMPUTERNAME'),'probeSha256':digest(request['probe']),'processCleanup':cleanup}
     if action=='read':
         path=checked(request['path'],root)
-        return {'text':path.read_text(encoding='utf-8-sig')}
+        for attempt in range(20):
+            # the probe replaces invite.txt on every status pass; a read on the replace is refused
+            try:return {'text':path.read_text(encoding='utf-8-sig')}
+            except PermissionError:
+                if attempt==19:raise
+                time.sleep(.1)
     if action=='stop':
         return stop_owned(request['processes'],exclude=[os.getpid()])
     if action=='write':
