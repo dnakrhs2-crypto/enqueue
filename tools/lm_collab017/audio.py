@@ -1,6 +1,8 @@
 """Independent PCM analysis. Values are measurements, never expected constants filled in as results."""
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 TONES = ((700, 1100), (1700, 2300), (2900, 3100), (3700, 3700))
@@ -9,7 +11,12 @@ LEVEL = .12
 
 
 def signal(rate: int, frames: int, voice: int) -> np.ndarray:
-    f = np.arange(frames, dtype=np.float64)
+    return signal_range(rate, 0, frames, voice)
+
+
+def signal_range(rate: int, first: int, frames: int, voice: int) -> np.ndarray:
+    """signal() from absolute frame `first` on, so a long fixture can be written in pieces without a seam."""
+    f = np.arange(first, first + frames, dtype=np.float64)
     result = LEVEL * np.sin(2 * np.pi * f[:, None] * np.array(TONES[voice]) / rate)
     phase = f % (rate // 2)
     length = round(rate * .002)
@@ -37,16 +44,23 @@ def amplitudes(pcm: np.ndarray, rate: int) -> list[list[list[float]]]:
     return [[[at(hz, ch) for hz in tones] for ch in range(2)] for tones in TONES]
 
 
-def continuity(pcm: np.ndarray, rate: int, voice: int, gain: float = 1) -> dict:
+def continuity(pcm: np.ndarray, rate: int, voice: int, gain: float = 1, *, chunk_windows: int = 1000) -> dict:
     size = round(rate * .01)
     count = len(pcm) // size
     if count < 2:
         raise ValueError('continuity interval too short')
     # Same 10 ms analysis cadence as the original CollabProbe, independently for L/R.
-    x = np.asarray(pcm[:count*size], dtype=np.float64).reshape(count, size, 2)
     f = np.arange(size)
     phasor = np.exp(-2j*np.pi*f[:, None]*np.array(TONES[voice])/rate)
-    z = 2 * (x * phasor).sum(axis=1) / size
+    # Only the small 10 ms phasors survive each chunk. Keep their original order
+    # so both phase jumps and event runs across chunk boundaries are unchanged.
+    if chunk_windows < 1:
+        raise ValueError('chunk_windows must be positive')
+    z = np.empty((count, 2), dtype=np.complex128)
+    for first in range(0, count, chunk_windows):
+        end = min(count, first + chunk_windows)
+        x = np.asarray(pcm[first*size:end*size], dtype=np.float64).reshape(end-first, size, 2)
+        z[first:end] = 2 * (x * phasor).sum(axis=1) / size
     level = abs(z) / (LEVEL * max(gain, 1e-12))
     low = np.any(level < .7, axis=1)
     high = np.any(level > 1.3, axis=1)
@@ -59,9 +73,48 @@ def continuity(pcm: np.ndarray, rate: int, voice: int, gain: float = 1) -> dict:
     ends = np.flatnonzero(bad & ~np.r_[bad[1:], False]) + 1
     return {'windows': count, 'windowMs': 1000*size/rate, 'levelDropWindows': int(low.sum()),
             'quietWindows': int(quiet.sum()), 'highLevelWindows': int(high.sum()), 'phaseJumpWindows': int(jump.sum()),
-            'events': len(starts), 'longestMs': float(max(ends-starts, default=0)*size*1000/rate),
+            'events': len(starts), 'eventsPerMinute': len(starts)*60*rate/(count*size),
+            'measuredSeconds': count*size/rate,
+            'longestMs': float(max(ends-starts, default=0)*size*1000/rate),
             'minLevelRatio': float(level.min()), 'medianLevelRatio': float(np.median(level)),
-            'maxPhaseRadians': float(abs(delta).max()), 'eventStartMs': (starts*size*1000/rate).tolist()}
+            'maxPhaseRadians': float(abs(delta).max()), 'eventStartMs': (starts*size*1000/rate).tolist(),
+            'compensated': drift_compensated(delta, low, high, size, rate, voice)}
+
+
+DRIFT_WINDOWS = 101   # about 1 s of 10 ms windows around each phase step
+
+
+def drift_compensated(delta, low, high, size, rate, voice):
+    """10/29 soak: a clock-rate correction (the playout's ASRC, a headless fake microphone about 1,500 ppm off) moves the
+    tone frequency smoothly. At 3,700 Hz, 1,576 ppm already advances 0.366 rad per 10 ms, over the 0.35 rad limit above,
+    so the raw check flags most windows of a drifting voice. Here the running median phase step of the surrounding ~1 s
+    is subtracted first and only steps that stand out from it count. Level drops and silences count exactly as above."""
+    good = ~low[1:] & ~low[:-1]
+    steps = np.where(good[:, None], delta, np.nan)
+    half = DRIFT_WINDOWS // 2
+    padded = np.pad(steps, ((half, half), (0, 0)), constant_values=np.nan)
+    drift = np.empty_like(steps)
+    for first in range(0, len(steps), 5000):
+        end = min(len(steps), first + 5000)
+        view = np.lib.stride_tricks.sliding_window_view(padded[first:end + 2*half], DRIFT_WINDOWS, axis=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)   # a stretch of silence has no phase to take a median of
+            drift[first:end] = np.nanmedian(view, axis=-1)
+    drift = np.nan_to_num(drift)
+    residual = np.angle(np.exp(1j*(delta - drift)))
+    jump = np.any(abs(residual) > .35, axis=1) & good
+    bad = low | high; bad[1:] |= jump
+    starts = np.flatnonzero(bad & ~np.r_[False, bad[:-1]])
+    ends = np.flatnonzero(bad & ~np.r_[bad[1:], False]) + 1
+    count = len(low)
+    ppm = drift[good] / (2*np.pi*np.array(TONES[voice])*size/rate) * 1e6
+    return {'events': len(starts), 'eventsPerMinute': len(starts)*60*rate/(count*size),
+            'longestMs': float(max(ends-starts, default=0)*size*1000/rate), 'phaseJumpWindows': int(jump.sum()),
+            'maxResidualRadians': float(abs(residual[good]).max()) if good.any() else None,
+            'driftPpm': {'median': np.median(ppm, axis=0).tolist(), 'p05': np.percentile(ppm, 5, axis=0).tolist(),
+                         'p95': np.percentile(ppm, 95, axis=0).tolist()} if len(ppm) else None,
+            'eventStartMs': (starts*size*1000/rate).tolist(),
+            'method': 'phase step minus the running median of 101 windows (~1 s); level checks unchanged'}
 
 
 def matrix(pcm: np.ndarray, rate: int, present: list[int], *, mono: bool = False) -> dict:

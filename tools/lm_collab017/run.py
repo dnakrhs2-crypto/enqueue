@@ -23,7 +23,7 @@ from recordings import inspect_take, read_wav, mp3_headers
 sys.path.insert(0, str(ROOT / 'tests/livemix017/r6'))
 from run_http import server as local_server
 
-HIDDEN = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+HIDDEN = (subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS) if sys.platform == 'win32' else 0
 VOICE_NAMES = {'R9-H':0, 'R9-N1':1, 'R9-N2':2, 'R9-Web':3}
 
 
@@ -59,7 +59,8 @@ def port():
 
 class Native:
     def __init__(self, probe, output, api, voice=0, host=False, code='', web=False, legacy=False,
-                 rate=48000, wire=48000, block=128, limit=0, reflect=False, loopback=True, seconds=180, host_port=None):
+                 rate=48000, wire=48000, block=128, limit=0, reflect=False, loopback=True, seconds=180, host_port=None,
+                 no_upnp=False):
         self.output, self.serial = Path(output), 0
         self.output.mkdir()
         self.result = {}
@@ -68,7 +69,7 @@ class Native:
             (profile/name).mkdir(parents=True, exist_ok=True)
         base = 'Local\\LiveMixR9.'+uuid.uuid4().hex
         env = dict(os.environ, LIVEMIX_ALLOW_MULTI='1', LIVEMIX_COLLAB_LOOPBACK='1' if loopback else '0',
-                   LIVEMIX_COLLAB_SERVER=api.removesuffix('/api/livemix/collab/'), LIVEMIX_COLLAB_NO_UPNP='1' if loopback else '0',
+                   LIVEMIX_COLLAB_SERVER=api.removesuffix('/api/livemix/collab/'), LIVEMIX_COLLAB_NO_UPNP='1' if loopback or no_upnp else '0',
                    LIVEMIX_OBS_RING=base, LIVEMIX_OBS_PEER_RING=base+'.Peer', LIVEMIX_OBS_PEER2_RING=base+'.Peer2',
                    APPDATA=str(profile/'AppData/Roaming'), LOCALAPPDATA=str(profile/'AppData/Local'),
                    USERPROFILE=str(profile), TEMP=str(profile/'Temp'), TMP=str(profile/'Temp'))

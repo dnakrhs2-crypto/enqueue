@@ -7,8 +7,9 @@ from pathlib import Path
 import sys
 import threading
 import wave
+from urllib.parse import urlsplit, parse_qs
 
-from audio import signal
+from audio import signal, signal_range
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True  # importing R6 must not create files in another round's directory
@@ -18,13 +19,18 @@ from run_browser import Handler as R6Handler  # unchanged R6 HTTP forwarding
 
 class Handler(R6Handler):
     def do_POST(self):
-        if self.path != '/capture':
+        if urlsplit(self.path).path != '/capture':
             return super().do_POST()
         size = int(self.headers.get('Content-Length', 0))
-        if not 0 < size <= 512 * 1024 * 1024:
+        if not 0 < size <= 8 * 1024 * 1024:
             self.send_error(400)
             return
-        with self.server.capture.open('wb') as f:
+        offset = int(parse_qs(urlsplit(self.path).query).get('offset', ['0'])[0])
+        actual = self.server.capture.stat().st_size if self.server.capture.exists() else 0
+        if offset != actual:
+            self.send_error(409, 'capture offset mismatch')
+            return
+        with self.server.capture.open('ab') as f:
             remaining = size
             while remaining:
                 data = self.rfile.read(min(remaining, 1024*1024))
@@ -37,9 +43,23 @@ class Handler(R6Handler):
         self.end_headers()
 
 
+def write_microphone(path: Path, seconds: int) -> Path:
+    """The web voice (3,700 Hz + markers) as a 48 kHz mono WAV, written in 10 s pieces without a seam."""
+    with wave.open(str(path), 'wb') as wav:
+        wav.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
+        for first in range(0, 48000*seconds, 48000*10):
+            pcm = signal_range(48000, first, min(48000*10, 48000*seconds-first), 3)[:, 0]
+            wav.writeframes((pcm*32767).round().astype('<i2').tobytes())
+    return path
+
+
 class BrowserPool:
-    def __init__(self, output: Path, channel: str | None):
+    def __init__(self, output: Path, channel: str | None, fixture_seconds: int = 10):
         self.output, self.channel = output, channel
+        # 10/29: Chrome's fake microphone replays its file from the start when it ends, with a short gap the host
+        # then hears as a 10-20 ms dropout every file length (exactly every 10 s with the old 10 s file). A soak run
+        # passes a file longer than the whole run so the measured voice never crosses that seam.
+        self.fixture_seconds = max(10, int(fixture_seconds))
         self.playwright = self.browser = None
         self.blocked = None
 
@@ -49,15 +69,11 @@ class BrowserPool:
         if self.browser:
             return
         from playwright.sync_api import sync_playwright
-        fixture = self.output / 'web-microphone.wav'
-        with wave.open(str(fixture), 'wb') as wav:
-            wav.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
-            pcm = signal(48000, 48000*10, 3)[:, 0]
-            wav.writeframes((pcm*32767).round().astype('<i2').tobytes())
+        fixture = write_microphone(self.output / 'web-microphone.wav', self.fixture_seconds)
         try:
             self.playwright = sync_playwright().start()
             self.browser = self.playwright.chromium.launch(headless=True, channel=self.channel, chromium_sandbox=True,
-                args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--mute-audio',
+                args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--mute-audio', '--disable-gpu',
                       f'--use-file-for-fake-audio-capture={fixture.resolve()}', '--autoplay-policy=no-user-gesture-required'])
         except Exception as error:
             self.blocked = f'{type(error).__name__}: {error}'
@@ -72,7 +88,7 @@ class BrowserPool:
 
 
 class WebGuest:
-    def __init__(self, pool: BrowserPool, output: Path, api: str, invite: str, loopback=True, reflect=False):
+    def __init__(self, pool: BrowserPool, output: Path, api: str, invite: str, loopback=True, reflect=False, force_relay=False):
         self.output, self.pool = output, pool
         self.page = self.context = self.site = self.thread = None
         self.result = None
@@ -86,6 +102,8 @@ class WebGuest:
             self.thread = threading.Thread(target=self.site.serve_forever, daemon=True)
             self.thread.start()
             self.context = pool.browser.new_context(permissions=['microphone'])
+            self.context.add_init_script('window.__soakForceRelay = ' + ('true;' if force_relay else 'false;') +
+                                         (Path(__file__).with_name('rtc_observer.js')).read_text(encoding='utf-8'))
             self.page = self.context.new_page()  # exactly one attempt on sandbox TargetClosedError
             site = f'http://127.0.0.1:{self.site.server_port}'
             self.page.goto(site + '/tools/lm_collab017/entry.html')
@@ -105,6 +123,12 @@ class WebGuest:
 
     def gain(self, person, gain):
         self.page.evaluate('([p,g])=>r9.gain(p,g)', [person, gain])
+
+    def status(self, detailed=False):
+        return self.page.evaluate('(d)=>r9.snapshot(d)', detailed)
+
+    def finish_capture(self):
+        return self.page.evaluate('r9.finishCapture()')
 
     def close(self):
         try:

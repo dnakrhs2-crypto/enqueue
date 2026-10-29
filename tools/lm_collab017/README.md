@@ -1,4 +1,91 @@
-# LiveMix 0.17 R9 종단 시험
+# LiveMix 0.17.5 세 PC 장시간 시험 (10/29)
+
+`soak.py`는 운영 방 서버를 사용하는 여러 PC 실행기다. 제품 소스는 수정하지 않는다.
+실행 중 창·알림을 만들지 않고, 원격은 SSH 비대화형 세션만 사용한다.
+Python·측정 도구·브라우저 프로세스는 BelowNormal, 브라우저는 headless/소리 끔/GPU 사용 안 함이다.
+Chromium이 일부 자식의 우선순위를 올리는 동작도 Windows Job의 BelowNormal 제한으로 막는다.
+이 Job에는 종료 동작을 넣지 않으며 프로세스 정리는 기록된 PID로만 한다.
+실제 오디오 장치·GPU 부하 시험은 아니다. gom PC의 영상 생성 프로세스는 건드리지 않는다.
+
+```powershell
+# HEAD 동기화 + ProbeV2.cpp만 복사. rb.py의 가져오기를 재사용하되
+# 스냅샷 커밋/로그인 화면 예약 작업은 사용하지 않는다.
+python tools/lm_collab017/build_probe.py
+python tools/lm_collab017/test_soak.py -v
+python tools/lm_collab017/soak.py prepare
+
+# 요청된 짧은 검증. 출력은 매번 새 폴더여야 한다.
+python tools/lm_collab017/soak.py run --cases W3-roomc,W2-relay --seconds 30 --output tools/lm_collab017/artifacts/short-01
+python tools/lm_collab017/soak.py cleanup
+```
+
+600초 본 시험은 실행자가 별도로 선택한다. 이 구현 검증에서는 실행하지 않았다.
+
+```powershell
+python tools/lm_collab017/soak.py prepare
+python tools/lm_collab017/soak.py run --cases 'W3-roomc,W3-local44,N3,W2-relay+RTT-native,W3-churn+RTT-web' --seconds 600 --output tools/lm_collab017/artifacts/soak-600-01
+python tools/lm_collab017/soak.py cleanup
+```
+
+`,`는 순서, `+`는 동시에 실행할 독립된 방이다. 각 방의 방장 코드를 읽는 즉시 Native를 시작하고,
+초대 파일이 준비되면 웹을 시작한다. 모든 참가자가 READY가 된 뒤 측정 시작 파일을 전달한다.
+각 참가자가 정해진 시간을 측정하는 동안 계속 5초 간격으로 통계를 기록한다. 모두 MEASURED가 된 뒤에야
+연결을 해제한다. 웹 캡처는 약 1MB씩 순서대로 올리며, 마지막 flush도 연결 해제 전에 완료한다.
+한 방 실패가 다음 방을 막지 않는다. 종료 코드 0은 모든 수치 판정 통과, 1은 시험 실패, 2는 실행 준비 오류다.
+
+| 케이스 | 구성 | 조건 |
+| --- | --- | --- |
+| W3-roomc | roomc 방장 / local Native / gompc 웹 | 48k, 방장 WAV 4파일 검사 |
+| W3-local44 | local 방장 / gompc Native / roomc 웹 | 44.1k 방, 사무실 두 PC는 같은 공인 IP |
+| N3 | local 방장 / roomc Native / gompc Native | Native 세 명 |
+| W2-relay | roomc 방장 / local 웹 | 웹 TURN 강제, 실제 선택 후보로 확인 |
+| W3-churn | roomc 방장 / gompc Native / local 웹 | 측정 240초에 웹 퇴장, 300초에 같은 초대로 재입장 요청 |
+| RTT-native | gompc 방장 / roomc 반사 Native | 방장 콜백 시계로 표시음 왕복 |
+| RTT-web | local 방장 / roomc 반사 웹 | 방장 콜백 시계로 표시음 왕복 |
+
+`--case-file extra.json`은 아래 형태의 케이스 사전을 추가하거나 덮어쓴다. PC는 local/roomc/gompc,
+방은 총 2~3명, 웹은 최대 한 명이다. 짧은 churn 시험은 `churnAt`/`churnGap`을 명시적으로 줄여야 한다.
+
+```json
+{
+  "Quick-churn": {
+    "host": "roomc", "native": ["gompc"], "web": "local",
+    "wireRate": 48000, "churnAt": 8, "churnGap": 6
+  }
+}
+```
+
+`prepare`는 endpoint 의존 파일 23개와 Probe만 보낸다. `tests/livemix017/r6`에서는 HTTP 도우미 두 파일만,
+`livemix/webjoin`에서는 실제 클라이언트의 JS 파일만 읽어 복사한다. 설치본과 SHA256이 같으면 보내지 않는다.
+패키지/브라우저 버전과 실제 headless 페이지 열기를 확인한다. 외부 패키지를 자동 설치하지 않는다.
+원격 방화벽은 고정 Probe 경로의 `LiveMixSoak` 그룹만 만들고 Chrome 규칙은 만들지 않는다.
+
+local Probe는 방화벽 허용 경로
+`C:/Users/claude/gocue/build/vs2022/LiveMixCollabProbe_artefacts/Release/LiveMixCollabProbe.exe`에서만 실행한다.
+처음 교체할 때만 `.exe.bak_0175`를 만들고 이후 백업은 보존한다. `restore` 또는 `cleanup`으로 복원한다.
+작업 폴더 밖 쓰기가 금지되거나 Chromium이 `TargetClosedError`로 차단되는 샌드박스에서는 local 준비가 실패한다.
+이 경우 `prepare/run/cleanup`을 일반 PowerShell에서 실행해야 한다. 샌드박스 설정을 약화시키거나 다른 실행 경로로 우회하지 않는다.
+
+결과는 `<output>/<case>/<role>@<pc>/result.json`, `timeline.json`, `endpoint.log` 및 하위 Probe/웹 로그에 모인다.
+요약은 `summary.json`과 한국어 `summary.md`다. CPU는 한 코어=100% 및 전체 논리 코어 비율을 기록한다.
+Native RTT/버퍼/손실은 제품 snapshot 값이며, 웹 개인 손실률은 누적 lost/(lost+received)이고 별도 이름으로 표시한다.
+웹 ICE RTT와 표시음 왕복은 다른 측정값이다. 없는 수치는 미측정으로 남긴다.
+
+끊김 판정은 기존 10ms 분석 그대로다. 레벨 저하·무음·고레벨·위상 점프를 모두 보존하고 분당 횟수만 추가했다.
+위상 점프가 연속 검출된 길이는 동일 길이의 무음을 뜻하지 않는다. `phaseJumpWindows`와 `quietWindows`를 함께 확인한다.
+churn의 웹 부재도 실제 수치로 남기며, 남은 사람은 부재·재입장을 포함한 전체 측정 구간을 따로 검사한다.
+
+초대·토큰·TURN 주소/자격 증명은 요약/로그에 쓰지 않는다. 초대는 제어 파일로 전달하고 종료 시 삭제한다.
+프로세스 정리는 `owned.json`에 기록한 PID와 생성 시각을 확인한 뒤 그 PID의 트리만 종료한다.
+`run`은 수집 후 raw capture/녹음을 삭제한다. `--keep-audio`면 각 PC 실행 폴더에 남기며,
+이 경우에도 `cleanup`은 원격 실행 폴더 전체와 방화벽 그룹을 정리한다. 원격 venv는 보존한다.
+
+현재 검증 기록과 제한은 [OUT-soak.txt](OUT-soak.txt),
+빌드 동일성은 `artifacts/build-verification.json`, 분석 동등성은 `artifacts/analysis-equivalence.json`을 본다.
+
+---
+
+# 기존 LiveMix 0.17 R9 종단 시험
 
 작업 폴더: `C:\Users\claude\gocue-webrec-r9`, 시작 `c87792da`.
 앱 코드를 수정하지 않는 검사 도구다. 기존 CollabProbe의 `--host` / `--join` / `--role measure|reflect`는 그대로다.

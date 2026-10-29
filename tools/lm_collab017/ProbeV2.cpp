@@ -187,6 +187,10 @@ juce::var sessionJson (const CollabSession::Snapshot& s)
         p->setProperty ("id", (int) person.participantId); p->setProperty ("slot", person.slot);
         p->setProperty ("self", person.isSelf); p->setProperty ("nick", person.nickname);
         p->setProperty ("state", (int) person.state); p->setProperty ("gain", person.monitorVolume);
+        p->setProperty ("kind", (int) person.kind); p->setProperty ("appVersion", person.appVersion);
+        p->setProperty ("rttMs", person.rttMs); p->setProperty ("estimatedOneWayMs", person.estimatedOneWayMs);
+        p->setProperty ("bufferMs", person.bufferMs); p->setProperty ("lossPercent", person.lossPercent);
+        p->setProperty ("streamEpoch", (int) person.streamEpoch);
         people.add (juce::var (p));
     }
     o->setProperty ("people", people); return v;
@@ -240,7 +244,7 @@ int drive (const juce::File& configFile)
     root->setProperty ("rings", rings);
     CollabRoom room; CollabTransport oldTransport;
     std::unique_ptr<CollabSession> session;
-    double started = now(), connected = 0;
+    double started = now(), connected = 0, startedCpu = cpuSeconds();
     if (legacy)
     {
         if (host) throw std::runtime_error ("v1 emulation is a guest; use the original probe for v1 host RTT");
@@ -356,6 +360,8 @@ int drive (const juce::File& configFile)
             root->setProperty ("lateBlocks", clock.lateBlocks.load()); root->setProperty ("ringReadErrors", clock.ringErrors.load());
             root->setProperty ("commandId", commandId); root->setProperty ("takes", takes);
             root->setProperty ("futureRevisionDrops", (juce::int64) engine.getCollab().getFutureRevisionDrops());
+            root->setProperty ("cpuSeconds", cpuSeconds() - startedCpu);
+            root->setProperty ("wallSeconds", now() - started);
             save (output.getChildFile ("status.json"), result);
         }
         if (! stopping) { code = 3; root->setProperty ("error", "driver deadline"); }

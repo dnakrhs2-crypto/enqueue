@@ -10,7 +10,7 @@ import wave
 import numpy as np
 from audio import align_exact, amplitudes, marker_positions, matrix
 
-HIDDEN = subprocess.CREATE_NO_WINDOW if __import__('sys').platform == 'win32' else 0
+HIDDEN = (subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS) if __import__('sys').platform == 'win32' else 0
 
 
 def read_wav(path: Path):

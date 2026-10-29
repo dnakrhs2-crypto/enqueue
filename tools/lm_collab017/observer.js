@@ -4,7 +4,7 @@ class R9Capture extends AudioWorkletProcessor {
     super(); this.frame=0; this.pcm=new Float32Array(8192); this.used=0;
     this.port.onmessage=e=>{
       if(e.data.type==='mark')this.port.postMessage({type:'mark',id:e.data.id,frame:this.frame});
-      if(e.data.type==='flush') {this.flush();this.port.postMessage({type:'flushed',frame:this.frame});}
+      if(e.data.type==='flush') {this.stopped=true;this.flush();this.port.postMessage({type:'flushed',frame:this.frame});}
     };
   }
   flush() {
@@ -13,6 +13,7 @@ class R9Capture extends AudioWorkletProcessor {
     this.port.postMessage({type:'pcm',buffer},[buffer]);this.used=0;
   }
   process(inputs,outputs) {
+    if(this.stopped){for(const ch of outputs[0])ch.fill(0);return true;}
     const a=inputs[0];const n=outputs[0][0].length;
     for(let i=0;i<n;i++) {
       this.pcm[this.used++]=a[0]?.[i]??0;this.pcm[this.used++]=a[1]?.[i]??0;
