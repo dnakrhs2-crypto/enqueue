@@ -357,6 +357,8 @@ export function startApp(doc = document, win = window) {
         if (screen === "connected" && !localEnding) {
           prepared = false;
           setMicProblem(true);
+          // Design check 10/30: on a laptop at 125% the field sits below the first screen; bring it and the message up.
+          micPicker.scrollIntoView({ block: "nearest" });
         }
       }, onError: fail });
       const room = await client.inspect(invite);

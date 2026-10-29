@@ -544,6 +544,48 @@ class Suite:
         finally:
             await context.close()
 
+    async def call_microphone_overlay(self):
+        # Design check 10/30 (1366x768 at 125%): on the call screen the field sits near the page end, over 나가기.
+        from playwright.async_api import expect
+        context = await self.context()
+        try:
+            devices = CALL_DEVICES + [{"deviceId": "iface", "kind": "audioinput", "label": "라인(오디오 인터페이스)"}]
+            page = await self.page(context, {"devices": devices}, size=(1093, 479))
+            await self.connected(page)
+            picker = page.locator("#microphone")
+            # A microphone that stops during the call brings its field and message into view.
+            await page.evaluate("window.scrollTo(0, 0)")
+            await page.evaluate("r11.microphoneEnded()")
+            await expect(page.locator("#microphone-error")).to_have_text(MIC_SWITCH)
+            box = await page.evaluate("""() => {
+                const r = document.querySelector('#microphone-picker').getBoundingClientRect();
+                return {top: r.top, bottom: r.bottom, height: innerHeight};
+            }""")
+            assert box["top"] >= 0 and box["bottom"] <= box["height"], box
+            # Opening and closing the list leaves the field where it was.
+            await picker.click()
+            await expect(picker).to_have_attribute("aria-expanded", "true")
+            opened = (await picker.bounding_box())["y"]
+            await picker.press("Escape")
+            await expect(page.locator("#microphone-options")).to_be_hidden()
+            closed = (await picker.bounding_box())["y"]
+            assert abs(closed - opened) <= 1, (opened, closed)
+            # Pressing beside the open list, on the edge of 나가기 under it, only closes the list.
+            await picker.click()
+            await expect(picker).to_have_attribute("aria-expanded", "true")
+            leave = await page.locator("#leave").bounding_box()
+            listed = await page.locator("#microphone-options").bounding_box()
+            assert listed["y"] < leave["y"] + leave["height"] and listed["y"] + listed["height"] > leave["y"], (listed, leave)
+            assert leave["x"] + 4 < listed["x"], (listed, leave)
+            await page.mouse.click(leave["x"] + 4, leave["y"] + leave["height"] / 2)
+            await expect(page.locator("#microphone-options")).to_be_hidden()
+            await expect(page.locator("#app")).to_have_attribute("data-screen", "connected")
+            assert len(await self.calls(page, "leave")) == 0
+            await page.locator("#leave").click()
+            await expect(page.locator("#app")).to_have_attribute("data-screen", "ended")
+        finally:
+            await context.close()
+
     async def leave_during_microphone_choice(self):
         from playwright.async_api import expect
         context = await self.context()
@@ -746,10 +788,11 @@ class Suite:
         await self.case("held default microphone: join keeps the entry and another input is picked", lambda: self.held_microphone(False))
         await self.case("held default microphone: the list opens and another input is picked", lambda: self.held_microphone(True))
         for size in ((390, 760), (960, 640)):
-            await self.case(f"call microphone at card top, keyboard, fresh inputs and layout: {size[0]}", lambda s=size: self.call_microphone(s))
+            await self.case(f"call microphone in its own card, keyboard, fresh inputs and layout: {size[0]}", lambda s=size: self.call_microphone(s))
         for code in ("microphone_busy", "microphone_denied"):
             await self.case(f"call microphone failure, locked retry and recovery: {code}", lambda c=code: self.call_microphone_failure(c))
         await self.case("call microphone ended, recovery and entry picker after leaving", self.call_microphone_ended)
+        await self.case("call microphone list near the page end: message in view, no jump, 나가기 under it", self.call_microphone_overlay)
         await self.case("leaving during microphone choice ignores its late result", self.leave_during_microphone_choice)
         await self.case("invalid fragment stops before inspect", self.invalid_invite)
         await self.case("a reissued invite pasted into the same tab opens its room", self.reissued_invite)

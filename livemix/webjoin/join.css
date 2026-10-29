@@ -127,10 +127,17 @@ h2 { font-size: 22px; font-weight: 700; margin: 0; }
   padding: 4px;
   list-style: none;
   background: var(--card2);
-  box-shadow: inset 0 0 0 1px var(--line);
+  /* The drop shadow lifts the open list off whatever it covers (on the call screen, 나가기 of the same colour). */
+  box-shadow: inset 0 0 0 1px var(--line), 0 12px 28px rgb(0 0 0 / .5);
   border-radius: var(--controlRadius);
 }
 #microphone-options li { min-height: 44px; padding: 10px; font-size: 16px; border-radius: 6px; cursor: pointer; }
+/* Design check 10/30: 나가기 lies under the open list and its ends show beside it. A press there only closes the
+   list (the field's blur), instead of also ending the call. */
+#connected:has(#microphone[aria-expanded="true"]) #leave { pointer-events: none; }
+/* Design check 10/30: on the call screen the field sits near the page end. Room for the longest open list
+   (220 + 4 - 18 - 14 - 48 - 28) keeps the page from growing on open and jumping back on close. */
+#connected { padding-bottom: 116px; }
 #microphone-options li.active { box-shadow: inset 0 0 0 2px var(--accent); }
 .hp { font-size: 14px; color: var(--dimText); line-height: 1.5; }
 /* Field message between the microphone button and its list, so the open list starts below it; --danger on the
