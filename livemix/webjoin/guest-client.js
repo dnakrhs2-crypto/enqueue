@@ -42,8 +42,9 @@ function connectionId() {
 
 // 'testing' is an explicit dependency injection seam. Nothing reads URL query
 // parameters, storage or globals to change the API, ICE servers or audio path.
-export function createGuestClient({ onState = () => {}, onRoster = () => {}, onMeter = () => {}, onError = () => {}, testing = null } = {}) {
-  return new GuestClient({ onState, onRoster, onMeter, onError }, testing);
+export function createGuestClient({ onState = () => {}, onRoster = () => {}, onMeter = () => {}, onError = () => {},
+  onMicrophoneError = () => {}, testing = null } = {}) {
+  return new GuestClient({ onState, onRoster, onMeter, onError, onMicrophoneError }, testing);
 }
 class GuestClient {
   constructor(callbacks, testing) {
@@ -121,11 +122,56 @@ class GuestClient {
     this.prepareTask = this.prepare(deviceId).finally(() => { this.prepareTask = null; });
     return this.prepareTask;
   }
+  listMicrophones() { return namedInputs(); }
+  stopMicrophone() {
+    for (const track of this.stream?.getTracks() || []) { track.onended = null; track.stop(); }
+    this.stream = null;
+    this.source?.disconnect(); this.source = null;
+  }
+  useMicrophone(stream, deviceId) {
+    const track = stream.getAudioTracks()[0];
+    this.stream = stream;
+    this.microphoneId = deviceId || track.getSettings().deviceId || null;
+    track.onended = () => {
+      if (this.stream !== stream || this.ending) return;
+      if (this.state === "connected") {
+        this.stopMicrophone();
+        this.callbacks.onMeter({ peak: 0 });
+        this.callbacks.onMicrophoneError({ code: "microphone_ended" });
+      } else void this.fail("microphone_ended");
+    };
+    this.diagnostics({ type: "microphone", trackSettings: track.getSettings(),
+      sampleRate: this.context.sampleRate, baseLatency: this.context.baseLatency, outputLatency: this.context.outputLatency });
+  }
+  async switchMicrophone(deviceId) {
+    if (this.disposed || this.ending || this.state !== "connected") throw Object.assign(new Error("cancelled"), { code: "cancelled" });
+    const life = ++this.lifecycle;
+    // Release the call route first: phones and exclusive devices may allow only one input at a time.
+    this.stopMicrophone();
+    this.microphoneId = deviceId;
+    this.callbacks.onMeter({ peak: 0 });
+    let stream;
+    try {
+      stream = await openMicrophone(deviceId);
+      if (life !== this.lifecycle || this.disposed || this.ending) throw new Error("cancelled");
+      const track = stream.getAudioTracks()[0];
+      if (!track || track.readyState !== "live") throw new DOMException("microphone_missing", "NotFoundError");
+      this.source = this.context.createMediaStreamSource(stream);
+      this.source.connect(this.node);
+      this.useMicrophone(stream, deviceId);
+    } catch (error) {
+      stream?.getTracks().forEach(track => { track.onended = null; track.stop(); });
+      const cancelled = life !== this.lifecycle || this.disposed || this.ending;
+      if (!cancelled) this.stopMicrophone();
+      // No fallback input and no call teardown, including a permission denial during the call.
+      const code = cancelled ? "cancelled" : microphoneCode(error);
+      throw Object.assign(new Error(code), { code });
+    }
+  }
   async prepare(deviceId) {
     if (this.disposed || this.ending || ["pending", "connecting", "connected"].includes(this.state)) throw new Error("state");
     const life = ++this.lifecycle;
-    for (const track of this.stream?.getTracks() ?? []) track.stop();
-    this.stream = null;
+    this.stopMicrophone();
     if (this.context) { await this.context.close(); this.context = null; }
     let stream, context;
     try {
@@ -148,11 +194,8 @@ class GuestClient {
       if (life !== this.lifecycle || this.disposed || this.ending) throw new Error("cancelled");
       const tracks = stream.getAudioTracks();
       if (!tracks.length || tracks[0].readyState !== "live") throw new Error("microphone_missing");
-      this.stream = stream; this.context = context;
-      this.microphoneId = chosen || tracks[0].getSettings().deviceId || null;
-      tracks[0].onended = () => { if (this.stream === stream && !this.ending) void this.fail("microphone_ended"); };
-      this.diagnostics({ type: "microphone", trackSettings: tracks[0].getSettings(),
-        sampleRate: context.sampleRate, baseLatency: context.baseLatency, outputLatency: context.outputLatency });
+      this.context = context;
+      this.useMicrophone(stream, chosen);
       const devices = await navigator.mediaDevices.enumerateDevices();
       if (life !== this.lifecycle || this.ending || this.disposed) throw new Error("cancelled");
       this.setState("ready");
@@ -328,10 +371,9 @@ class GuestClient {
   }
   async cleanup(state, notifyServer) {
     clearInterval(this.relayTimer); clearTimeout(this.connectTimer);
-    for (const track of this.stream?.getTracks() ?? []) { track.onended = null; track.stop(); }
-    this.stream = null;
+    this.stopMicrophone();
     if (this.node) { this.node.port.postMessage({ type: "close", generation: this.generation }); this.node.port.close(); this.node.disconnect(); }
-    this.source?.disconnect(); this.source = this.node = null;
+    this.node = null;
     if (this.channel) { this.channel.onclose = this.channel.onerror = this.channel.onmessage = this.channel.onopen = null; this.channel.close(); this.channel = null; }
     if (this.pc) { this.pc.ondatachannel = this.pc.onicecandidate = this.pc.onconnectionstatechange = null; this.pc.close(); this.pc = null; }
     this.relay?.close(); this.relay = null;

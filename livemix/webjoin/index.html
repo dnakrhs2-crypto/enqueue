@@ -22,7 +22,7 @@
           <input class="inp" id="nickname" name="nickname" type="text"
                  autocomplete="nickname" maxlength="80" required spellcheck="false">
           <label class="lab" id="microphone-label" for="microphone">마이크</label>
-          <div class="device-picker">
+          <div class="device-picker" id="microphone-picker">
             <button class="inp sel" id="microphone" type="button" role="combobox"
                     aria-labelledby="microphone-label microphone-name" aria-haspopup="listbox"
                     aria-controls="microphone-options" aria-expanded="false" aria-describedby="microphone-error">
@@ -52,6 +52,7 @@
             <i></i>
           </div>
         </div>
+        <div class="wcard" id="call-device"></div>
         <button class="ghost" id="leave" type="button">나가기</button>
         <div class="diag" id="diag" hidden></div>
       </section>

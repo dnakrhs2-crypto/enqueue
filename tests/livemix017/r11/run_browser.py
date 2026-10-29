@@ -33,6 +33,8 @@ SIZES = {"phone": (390, 760), "pc": (960, 600)}
 COPY = ["ON", "LiveMix", "닉네임", "마이크", "헤드폰을 쓰고 들어오세요.", "들어가기",
         "방장이 수락하면 연결됩니다", "취소", "연결됨", "마이크 ON", "마이크 OFF", "나가기", ERROR,
         MIC_ERROR, FULL_ERROR, REJECTED_ERROR, CONNECTION_ERROR, PERMISSION_ERROR, MIC_SWITCH]
+CALL_DEVICES = [{"deviceId": "phone", "kind": "audioinput", "label": "휴대폰 마이크"},
+                {"deviceId": "shure", "kind": "audioinput", "label": "마이크(Shure MV7)"}]
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -320,6 +322,9 @@ class Suite:
                 await page.evaluate("r11.state('ended')")
                 await expect(page.locator("#error-message")).to_have_text(ERROR)
             else:
+                # gom 10/30 C: the microphone field's own card sits between the mic ON/OFF card and 나가기.
+                await page.keyboard.press("Tab")
+                await expect(page.locator("#microphone")).to_be_focused()
                 await page.keyboard.press("Tab")
                 await expect(page.locator("#leave")).to_be_focused()
                 await page.keyboard.press("Enter")
@@ -417,6 +422,149 @@ class Suite:
         finally:
             await context.close()
 
+    async def call_microphone(self, size):
+        from playwright.async_api import expect
+        context = await self.context()
+        try:
+            page = await self.page(context, {"devices": CALL_DEVICES}, size=size)
+            await page.evaluate("r11.picker = document.querySelector('.device-picker')")
+            await self.connected(page)
+            await expect(page.locator("#connected #microphone-name")).to_have_text(CALL_DEVICES[0]["label"])
+            # gom 10/30 C: the mic ON/OFF card stays as it was; the same label and field get their own card under it.
+            assert await page.evaluate("""() => {
+                const mic = document.querySelector('#mic-toggle').parentElement, card = mic.nextElementSibling;
+                return mic.children.length === 2 && mic.children[0].id === 'mic-toggle' && mic.children[1].id === 'mic-meter' &&
+                    card.id === 'call-device' && card.classList.contains('wcard') && card.children.length === 2 &&
+                    card.children[0].id === 'microphone-label' && card.children[1] === r11.picker &&
+                    card.nextElementSibling.id === 'leave' && document.querySelectorAll('#microphone').length === 1;
+            }""")
+            await page.locator("#mic-toggle").click()
+            await page.locator("#volume-1").press("Home")
+            picker = page.locator("#microphone")
+            await picker.focus()
+            await page.keyboard.press("Enter")
+            await expect(picker).to_have_attribute("aria-expanded", "true")
+            field = await picker.bounding_box()
+            listed = await page.locator("#microphone-options").bounding_box()
+            assert listed["y"] >= field["y"] + field["height"]
+            await page.screenshot(path=str(self.output / f"actual/callmic-{size[0]}-open.png"), full_page=True)
+            await page.keyboard.press("ArrowDown")
+            await page.keyboard.press("Enter")
+            await expect(page.locator("#microphone-name")).to_have_text(CALL_DEVICES[1]["label"])
+            await expect(picker).to_be_enabled()
+            await expect(picker).to_be_focused()
+            assert [c["deviceId"] for c in await self.calls(page, "switchMicrophone")] == ["shure"]
+            assert len(await self.calls(page, "prepareMicrophone")) == 1
+            await expect(page.locator("#mic-toggle")).to_have_attribute("aria-pressed", "false")
+            await expect(page.locator("#volume-1")).to_have_value("0")
+            # A microphone plugged in during the call appears on the next opening.
+            await page.evaluate("r11.config.devices.push({kind:'audioinput',deviceId:'usb',label:'USB microphone'})")
+            await picker.press("Enter")
+            await expect(page.locator("#microphone-options li")).to_have_count(3)
+            assert len(await self.calls(page, "listMicrophones")) == 2
+            for zoom in (1, 1.25, 1.5):
+                await page.evaluate("zoom => document.body.style.zoom = zoom", zoom)
+                await self.layout(page)
+            await page.evaluate("document.body.style.zoom = 1")
+            await picker.press("Escape")
+            await expect(page.locator("#microphone-options")).to_be_hidden()
+            await expect(picker).to_be_focused()
+            assert len(await self.calls(page, "switchMicrophone")) == 1
+            await self.copy(page)
+            await page.screenshot(path=str(self.output / f"actual/callmic-{size[0]}.png"), full_page=True)
+        finally:
+            await context.close()
+
+    async def call_microphone_failure(self, code):
+        from playwright.async_api import expect
+        context = await self.context()
+        try:
+            page = await self.page(context, {"devices": CALL_DEVICES, "switchErrors": {"shure": code}})
+            await self.connected(page)
+            picker = page.locator("#microphone")
+            await picker.click()
+            await page.locator("#microphone-option-1").click()
+            await expect(page.locator("#microphone-name")).to_have_text(CALL_DEVICES[1]["label"])
+            await expect(page.locator("#microphone-error")).to_have_text(MIC_SWITCH)
+            await expect(page.locator("#connected")).to_be_visible()
+            await expect(page.locator("#mic-meter")).to_have_attribute("aria-valuenow", "0")
+            field = await picker.bounding_box()
+            message = await page.locator("#microphone-error").bounding_box()
+            assert message["y"] >= field["y"] + field["height"]
+            # Retrying the same failed input hides the old message while the field is locked.
+            await page.evaluate("r11.config.pauseSwitch = true")
+            await picker.click()
+            await page.locator("#microphone-option-1").click()
+            await expect(picker).to_be_disabled()
+            await expect(page.locator("#microphone-error")).to_be_hidden()
+            await page.evaluate("r11.completeSwitch()")
+            await expect(picker).to_be_enabled()
+            await expect(page.locator("#microphone-error")).to_be_visible()
+            await page.evaluate("r11.config.pauseSwitch = false")
+            await picker.click()
+            await page.locator("#microphone-option-0").click()
+            await expect(page.locator("#microphone-name")).to_have_text(CALL_DEVICES[0]["label"])
+            await expect(page.locator("#microphone-error")).to_be_hidden()
+            await expect(picker).to_have_attribute("aria-invalid", "false")
+            await page.evaluate("r11.meter(.46)")
+            await expect(page.locator("#mic-meter")).to_have_attribute("aria-valuenow", "46")
+            assert [c["deviceId"] for c in await self.calls(page, "switchMicrophone")] == ["shure", "shure", "phone"]
+            await self.copy(page)
+        finally:
+            await context.close()
+
+    async def call_microphone_ended(self):
+        from playwright.async_api import expect
+        context = await self.context()
+        try:
+            page = await self.page(context, {"devices": CALL_DEVICES})
+            await self.connected(page)
+            await page.evaluate("r11.microphoneEnded(); r11.config.devices.shift()")
+            await expect(page.locator("#connected")).to_be_visible()
+            await expect(page.locator("#microphone-error")).to_have_text(MIC_SWITCH)
+            await expect(page.locator("#microphone-name")).to_have_text(CALL_DEVICES[0]["label"])
+            await expect(page.locator("#mic-meter")).to_have_attribute("aria-valuenow", "0")
+            await page.locator("#microphone").click()
+            await expect(page.locator("#microphone-name")).to_have_text(CALL_DEVICES[0]["label"])
+            await page.locator("#microphone-option-0").click()
+            await expect(page.locator("#microphone-error")).to_be_hidden()
+            await expect(page.locator("#microphone-name")).to_have_text(CALL_DEVICES[1]["label"])
+            await page.locator("#leave").click()
+            await expect(page.locator("#app")).to_have_attribute("data-screen", "ended")
+            await page.evaluate("hash => { location.hash = hash; }", FRAGMENT.replace("generation=1", "generation=2"))
+            await expect(page.locator("#entry")).to_be_visible()
+            await expect(page.locator("#entry #microphone")).to_have_count(1)
+            await expect(page.locator("#microphone-error")).to_be_hidden()
+            await page.locator("#microphone").click()
+            await expect(page.locator("#microphone-name")).to_have_text(CALL_DEVICES[1]["label"])
+            await page.locator("#microphone").press("Escape")
+            assert len(await self.calls(page, "prepareMicrophone")) == 2
+            assert len(await self.calls(page, "switchMicrophone")) == 1
+            await self.join(page)
+        finally:
+            await context.close()
+
+    async def leave_during_microphone_choice(self):
+        from playwright.async_api import expect
+        context = await self.context()
+        try:
+            page = await self.page(context, {"devices": CALL_DEVICES, "pauseSwitch": True,
+                                             "switchErrors": {"shure": "microphone_busy"}})
+            await self.connected(page)
+            await page.locator("#microphone").click()
+            await page.locator("#microphone-option-1").click()
+            await expect(page.locator("#microphone")).to_be_disabled()
+            await page.locator("#leave").click()
+            await expect(page.locator("#app")).to_have_attribute("data-screen", "ended")
+            await page.evaluate("hash => { location.hash = hash; }", FRAGMENT.replace("generation=1", "generation=2"))
+            await expect(page.locator("#entry")).to_be_visible()
+            await page.evaluate("r11.completeSwitch()")
+            await expect(page.locator("#microphone-error")).to_be_hidden()
+            await expect(page.locator("#microphone-name")).to_have_text("마이크")
+            await expect(page.locator("#microphone")).to_be_enabled()
+        finally:
+            await context.close()
+
     async def reissued_invite(self):
         from playwright.async_api import expect
         context = await self.context()
@@ -511,6 +659,10 @@ class Suite:
                 for zoom in (1, 1.25, 1.5):
                     await page.evaluate("zoom => document.body.style.zoom = zoom", zoom)
                     await self.layout(page)
+                    await page.locator("#microphone").click()
+                    await page.wait_for_function("document.querySelector('#microphone').getAttribute('aria-expanded') === 'true'")
+                    await self.layout(page)
+                    await page.locator("#microphone").press("Escape")
                     boxes = await page.evaluate("""() => [...document.querySelectorAll('.pblk')].map(row => {
                         const name = row.querySelector('.nick').getBoundingClientRect();
                         const status = row.querySelector('.st').getBoundingClientRect();
@@ -593,6 +745,12 @@ class Suite:
             await self.case(f"approved error copy: {stage}/{code}", lambda s=stage, c=code: self.error_flow(s, c))
         await self.case("held default microphone: join keeps the entry and another input is picked", lambda: self.held_microphone(False))
         await self.case("held default microphone: the list opens and another input is picked", lambda: self.held_microphone(True))
+        for size in ((390, 760), (960, 640)):
+            await self.case(f"call microphone at card top, keyboard, fresh inputs and layout: {size[0]}", lambda s=size: self.call_microphone(s))
+        for code in ("microphone_busy", "microphone_denied"):
+            await self.case(f"call microphone failure, locked retry and recovery: {code}", lambda c=code: self.call_microphone_failure(c))
+        await self.case("call microphone ended, recovery and entry picker after leaving", self.call_microphone_ended)
+        await self.case("leaving during microphone choice ignores its late result", self.leave_during_microphone_choice)
         await self.case("invalid fragment stops before inspect", self.invalid_invite)
         await self.case("a reissued invite pasted into the same tab opens its room", self.reissued_invite)
         await self.case("short window device list, disabled join and slider focus ring", self.design_fixes)

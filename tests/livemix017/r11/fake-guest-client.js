@@ -9,6 +9,10 @@ const defaultMembers = [
   { participantId: 2, nick: "윤슬", kind: "native", state: "connected" },
   { participantId: 3, nick: "하늘", kind: "web", state: "connected" },
 ];
+const defaultDevices = [
+  { deviceId: "phone", kind: "audioinput", label: "휴대폰 마이크" },
+  { deviceId: "shure", kind: "audioinput", label: "마이크(Shure MV7)" },
+];
 window.r11 = {
   calls,
   config,
@@ -17,6 +21,7 @@ window.r11 = {
   },
   state(state) { callbacks.onState({ state, generation: 1 }); },
   meter(peak) { callbacks.onMeter({ peak }); },
+  microphoneEnded() { callbacks.onMicrophoneError({ code: "microphone_ended" }); this.meter(0); },
   error(code) { callbacks.onError({ code }); callbacks.onState({ state: "error", generation: 1 }); },
   accept() {
     this.state("connecting");
@@ -53,10 +58,7 @@ export function createGuestClient(handlers) {
       }
       ready = true;
       callbacks.onState({ state: "ready", generation: 0 });
-      return config.devices ?? [
-        { deviceId: "phone", kind: "audioinput", label: "휴대폰 마이크" },
-        { deviceId: "shure", kind: "audioinput", label: "마이크(Shure MV7)" },
-      ];
+      return config.devices || defaultDevices;
     },
     async requestJoin(invite, nickname) {
       if (!ready) throw new Error("microphone_required");
@@ -66,6 +68,20 @@ export function createGuestClient(handlers) {
         throw new Error(config.joinError);
       }
       callbacks.onState({ state: "pending", generation: 0 });
+    },
+    async listMicrophones() {
+      calls.push({ method: "listMicrophones" });
+      return (config.devices || defaultDevices).filter(device => device.kind === "audioinput" && device.label);
+    },
+    async switchMicrophone(deviceId) {
+      calls.push({ method: "switchMicrophone", deviceId });
+      callbacks.onMeter({ peak: 0 });
+      if (config.pauseSwitch) await new Promise(resolve => { window.r11.completeSwitch = resolve; });
+      if (config.switchErrors?.[deviceId]) {
+        const code = config.switchErrors[deviceId];
+        throw Object.assign(new Error(code), { code });
+      }
+      callbacks.onMeter({ peak: .46 });
     },
     setMicEnabled(enabled) { calls.push({ method: "setMicEnabled", enabled }); },
     setPeerVolume(participantId, gain) {

@@ -114,7 +114,7 @@ h2 { font-size: 22px; font-weight: 700; margin: 0; }
   flex: none;
 }
 .device-picker { position: relative; min-width: 0; }
-/* Only the open device list overlays the entry form. */
+/* The shared device list overlays either screen below its field. */
 #microphone-options {
   position: absolute;
   z-index: 1;
@@ -136,7 +136,7 @@ h2 { font-size: 22px; font-weight: 700; margin: 0; }
 /* Field message between the microphone button and its list, so the open list starts below it; --danger on the
    card is 5.2:1. It blinks out while the page tries a microphone, so a retry that fails again is seen. */
 .fe { font-size: 14px; font-weight: 700; color: var(--danger); line-height: 1.5; margin-top: 6px; text-wrap: balance; }
-#entry[aria-busy="true"] .fe { visibility: hidden; }
+.device-picker[aria-busy="true"] .fe { visibility: hidden; }
 .go, .ghost {
   width: 100%;
   border-radius: var(--controlRadius);

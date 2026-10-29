@@ -92,7 +92,7 @@ async def run(args, result, base, site):
                     invite = post(base, 'web/invite', {'code': room['code'], 'hostToken': room['hostToken']})
                     config = {'apiBase': site + '/r2/', 'code': room['code'], 'hostToken': room['hostToken'],
                         'invite': {'code': room['code'], 'inviteToken': invite['inviteToken'], 'inviteGeneration': invite['inviteGeneration']},
-                        'forceRelay': relay, 'remoteClose': remote_close}
+                        'forceRelay': relay, 'remoteClose': remote_close, 'microphoneSwitch': not relay and not remote_close}
                     print(f'Connection: relay={relay}, remote close={remote_close}', flush=True)
                     result['connections'].append(await page.evaluate('config => r6.connectionTest(config)', config))
                 finally:

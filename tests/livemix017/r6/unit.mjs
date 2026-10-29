@@ -518,6 +518,110 @@ await test('a default microphone another program holds leaves the named inputs t
   return {opened:opened.length};
 });
 
+// Real client methods, with only browser media/graph resources supplied by the fixture.
+async function microphoneCall(run, state = 'connected') {
+  const saved = ['navigator', 'AudioContext'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
+  const opened = [], streams = [], errors = [], micErrors = [], meters = [], messages = [];
+  const inputs = [{kind:'audioinput',deviceId:'default',label:'Default microphone'},
+    {kind:'audioinput',deviceId:'phone',label:'Speakerphone'},
+    {kind:'audioinput',deviceId:'bluetooth',label:'Bluetooth headset'}];
+  const pending = new Map();
+  const failures = {busy:'NotReadableError',missing:'NotFoundError',constraints:'OverconstrainedError',denied:'NotAllowedError'};
+  let client;
+  function makeStream(id) {
+    const track = {readyState:'live',onended:null,getSettings:()=>({deviceId:id,sampleRate:44100,channelCount:1}),
+      stop(){assert.equal(this.onended,null,'detach ended before stopping');this.readyState='ended';}};
+    const stream = {getTracks:()=>[track],getAudioTracks:()=>[track]};
+    streams.push(stream); return stream;
+  }
+  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{
+    async enumerateDevices(){return [...inputs,{kind:'audioinput',deviceId:'unnamed',label:''},{kind:'audiooutput',label:'Speaker'}];},
+    async getUserMedia(constraints){
+      assert.equal(client.stream,null,'close the old microphone before requesting the next');
+      assert.equal(client.source,null,'disconnect the old source before opening');
+      opened.push(constraints);
+      const id=constraints.audio.deviceId.exact;
+      if(failures[id])throw new DOMException(id,failures[id]);
+      if(id.startsWith('slow'))return new Promise(resolve=>pending.set(id,()=>{const s=makeStream(id);resolve(s);return s;}));
+      return makeStream(id);
+    }
+  }}});
+  Object.defineProperty(globalThis,'AudioContext',{configurable:true,value:class {
+    constructor(){this.sampleRate=48000;this.state='running';this.audioWorklet={addModule:async()=>{}};}
+    async resume(){} async close(){this.state='closed';}
+    createMediaStreamSource(stream){return {stream,target:null,connect(node){this.target=node;},disconnect(){this.target=null;}};}
+  }});
+  client=createGuestClient({onError:e=>errors.push(e.code),onMicrophoneError:e=>micErrors.push(e.code),onMeter:m=>meters.push(m.peak)});
+  try {
+    await client.prepareMicrophone('default');
+    client.node={port:{postMessage:m=>messages.push(m),close(){}},disconnect(){}};
+    client.source=client.context.createMediaStreamSource(client.stream);client.source.connect(client.node);
+    client.pc={close(){}};client.worker={postMessage:m=>messages.push(m),terminate(){}};
+    client.channel={close(){}};client.rpc=async()=>{};client.generation=7;
+    client.setState(state);
+    return await run({client,opened,streams,errors,micErrors,meters,messages,inputs,pending});
+  } finally {
+    await client.dispose();
+    for(const [name,descriptor] of saved){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else delete globalThis[name];}
+  }
+}
+
+await test('connected microphone switch replaces only the input and preserves mute, gains and transport', () => microphoneCall(async ({client,opened}) => {
+  const old=client.stream,source=client.source;
+  const resources=[client.context,client.node,client.pc,client.channel,client.worker];
+  client.setPeerVolume(1,0.35);client.setMicEnabled(false);
+  await client.switchMicrophone('bluetooth');
+  assert.deepEqual(opened.map(c=>c.audio.deviceId),[{exact:'default'},{exact:'bluetooth'}]);
+  assert.equal(old.getAudioTracks()[0].readyState,'ended');assert.equal(source.target,null);
+  [client.context,client.node,client.pc,client.channel,client.worker].forEach((resource,index)=>assert.equal(resource,resources[index]));
+  assert.equal(client.source.target,client.node);assert.equal(client.source.stream,client.stream);
+  assert.equal(client.state,'connected');assert.equal(client.generation,7);assert.equal(client.micEnabled,false);
+  assert.deepEqual(client.gains,[{id:1,gain:0.35}]);assert.equal(client.microphoneId,'bluetooth');
+  assert.equal(client.microphoneInfo.trackSettings.deviceId,'bluetooth');assert.equal(client.microphoneInfo.sampleRate,48000);
+}));
+
+await test('connected microphone failures stay silent in the call and another input recovers', () => microphoneCall(async ({client,errors,meters,opened}) => {
+  for(const [id,code] of [['busy','microphone_busy'],['constraints','microphone_constraints'],['missing','microphone_missing'],['denied','microphone_denied']]){
+    await assert.rejects(client.switchMicrophone(id),e=>e.code===code);
+    assert.equal(client.stream,null);assert.equal(client.source,null);assert.equal(client.state,'connected');
+    assert.equal(client.microphoneId,id);assert.equal(meters.at(-1),0);assert.deepEqual(errors,[]);
+    assert.equal(opened.at(-1).audio.deviceId.exact,id,'no automatic fallback');
+    await client.switchMicrophone('phone');assert.equal(client.stream.getAudioTracks()[0].readyState,'live');
+  }
+}));
+
+await test('connected microphone ended keeps the call and permits another input', () => microphoneCall(async ({client,errors,micErrors,meters}) => {
+  client.stream.getAudioTracks()[0].onended();
+  assert.equal(client.state,'connected');assert.equal(client.stream,null);assert.equal(client.source,null);
+  assert.deepEqual(errors,[]);assert.deepEqual(micErrors,['microphone_ended']);assert.equal(meters.at(-1),0);
+  await client.switchMicrophone('phone');
+  client.stream.getAudioTracks()[0].onended();
+  assert.equal(client.state,'connected');assert.equal(micErrors.length,2,'replacement track has ended handling too');
+}));
+
+await test('entry and waiting microphone ended keep their existing fatal handling', async () => {
+  for(const state of ['ready','pending','connecting'])await microphoneCall(async ({client,errors,micErrors})=>{
+    client.stream.getAudioTracks()[0].onended();await client.finishTask;
+    assert.equal(client.state,'error');assert.deepEqual(errors,['microphone_ended']);assert.deepEqual(micErrors,[]);
+  },state);
+});
+
+await test('connected input list rereads named microphones without opening any', () => microphoneCall(async ({client,inputs,opened}) => {
+  assert.deepEqual((await client.listMicrophones()).map(d=>d.deviceId),['default','phone','bluetooth']);
+  inputs.push({kind:'audioinput',deviceId:'usb',label:'USB microphone'});
+  assert.equal((await client.listMicrophones()).at(-1).deviceId,'usb');assert.equal(opened.length,1);
+}));
+
+await test('a later microphone choice wins and leaving closes a delayed stream', () => microphoneCall(async ({client,pending}) => {
+  const first=client.switchMicrophone('slow-first').catch(e=>e.code);
+  await client.switchMicrophone('phone');const winner=client.stream;
+  const late=pending.get('slow-first')();assert.equal(await first,'cancelled');
+  assert.equal(late.getAudioTracks()[0].readyState,'ended');assert.equal(client.stream,winner);
+  const leaving=client.switchMicrophone('slow-leave').catch(e=>e.code);
+  await client.leave();const afterLeave=pending.get('slow-leave')();assert.equal(await leaving,'cancelled');
+  assert.equal(afterLeave.getAudioTracks()[0].readyState,'ended');assert.equal(client.stream,null);
+}));
+
 const summary={ok:results.every(r=>r.ok),passed:results.filter(r=>r.ok).length,total:results.length,results};
 if(process.argv[2]) await writeFile(process.argv[2],JSON.stringify(summary,null,2));
 console.log(JSON.stringify({ok:summary.ok,passed:summary.passed,total:summary.total}));

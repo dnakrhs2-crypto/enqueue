@@ -49,12 +49,13 @@ export function startApp(doc = document, win = window) {
   const preferences = createPreferences(() => win.localStorage);
   const app = $("app"), title = $("room-title"), entry = $("entry");
   const nickname = $("nickname"), join = $("join"), microphone = $("microphone");
+  const micLabel = $("microphone-label"), micPicker = $("microphone-picker"), micName = $("microphone-name");
   const options = $("microphone-options"), people = $("people");
   const micToggle = $("mic-toggle"), meter = $("mic-meter"), diag = $("diag"), micError = $("microphone-error");
   const rows = new Map();
   let client, invite, devices = [], deviceId = null, activeDevice = 0;
   let prepared = false, busy = false, micEnabled = true, localEnding = false, micProblem = false;
-  let screen = "loading", diagTimer = null;
+  let screen = "loading", diagTimer = null, deviceRequest = 0;
   // Only the test copy (/next/) shows the playback counters, read off a phone during a network test.
   const showDiag = /\/next\//.test(win.location.pathname);
   diag.hidden = !showDiag;
@@ -70,18 +71,22 @@ export function startApp(doc = document, win = window) {
   // Chrome lists the system default input as 'default'; a default microphone that failed shows under that name.
   const currentId = () => deviceId ?? "default";
 
-  // The microphone last tried would not open; the entry screen stays and asks for another one.
+  // Keep the selected microphone visible when it cannot be used, on either screen.
   function setMicProblem(on) {
     micProblem = on;
     micError.textContent = on ? MIC_SWITCH_TEXT : "";
     micError.hidden = !on;
     microphone.setAttribute("aria-invalid", String(on));
+    if (on) setMeter(0);
   }
 
   function show(next) {
     const changed = screen !== next;
     screen = next;
     app.dataset.screen = next;
+    // gom 10/30 C: on the call screen the same label and field sit in their own card under the mic ON/OFF card.
+    if (next === "connected") $("call-device").append(micLabel, micPicker);
+    else if (next === "entry") $("headphone-note").before(micLabel, micPicker);
     for (const id of ["entry", "waiting", "connected", "error"]) $(id).hidden = id !== next;
     title.hidden = !["entry", "waiting", "connected"].includes(next);
     closeDevices();
@@ -90,13 +95,16 @@ export function startApp(doc = document, win = window) {
       diagTimer = next === "connected" ? setInterval(renderDiag, 500) : null;
     }
     if (changed) {
+      ++deviceRequest;
+      busy = false;
+      updateEntry();
       const target = next === "error" ? $("error-message") : title.hidden ? $("brand") : title;
       target.focus();
     }
   }
 
   function setMeter(peak) {
-    const value = micEnabled && Number.isFinite(peak) ? Math.round(Math.max(0, Math.min(1, peak)) * 100) : 0;
+    const value = micEnabled && !micProblem && !busy && Number.isFinite(peak) ? Math.round(Math.max(0, Math.min(1, peak)) * 100) : 0;
     meter.setAttribute("aria-valuenow", String(value));
     meter.setAttribute("aria-valuetext", `${value}%`);
     meter.firstElementChild.style.width = `${value}%`;
@@ -153,6 +161,7 @@ export function startApp(doc = document, win = window) {
     microphone.disabled = busy;
     join.disabled = busy || !valid;
     entry.setAttribute("aria-busy", String(busy));
+    micPicker.setAttribute("aria-busy", String(busy));
   }
 
   function updateDeviceHighlight() {
@@ -167,7 +176,7 @@ export function startApp(doc = document, win = window) {
     }
   }
 
-  function renderDevices() {
+  function renderDevices(keepName = false) {
     options.replaceChildren();
     devices.forEach((device, index) => {
       const option = doc.createElement("li");
@@ -179,7 +188,7 @@ export function startApp(doc = document, win = window) {
       options.append(option);
     });
     const selected = devices.find(device => device.deviceId === currentId());
-    $("microphone-name").textContent = selected?.label || "마이크";
+    if (selected?.label || !keepName) micName.textContent = selected?.label || "마이크";
   }
 
   // A failure that lists the inputs (guest-client.js) leaves the person here to pick another one; it still
@@ -207,26 +216,35 @@ export function startApp(doc = document, win = window) {
   async function openDevices() {
     if (busy) return;
     if (!options.hidden) { closeDevices(); return; }
+    const request = ++deviceRequest, from = screen;
+    const current = () => request === deviceRequest && screen === from && !localEnding;
     busy = true;
     updateEntry();
     try {
       // After a failed microphone the inputs are already listed; opening the list does not try it again.
-      if (!prepared && !micProblem) {
+      if (from === "connected") {
+        const available = await client.listMicrophones();
+        if (!current()) return;
+        devices = available;
+        renderDevices(true);
+      } else if (!prepared && !micProblem) {
         try { await prepare(); }
         catch (error) { if (!error.devices) throw error; }
       }
-      if (screen !== "entry") return;
+      if (!current() || !["entry", "connected"].includes(screen)) return;
       options.hidden = false;
       microphone.setAttribute("aria-expanded", "true");
       // In a short window (a 1366x768 laptop at 125%) the list would open below the visible page.
       options.scrollIntoView({ block: "nearest" });
       activeDevice = Math.max(0, devices.findIndex(device => device.deviceId === currentId()));
       updateDeviceHighlight();
-    } catch (error) { fail({ code: error.code }); }
+    } catch (error) { if (current()) fail({ code: error.code }); }
     finally {
-      busy = false;
-      updateEntry();
-      if (screen === "entry") microphone.focus();
+      if (current()) {
+        busy = false;
+        updateEntry();
+        if (["entry", "connected"].includes(screen)) microphone.focus();
+      }
     }
   }
 
@@ -235,14 +253,32 @@ export function startApp(doc = document, win = window) {
     closeDevices();
     // The microphone that failed may be picked again once the other program lets it go.
     if (!selected || (prepared && selected.deviceId === deviceId)) return;
+    const request = ++deviceRequest, from = screen;
+    const current = () => request === deviceRequest && screen === from && !localEnding;
     busy = true;
     updateEntry();
-    try { await prepare(selected.deviceId); }
-    catch (error) { if (!error.devices) fail({ code: error.code }); }
+    try {
+      if (from === "connected") {
+        deviceId = selected.deviceId;
+        prepared = false;
+        renderDevices();
+        setMeter(0);
+        await client.switchMicrophone(deviceId);
+        if (!current()) return;
+        prepared = true;
+        setMicProblem(false);
+      } else await prepare(selected.deviceId);
+    } catch (error) {
+      if (!current()) return;
+      if (from === "connected") setMicProblem(true);
+      else if (!error.devices) fail({ code: error.code });
+    }
     finally {
-      busy = false;
-      updateEntry();
-      if (screen === "entry") microphone.focus();
+      if (current()) {
+        busy = false;
+        updateEntry();
+        if (["entry", "connected"].includes(screen)) microphone.focus();
+      }
     }
   }
 
@@ -317,6 +353,11 @@ export function startApp(doc = document, win = window) {
       invite = parseInvite(win.location.hash);
       client = createGuestClient({ onState, onRoster, onMeter: ({ peak }) => {
         if (screen === "connected") setMeter(peak);
+      }, onMicrophoneError: () => {
+        if (screen === "connected" && !localEnding) {
+          prepared = false;
+          setMicProblem(true);
+        }
       }, onError: fail });
       const room = await client.inspect(invite);
       title.textContent = `${room.hostNick} 님의 합방`;

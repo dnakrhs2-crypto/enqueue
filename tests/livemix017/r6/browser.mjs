@@ -85,14 +85,17 @@ async function audioTest({rate=48000,driftSeconds=120}={}) {
 // Full public client API against real R2 HTTP and a browser host PeerConnection.
 // The runner supplies only a local API base and the allowed host management token.
 async function connectionTest(config) {
-  const evidence={states:[],errors:[],diagnostics:[],rosters:[],ok:false};window.r6Evidence=evidence;
+  const evidence={states:[],errors:[],microphoneErrors:[],diagnostics:[],rosters:[],ok:false};window.r6Evidence=evidence;
   const post=async(path,body)=>{const r=await fetch(config.apiBase+path,{method:'POST',headers:{'Content-Type':'text/plain'},credentials:'omit',body:JSON.stringify({apiVersion:2,code:config.code,...body})});const b=await r.json();if(!r.ok)throw new Error(b.error);return b;};
   const pc=new RTCPeerConnection({iceServers:[]});const channel=pc.createDataChannel('livemix-audio-v2',{protocol:'livemix-pcm-v2',ordered:false,maxRetransmits:0});
   let accepted,token,generation,signalId=0,hostCursor='0',running=true,timer,rosterTimer,captures=0,stereoSent=0,ack=false,seq=0;
   let signalTail=Promise.resolve();const candidateQueue=[];
+  let captureWindow=null,lastMeter=0;
+  const decodedCapture=new Float32Array(240);
   const send=signal=>{signalTail=signalTail.then(()=>post('web/signal',{connectionToken:token,connectionGeneration:generation,signalId:++signalId,signal}));return signalTail;};
   pc.onicecandidate=e=>{const signal=e.candidate?{type:'candidate',candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid,sdpMLineIndex:e.candidate.sdpMLineIndex}:{type:'endOfCandidates'};if(token)void send(signal);else candidateQueue.push(signal);};
   const client=createGuestClient({onState:s=>evidence.states.push(s),onError:e=>evidence.errors.push(e),onRoster:r=>evidence.rosters.push(r),
+    onMicrophoneError:e=>evidence.microphoneErrors.push(e),onMeter:m=>{lastMeter=m.peak;},
     testing:{apiBase:config.apiBase,iceServers:[],forceRelay:config.forceRelay,onDiagnostics:d=>evidence.diagnostics.push(d)}});
   const deadline=async(predicate,seconds=15)=>{const stop=performance.now()+seconds*1000;while(!predicate()){if(performance.now()>stop)throw new Error('timeout');if(evidence.errors.length)throw new Error(evidence.errors[0].code);await sleep(25);}};
   let poll;
@@ -107,7 +110,21 @@ async function connectionTest(config) {
       else if(s.type==='candidate' || s.type==='endOfCandidates'){const c=s.type==='candidate'?{candidate:s.candidate,sdpMid:s.sdpMid,sdpMLineIndex:s.sdpMLineIndex}:null;if(pc.remoteDescription)await pc.addIceCandidate(c);else remoteCandidates.push(c);}}
       hostCursor=response.cursor;}})().catch(e=>{if(running)evidence.errors.push({code:e.message});});
     const remoteCandidates=[];
-    channel.binaryType='arraybuffer';channel.onmessage=e=>{const h=readPacket(e.data,accepted.room.session);if(h.kind===Kind.rosterAck){if(!ack){ack=true;void send({type:'connected'});}}else if(h.kind===Kind.audio){check(h.flags===2 && h.frames===120,'mono capture packet');captures++;}};
+    channel.binaryType='arraybuffer';channel.onmessage=e=>{
+      const h=readPacket(e.data,accepted.room.session);
+      if(h.kind===Kind.rosterAck){if(!ack){ack=true;void send({type:'connected'});}}
+      else if(h.kind===Kind.audio){
+        check(h.flags===2 && h.frames===120,'mono capture packet');captures++;
+        if(captureWindow){
+          decodeAudio(h,decodedCapture);
+          const w=captureWindow,now=performance.now();let peak=0;
+          for(const value of decodedCapture){w.energy+=value*value;peak=Math.max(peak,Math.abs(value));}
+          w.samples+=decodedCapture.length;w.packets++;w.max=Math.max(w.max,peak);
+          if(peak<0.0001)w.silentPackets++;
+          w.longestGapMs=Math.max(w.longestGapMs,now-w.lastAt);w.lastAt=now;
+        }
+      }
+    };
     const h={session:accepted.room.session,origin:1,linkSender:1,seq:0,firstFrame:0n,streamEpoch:1,rosterRevision:1};
     const rosterMembers=accepted.room.members.map(m=>({...m,capabilities:31,deviceRate:accepted.room.wireRate}));
     const sendRoster=()=>{if(channel.readyState==='open')channel.send(encodeRoster(h,accepted.room.wireRate,rosterMembers));};
@@ -115,6 +132,54 @@ async function connectionTest(config) {
     await pc.setLocalDescription(await pc.createOffer());await send({type:'offer',sdp:pc.localDescription.sdp});for(const s of candidateQueue)await send(s);
     await deadline(()=>evidence.states.some(s=>s.state==='connected')&&captures>100&&stereoSent>100);
     await sleep(2000);
+    if(config.microphoneSwitch){
+      const resources={context:client.context,node:client.node,worker:client.worker,pc:client.pc,channel:client.channel};
+      const generation=client.generation,gains=JSON.stringify(client.gains),originalId=client.microphoneId;
+      const inputs=await client.listMicrophones();
+      const nextId=inputs.find(d=>d.deviceId!==originalId)?.deviceId || (originalId!=='default'?'default':null);
+      check(nextId,'a second input id or the default alias is required');
+      const steady=()=>{
+        check(client.state==='connected' && client.generation===generation,'call remains connected');
+        for(const [name,resource] of Object.entries(resources))check(client[name]===resource,name+' replaced during mic switch');
+        check(JSON.stringify(client.gains)===gains,'per-person gains changed');
+        check(evidence.errors.length===0,'microphone caused a fatal error');
+      };
+      const measure=async silent=>{
+        // Let only the switch boundary settle, then inspect the actual PCM arriving at the other peer.
+        await sleep(500);
+        captureWindow={packets:0,samples:0,energy:0,max:0,silentPackets:0,longestGapMs:0,lastAt:performance.now()};
+        await sleep(1000);
+        const w=captureWindow;captureWindow=null;
+        w.longestGapMs=Math.max(w.longestGapMs,performance.now()-w.lastAt);
+        const result={packets:w.packets,rms:Math.sqrt(w.energy/Math.max(1,w.samples)),max:w.max,
+          silentPackets:w.silentPackets,longestGapMs:w.longestGapMs};
+        check(result.packets>100 && result.longestGapMs<250,'capture stopped after switch');
+        if(silent)check(result.max===0,'failed or muted microphone is not silent');
+        else check(result.rms>0.02 && result.silentPackets===0,'steady microphone audio dropped out');
+        steady();return result;
+      };
+      const switches={originalId,nextId};evidence.microphoneSwitch=switches;
+      switches.before=await measure(false);
+      const oldTrack=client.stream.getAudioTracks()[0];
+      await client.switchMicrophone(nextId);
+      check(oldTrack.readyState==='ended' && oldTrack.onended===null,'old track not released');
+      check(client.microphoneInfo.trackSettings.deviceId===client.stream.getAudioTracks()[0].getSettings().deviceId,'stale diagnostics');
+      switches.after=await measure(false);
+      client.setMicEnabled(false);await client.switchMicrophone(originalId);
+      check(!client.micEnabled,'switch unmuted microphone');switches.muted=await measure(true);
+      client.setMicEnabled(true);switches.unmuted=await measure(false);
+      const failed=await client.switchMicrophone('r6-missing-microphone').then(()=>null,e=>e.code);
+      check(['microphone_missing','microphone_constraints'].includes(failed),'missing input must fail');
+      check(client.stream===null && client.source===null,'failed input remains attached');
+      switches.failed=await measure(true);check(lastMeter===0,'failed input meter not zero');
+      await client.switchMicrophone(nextId);switches.recovered=await measure(false);
+      // track.stop() does not emit ended itself; simulate unplugging on the actual capture track.
+      const ended=client.stream.getAudioTracks()[0];ended.stop();ended.dispatchEvent(new Event('ended'));
+      check(evidence.microphoneErrors.at(-1)?.code==='microphone_ended','ended not reported to the picker');
+      switches.ended=await measure(true);check(lastMeter===0,'ended input meter not zero');
+      await client.switchMicrophone(originalId);switches.afterEnded=await measure(false);
+      switches.ok=true;
+    }
     if(config.forceRelay) {
       const end=performance.now()+2000;while(performance.now()<end){}
       await sleep(2000);
