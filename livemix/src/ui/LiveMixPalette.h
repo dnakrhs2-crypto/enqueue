@@ -21,7 +21,8 @@ const juce::Colour meterBg      { 0xff111317 };
 const juce::Colour slotBg       { 0xff2a2e36 };
 const juce::Colour slotLine     { 0xff3a404a };
 const juce::Colour brand        { 0xffe5302d };   // the red ON tile
-const juce::Colour danger       { 0xffff5a5f };
+const juce::Colour danger       { 0xffff5a5f };   // red text and lines on the dark background
+const juce::Colour dangerFill   { 0xffcc3339 };   // a red button's fill: its white text reads (5.1:1, danger's is 3.05:1)
 const juce::Colour meterGreen   { 0xff22c55e };
 const juce::Colour meterYellow  { 0xffeab308 };
 const juce::Colour meterRed     { 0xffef4444 };

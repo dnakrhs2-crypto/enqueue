@@ -35,8 +35,9 @@ public:
     int getPreferredHeight (int width) const;
     static constexpr int wideMinWidth = 1385;   // fixed signal-flow columns (output 250) plus a 320 px send row (84 px fader)
     void pushMeter (MixEngine::Meter meter, bool paint = true) { meter_.push (meter, paint); }
-    /** The mic mute group's state: a member shows itself muted while it is on. */
-    void setGroupMuted (bool muted);
+    /** Every mic muted (the top bar's 마이크 뮤트), and the mic mute group's state: the switch shows itself muted
+        while all are, or while its group is with it in. */
+    void setMuteState (bool allMics, bool groupMuted);
 
     std::function<void (const juce::Uuid&)> onOpenChain;      // "체인 열기"
     std::function<void (const juce::Uuid&)> onAddPlugin;      // "+ 추가"
@@ -88,7 +89,8 @@ private:
     juce::ComboBox directCombo;
     MeterBar meter_;
     bool refreshing = false;
-    bool groupMuted = false;
+    bool allMuted = false, groupOn = false;   // every mic muted / the mic mute group muted
+    void showMuted();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChannelCard)
 };

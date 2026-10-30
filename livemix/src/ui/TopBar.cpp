@@ -71,17 +71,17 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     addAndMakeVisible (statusLabel);
     styleCaption (dspLabel, "CPU");
 
-    for (auto* badge : { &micMuteBadge, &fxMuteBadge })
-    {
-        badge->setFont (juce::Font (juce::FontOptions (pt (12.5f), juce::Font::bold)));
-        badge->setJustificationType (juce::Justification::centred);
-        badge->setColour (juce::Label::textColourId, juce::Colours::white);
-        badge->setColour (juce::Label::backgroundColourId, Palette::danger);
-        addChildComponent (*badge);   // shown while its group is muted
-    }
+    // every mic / every FX at once, no hotkey or mark needed (MuteSwitch: filled red while all are muted, a red edge
+    // while only the mute group is - these took the old red badges' place)
+    addAndMakeVisible (micMuteButton);
+    addAndMakeVisible (fxMuteButton);
 
-    micMuteBadge.setText (ko ("마이크 뮤트"), juce::dontSendNotification);
-    fxMuteBadge.setText (ko ("FX 뮤트"), juce::dontSendNotification);
+    micMuteButton.setButtonText (ko ("마이크 뮤트"));
+    micMuteButton.setComponentID ("mic-mute-group");
+    micMuteButton.onClick = [this] { if (onMicMuteGroup) onMicMuteGroup(); };
+    fxMuteButton.setButtonText (ko ("FX 뮤트"));
+    fxMuteButton.setComponentID ("fx-mute-group");
+    fxMuteButton.onClick = [this] { if (onFxMuteGroup) onFxMuteGroup(); };
     addAndMakeVisible (dspLabel);
     addAndMakeVisible (dspMeter);
 
@@ -146,7 +146,9 @@ void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, dou
 {
     const auto text = buildStatusText (sampleRate, bufferSize, latencyMs, running, format);
     const auto cpu = "CPU " + juce::String ((int) std::lround (dspLoad * 100.0)) + "%";
-    const bool changed = fullStatusText != text || dspLabel.getText() != cpu;
+    // the CPU figure has a fixed room (two digits wide): 9% -> 10% must not lay the bar out again - at some widths that
+    // made the logo's word, the meter and the bit depth come and go with the load
+    const bool changed = fullStatusText != text;
     if (fullStatusText != text)
     {
         fullStatusText = text;
@@ -175,17 +177,18 @@ void TopBar::setFxCount (int count)
     resized();
 }
 
-void TopBar::setMuteGroups (bool micMuted, bool fxMuted)
+void TopBar::setMuteState (bool allMics, bool micGroup, bool allFx, bool fxGroup)
 {
-    micMuteBadge.setVisible (micMuted);
-    fxMuteBadge.setVisible (fxMuted);
-    resized();
+    // only the colour changes: muting never moves the bar
+    micMuteButton.setToggleState (allMics, juce::dontSendNotification);
+    micMuteButton.setPartial (micGroup);
+    fxMuteButton.setToggleState (allFx, juce::dontSendNotification);
+    fxMuteButton.setPartial (fxGroup);
 }
 
 TopBar::Mode TopBar::modeFor (int width) const noexcept
 {
-    // Keep room for measured status text, a 120 px device, a 160 px session and both mute badges.
-    // The badges never change the mode: a mute hotkey must not move the whole layout.
+    // Keep room for measured status text, a 120 px device, a 160 px session and the two mute switches.
     return width >= 1220 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
 }
 
@@ -219,25 +222,41 @@ void TopBar::resized()
     const int sessionMinimum = 160 + gap + stateWidth;
     const int sessionTarget = juce::jlimit (160, 320, labelWidthForText (sessionName, sessionName.getText()));
     const int typeWidth = labelWidthForText (deviceLabel, deviceLabel.getText());
-    const int cpuWidth = labelWidthForText (dspLabel, dspLabel.getText());
+    const int cpuWidth = labelWidthForText (dspLabel, "CPU 88%");   // fixed for 0..99% (see setStatus); 100% squeezes in
     const int minimumStatus = labelWidthForText (statusLabel, minimalStatusText);
-    const int badgeReservation = labelWidthForText (micMuteBadge, micMuteBadge.getText())
-                               + labelWidthForText (fxMuteBadge, fxMuteBadge.getText()) + 2 * gap;
     const auto buttonWidth = [&] (juce::TextButton& button, int minimum)
     {
         const auto font = getLookAndFeel().getTextButtonFont (button, h);
         return juce::jmax (minimum, juce::GlyphArrangement::getStringWidthInt (font, button.getButtonText()) + 24);
     };
+    // 마이크 뮤트 / FX 뮤트, always there (muting changes only their colour): with the other buttons in a one-row bar,
+    // at the right end of the status row - under the buttons - in two and three rows, where two more buttons in the
+    // first row would squeeze the session name. The three-row status row is the tightest: less padding there.
+    const bool muteWithButtons = mode == Mode::wide;
+    const auto muteWidth = [&] (juce::TextButton& button)
+    {
+        const auto font = getLookAndFeel().getTextButtonFont (button, h);
+        return juce::GlyphArrangement::getStringWidthInt (font, button.getButtonText()) + (mode == Mode::narrow ? 12 : 24);
+    };
+    const int micMuteWidth = muteWidth (micMuteButton), fxMuteWidth = muteWidth (fxMuteButton);
+    const int muteReservation = muteWithButtons ? 0 : micMuteWidth + fxMuteWidth + 2 * gap;
     const int fxWidth = buttonWidth (fxButton, 100), pluginsWidth = buttonWidth (pluginsButton, 120);
     auto& buttonRow = mode == Mode::narrow ? row2 : row1;
     pluginsButton.setBounds (buttonRow.removeFromRight (pluginsWidth));
     buttonRow.removeFromRight (gap);
     fxButton.setBounds (buttonRow.removeFromRight (fxWidth));
     buttonRow.removeFromRight (gap);
+    if (muteWithButtons)
+    {
+        fxMuteButton.setBounds (buttonRow.removeFromRight (fxMuteWidth));
+        buttonRow.removeFromRight (gap);
+        micMuteButton.setBounds (buttonRow.removeFromRight (micMuteWidth));
+        buttonRow.removeFromRight (gap);
+    }
 
     auto& statusRow = mode == Mode::wide ? row1 : mode == Mode::compact ? row2 : row3;
     const int deviceMinimum = mode == Mode::narrow ? 0 : 120 + gap;
-    int required = minimumStatus + badgeReservation + typeWidth + gap + deviceMinimum;
+    int required = minimumStatus + muteReservation + typeWidth + gap + deviceMinimum;
     if (mode == Mode::wide) required += 36 + sessionMinimum + gap;
     bool showCpu = mode != Mode::narrow;
     bool showMeter = showCpu;
@@ -253,9 +272,19 @@ void TopBar::resized()
         buttonRow.removeFromRight (groupGap - gap);
         required += groupGap - gap;
     }
+    // Beside the mute switches the bit depth is worth more than decoration (10/30): when even the short status (the
+    // bit depth kept, only the word 샘플 dropped) would not fit next to a 160 px device, the meter bar - then, in one
+    // row, the logo's word - give way first. The CPU figure stays.
+    const auto shortStatusFits = [&]
+    {
+        return required - minimumStatus - deviceMinimum + labelWidthForText (statusLabel, shortStatusText)
+             + (mode == Mode::narrow ? 0 : 160 + gap) <= statusRow.getWidth();
+    };
+    if (showMeter && ! shortStatusFits()) { showMeter = false; required -= 70 + gap; }
+    if (mode == Mode::wide && showLogo && ! shortStatusFits()) { showLogo = false; required -= 84 + gap; }
     // Decorative widths yield only when even the shortest status and minimum device cannot fit.
     if (required > statusRow.getWidth() && showMeter) { showMeter = false; required -= 70 + gap; }
-    if (mode == Mode::wide && required > statusRow.getWidth()) { showLogo = false; required -= 84 + gap; }
+    if (mode == Mode::wide && showLogo && required > statusRow.getWidth()) { showLogo = false; required -= 84 + gap; }
     if (required > statusRow.getWidth() && showCpu) { showCpu = false; required -= cpuWidth + gap; }
     const bool showType = required <= statusRow.getWidth();
     if (mode != Mode::wide) showLogo = row1.getWidth() >= 36 + 84 + gap + sessionMinimum;
@@ -271,15 +300,15 @@ void TopBar::resized()
     int sessionWidth = sessionTarget;
     if (mode == Mode::wide)
     {
-        // Only spare width goes to the name, after the device text, full status and both mute badges (shown or
-        // not: a mute hotkey must not resize the name and push the rest along).
+        // Only spare width goes to the name, after the device text and full status (the mute switches are with
+        // the buttons, already taken out of the row).
         // Keep the existing 160 px allowance before shortening status text; include the selector's text padding.
         const int deviceWidth = juce::jmax (160, juce::GlyphArrangement::getStringWidthInt (
             getLookAndFeel().getComboBoxFont (deviceCombo), deviceCombo.getText()) + 30 + 10 + 4);
         int reserved = stateWidth + gap + groupGap + deviceWidth + gap
                      + labelWidthForText (statusLabel, fullStatusText)
                      + (showType ? typeWidth + gap : 0)
-                     + (showCpu ? cpuWidth + gap : 0) + (showMeter ? 70 + gap : 0) + badgeReservation;
+                     + (showCpu ? cpuWidth + gap : 0) + (showMeter ? 70 + gap : 0);
         sessionWidth = juce::jlimit (160, sessionTarget, row1.getWidth() - reserved);
     }
     // off the wide layout the name keeps the rest of its row, as before 0.13.4
@@ -288,6 +317,14 @@ void TopBar::resized()
     session.removeFromRight (gap);
     sessionName.setBounds (session);
     if (mode == Mode::wide) row1.removeFromLeft (groupGap);
+
+    if (! muteWithButtons)
+    {
+        fxMuteButton.setBounds (statusRow.removeFromRight (fxMuteWidth));
+        statusRow.removeFromRight (gap);
+        micMuteButton.setBounds (statusRow.removeFromRight (micMuteWidth));
+        statusRow.removeFromRight (gap);
+    }
 
     dspMeter.setVisible (showMeter);
     dspLabel.setVisible (showCpu);
@@ -301,12 +338,6 @@ void TopBar::resized()
         dspLabel.setBounds (statusRow.removeFromRight (cpuWidth));
         statusRow.removeFromRight (gap);
     }
-    for (auto* badge : { &fxMuteBadge, &micMuteBadge })
-        if (badge->isVisible())
-        {
-            badge->setBounds (statusRow.removeFromRight (labelWidthForText (*badge, badge->getText())).reduced (0, 5));
-            statusRow.removeFromRight (gap);
-        }
 
     deviceLabel.setVisible (showType);
     deviceLabel.setJustificationType (juce::Justification::centredLeft);

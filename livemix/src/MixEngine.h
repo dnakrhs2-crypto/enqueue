@@ -132,6 +132,12 @@ public:
     void setChannelOn (const juce::Uuid& id, bool on);
     /** The mic mute group: a muted channel is silent (the same ramp as OFF) whatever its own switch says. */
     void setChannelMuted (const juce::Uuid& id, bool muted);
+    /** Every mic / every FX at once (the top bar's 마이크 뮤트 / FX 뮤트): on top of the channels' own mutes, and seen
+        by a channel built later too - one added while all are muted starts silent instead of until the next apply. */
+    void setAllChannelsMuted (bool muted) noexcept { allChannelsMuted.store (muted, std::memory_order_relaxed); }
+    void setAllFxMuted (bool muted) noexcept { allFxMuted.store (muted, std::memory_order_relaxed); }
+    bool areAllChannelsMuted() const noexcept { return allChannelsMuted.load (std::memory_order_relaxed); }
+    bool areAllFxMuted() const noexcept { return allFxMuted.load (std::memory_order_relaxed); }
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
     void setChannelPan (const juce::Uuid& id, double pan);
@@ -282,6 +288,7 @@ private:
     std::atomic<int> blockSize { 256 };
     std::atomic<bool> deviceRunning { false };
     std::atomic<bool> skipChainWhenOff { true };
+    std::atomic<bool> allChannelsMuted { false }, allFxMuted { false };   // the top bar's 마이크 뮤트 / FX 뮤트
     std::atomic<int> numDeviceInputs { 0 }, numDeviceOutputs { 0 };
     std::atomic<double> dspLoad { 0.0 };
     std::atomic<double> inputLatencyMs { 0.0 }, outputLatencyMs { 0.0 };

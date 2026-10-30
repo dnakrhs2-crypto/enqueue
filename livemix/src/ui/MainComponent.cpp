@@ -90,6 +90,8 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     topBar.onDevicesWanted = [this] { updateDeviceNames(); };
     topBar.onFxPanel = [this] { showDrawer (drawer == Drawer::fx ? Drawer::none : Drawer::fx); };
     topBar.onPluginManager = [this] { showPluginManager(); };
+    topBar.onMicMuteGroup = [this] { toggleMuteAll (MuteGroups::Group::mic); };
+    topBar.onFxMuteGroup = [this] { toggleMuteAll (MuteGroups::Group::fx); };
 
     statusLeft.setFont (bodyFont (12.5f));
     statusLeft.setColour (juce::Label::textColourId, Palette::dimText);
@@ -161,37 +163,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
         if (controlServer != nullptr)
             controlServer->muteGroupsChanged();
     };
-    hotkeys.onHotkey = [this] (int id)
-    {
-        if (hotkeysHeld > 0)
-            return;   // a session is going in: the model and the graph do not agree yet
-
-        switch (id)
-        {
-            case 1: muteGroups.toggle (MuteGroups::Group::mic); break;
-            case 2: muteGroups.toggle (MuteGroups::Group::fx); break;
-            case 3: if (onToggleWindow) onToggleWindow(); break;
-
-            default:
-                // 4 .. 3 + maxPluginGroups: plugin group 1 .. 5 on every mic channel at once
-                if (id >= firstPluginGroupHotkeyId && id < firstPluginGroupHotkeyId + MixSession::maxPluginGroups)
-                {
-                    togglePluginGroupEverywhere (id - firstPluginGroupHotkeyId);
-                }
-                else
-                {
-                    // then one mic / FX ON/OFF by its number
-                    auto kind = TrackHotkeys::Kind::mic;
-                    int number = 0;
-
-                    if (TrackHotkeys::fromId (id, kind, number))
-                        if (const auto text = TrackHotkeys::toggle (document, kind, number); text.isNotEmpty())
-                            showStatus (text);
-                }
-
-                break;
-        }
-    };
+    hotkeys.onHotkey = [this] (int id) { hotkeyPressed (id); };
     registerHotkeys();
 
     updateDeviceNames();
@@ -397,7 +369,7 @@ void MainComponent::rebuildCards()
                             windows.open (*chain->getSlot (slot).plugin, ch->name + " - " + chain->getSlot (slot).plugin->getName());
             };
             card->onOpenPluginGroups = [this] (const juce::Uuid& id) { showPluginGroups (id); };
-            card->setGroupMuted (muteGroups.isMuted (MuteGroups::Group::mic));
+            card->setMuteState (muteGroups.isAllMuted (MuteGroups::Group::mic), muteGroups.isMuted (MuteGroups::Group::mic));
             cardsHolder.addAndMakeVisible (*card);
         }
 
@@ -508,7 +480,9 @@ void MainComponent::resized()
     {
         // the height the text really takes at this width (measured by the editor itself, no scrollbar), up to about
         // five lines; a longer notice scrolls. The close button sits on the right.
-        const int textWidth = juce::jmax (100, area.getWidth() - 32 - 44);
+        // the width it is placed at below (the close button's 48, then 16 a side): measured 4 px wider, a line that just
+        // fitted wrapped once more where it sits and its last line was cut, the scrollbar being off
+        const int textWidth = juce::jmax (100, area.getWidth() - 48 - 32);
         const int maxTextHeight = 128;   // about five lines
         noticeText.setScrollbarsShown (false);
         noticeText.setBounds (16, area.getY() + 7, textWidth, 1);   // lays the text out at this width
@@ -659,7 +633,14 @@ void MainComponent::showPluginManager()
     if (pluginManagerWindow == nullptr)
     {
         pluginManagerWindow = std::make_unique<PluginManagerWindow> (engine.getPluginHost(), settings, PluginPreset::defaultFolder());
-        pluginManagerWindow->centreAroundComponent (this, pluginManagerWindow->getWidth(), pluginManagerWindow->getHeight());   // on this display, inside it
+        // on this display, title bar and all (960 x 760 is taller than a 1366x768 or 1080p-at-150% screen's room)
+        const auto around = getScreenBounds();
+        const auto frame = pluginManagerWindow->getPeer() != nullptr ? pluginManagerWindow->getPeer()->getFrameSize() : juce::BorderSize<int> (31, 8, 8, 8);
+        if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (around))
+            pluginManagerWindow->setBounds (placeWithFrame ({ pluginManagerWindow->getWidth(), pluginManagerWindow->getHeight() }, around.getCentre(),
+                                                            display->userBounds.toNearestInt(), frame));
+        else
+            pluginManagerWindow->centreAroundComponent (this, pluginManagerWindow->getWidth(), pluginManagerWindow->getHeight());
         pluginManagerWindow->onVst2Changed = [this] (bool on)
         {
             // the switch changes what the menus offer and what a session opened from now on loads; the chains of
@@ -1657,6 +1638,8 @@ void MainComponent::registerHotkeys()
     setHotkey (fixedKeyFailures, 1, settings.getMicMuteHotkey(), ko ("마이크 뮤트그룹"));
     setHotkey (fixedKeyFailures, 2, settings.getFxMuteHotkey(), ko ("FX 뮤트그룹"));
     setHotkey (fixedKeyFailures, 3, settings.getWindowHotkey(), ko ("창 숨기기/불러오기"));
+    setHotkey (fixedKeyFailures, allMicsHotkeyId, settings.getMicAllMuteHotkey(), ko ("마이크 전체 뮤트"));
+    setHotkey (fixedKeyFailures, allFxHotkeyId, settings.getFxAllMuteHotkey(), ko ("FX 전체 뮤트"));
 
     for (int group = 1; group <= MixSession::maxPluginGroups; ++group)
         setHotkey (fixedKeyFailures, firstPluginGroupHotkeyId + group - 1, settings.getPluginGroupHotkey (group),
@@ -1726,15 +1709,90 @@ void MainComponent::layoutFxDrawer()
 
 void MainComponent::muteGroupsChanged()
 {
-    const bool mic = muteGroups.isMuted (MuteGroups::Group::mic);
-    const bool fx = muteGroups.isMuted (MuteGroups::Group::fx);
-    topBar.setMuteGroups (mic, fx);
+    using Group = MuteGroups::Group;
+    const bool allMics = muteGroups.isAllMuted (Group::mic), allFx = muteGroups.isAllMuted (Group::fx);
+    const bool micGroup = muteGroups.isMuted (Group::mic), fxGroup = muteGroups.isMuted (Group::fx);
+    topBar.setMuteState (allMics, micGroup, allFx, fxGroup);
 
     for (auto& card : cards)
-        card->setGroupMuted (mic);
+        card->setMuteState (allMics, micGroup);
 
-    fxDrawer.setGroupMuted (fx);
-    showStatus (mic && fx ? ko ("마이크·FX 뮤트그룹 뮤트 중") : mic ? ko ("마이크 뮤트그룹 뮤트 중") : fx ? ko ("FX 뮤트그룹 뮤트 중") : ko ("뮤트그룹 해제"));
+    fxDrawer.setMuteState (allFx, fxGroup);
+
+    // everything of a kind says so before its group does
+    const auto mic = allMics ? ko ("모든 마이크") : micGroup ? ko ("마이크 뮤트그룹") : juce::String();
+    const auto fx = allFx ? ko ("모든 FX") : fxGroup ? ko ("FX 뮤트그룹") : juce::String();
+    showStatus (mic.isEmpty() && fx.isEmpty() ? ko ("뮤트 해제")
+                : (mic.isNotEmpty() && fx.isNotEmpty() ? mic + ko ("·") + fx : mic + fx) + ko (" 뮤트 중"));
+}
+
+void MainComponent::hotkeyPressed (int id)
+{
+    if (hotkeysHeld > 0)
+        return;   // a session is going in: the model and the graph do not agree yet
+
+    switch (id)
+    {
+        case 1: toggleMuteGroup (MuteGroups::Group::mic); break;
+        case 2: toggleMuteGroup (MuteGroups::Group::fx); break;
+        case 3: if (onToggleWindow) onToggleWindow(); break;
+        case allMicsHotkeyId: toggleMuteAll (MuteGroups::Group::mic); break;
+        case allFxHotkeyId: toggleMuteAll (MuteGroups::Group::fx); break;
+
+        default:
+            // 4 .. 3 + maxPluginGroups: plugin group 1 .. 5 on every mic channel at once
+            if (id >= firstPluginGroupHotkeyId && id < firstPluginGroupHotkeyId + MixSession::maxPluginGroups)
+            {
+                togglePluginGroupEverywhere (id - firstPluginGroupHotkeyId);
+            }
+            else
+            {
+                // then one mic / FX ON/OFF by its number
+                auto kind = TrackHotkeys::Kind::mic;
+                int number = 0;
+
+                if (TrackHotkeys::fromId (id, kind, number))
+                    if (const auto text = TrackHotkeys::toggle (document, kind, number); text.isNotEmpty())
+                        showStatus (text);
+            }
+
+            break;
+    }
+}
+
+void MainComponent::toggleMuteAll (MuteGroups::Group group)
+{
+    if (hotkeysHeld > 0)
+        return;   // a session is going in, as for the hotkeys
+
+    // everything of that kind on / off; its mute group stays as it is, so releasing gives back exactly what was muted
+    // before (a group muted then stays muted) - and pressing it while only the group is muted mutes everything,
+    // never lets the group's members go
+    muteGroups.setAll (group, ! muteGroups.isAllMuted (group));
+}
+
+void MainComponent::toggleMuteGroup (MuteGroups::Group group)
+{
+    if (hotkeysHeld > 0)
+        return;   // a session is going in, as for the hotkeys
+
+    // nobody in the group: lighting the switch while silencing nothing would mislead - say where the marks are
+    if (! muteGroups.isMuted (group) && ! muteGroups.hasMembers (group))
+    {
+        if (group == MuteGroups::Group::fx)
+        {
+            showStatus (ko ("FX 뮤트그룹에 넣은 FX가 없습니다 - FX마다 '뮤트그룹'을 켜세요"), true);
+            if (drawer != Drawer::fx)
+                showDrawer (Drawer::fx);
+        }
+        else
+        {
+            showStatus (ko ("마이크 뮤트그룹에 넣은 마이크가 없습니다 - 마이크 카드의 '뮤트그룹'을 켜세요"), true);
+        }
+        return;
+    }
+
+    muteGroups.toggle (group);
 }
 
 void MainComponent::showSettingsDialog()
@@ -1747,7 +1805,7 @@ void MainComponent::showSettingsDialog()
                               if (safe == nullptr) return;
                               // the key being chosen must not fire its current action
                               if (capturing)
-                                  for (int id = 1; id <= TrackHotkeys::lastId; ++id)
+                                  for (int id = 1; id <= lastHotkeyId; ++id)
                                       safe->hotkeys.clear (id);
                               else
                                   safe->registerHotkeys();

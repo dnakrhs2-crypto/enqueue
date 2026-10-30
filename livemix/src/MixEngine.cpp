@@ -694,7 +694,8 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
 
             // mic ON/OFF: a short linear ramp (applied below, to the sends as well). Worked out first: a mic that is
             // fully off skips its chain when asked to - no plugin CPU for a mic nobody hears, like an archived track
-            const float target = node->on.load (std::memory_order_relaxed) && ! node->muted.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
+            const float target = node->on.load (std::memory_order_relaxed) && ! node->muted.load (std::memory_order_relaxed)
+                                     && ! allChannelsMuted.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
             const float start = node->onGain;
             float end = start;
 
@@ -824,7 +825,8 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             auto& fx = *fxNodes[(size_t) f];
             auto& bus = fxBus[(size_t) f];
             fx.chain->process (bus, n);
-            const float ret = fx.muted.load (std::memory_order_relaxed) || ! fx.on.load (std::memory_order_relaxed)
+            const float ret = fx.muted.load (std::memory_order_relaxed) || allFxMuted.load (std::memory_order_relaxed)
+                                      || ! fx.on.load (std::memory_order_relaxed)
                                   ? 0.0f : fx.returnAmount.load (std::memory_order_relaxed);
             const float retFrom = fx.returnCurrent;
             fx.returnCurrent = ret;
@@ -996,6 +998,8 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
 
         auto node = std::make_unique<FxNode>();
         node->id = f.id;
+        if (allFxMuted.load (std::memory_order_relaxed))
+            node->returnCurrent = 0.0f;   // every FX muted: an FX added now starts silent
         restore (*node->chain, f.chain);
         freshFx.push_back (std::move (node));
     }
@@ -1007,7 +1011,7 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
 
         auto node = std::make_unique<ChannelNode>();
         node->id = c.id;
-        node->onGain = c.on ? 1.0f : 0.0f;
+        node->onGain = c.on && ! allChannelsMuted.load (std::memory_order_relaxed) ? 1.0f : 0.0f;   // every mic muted: starts silent
         node->panCurrent = node->panTarget = channelPanGains (clampedPan (c.pan), c.stereo);
         restore (*node->chain, c.chain);
         freshChannels.push_back (std::move (node));
@@ -1051,8 +1055,8 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
             node->returnAmount.store ((float) juce::jlimit (0.0, 1.0, f.returnAmount), std::memory_order_relaxed);
             node->on.store (f.on, std::memory_order_relaxed);
 
-            if (restoreChains)
-                node->returnCurrent = f.on ? (float) juce::jlimit (0.0, 1.0, f.returnAmount) : 0.0f;   // fresh: starts at its level
+            if (restoreChains)   // fresh: starts at its level (silent while every FX is muted)
+                node->returnCurrent = f.on && ! allFxMuted.load (std::memory_order_relaxed) ? (float) juce::jlimit (0.0, 1.0, f.returnAmount) : 0.0f;
 
             node->mono.store (f.mono, std::memory_order_relaxed);
             applyOutput (f.output, node->toMaster, node->direct, node->directFirst);

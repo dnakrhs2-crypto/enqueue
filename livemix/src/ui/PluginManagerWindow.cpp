@@ -579,7 +579,9 @@ private:
             if (columnId == colEnabled)
             {
                 const auto box = juce::Rectangle<float> (18.0f, 18.0f).withCentre ({ (float) width * 0.5f, (float) height * 0.5f });
-                g.setColour (switchedOn ? (enabled ? Palette::accent : Palette::dimText) : Palette::line);
+                // an empty box is drawn in the dim text colour: in the line colour it all but vanished on the rows
+                // (1.27:1), and a switched-off plugin's box is where it is switched back on
+                g.setColour (switchedOn ? (enabled ? Palette::accent : Palette::dimText) : Palette::dimText);
                 g.drawRoundedRectangle (box, 4.0f, 1.5f);
 
                 if (switchedOn)

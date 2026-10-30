@@ -110,8 +110,13 @@ void MasterCard::setLatency (double ms, int bufferSize, double sampleRate)
     latencyValue.setText (ms > 0.0 ? juce::String (ms, 1) + " ms" : "-", juce::dontSendNotification);
     latencyNote.setText (bufferSize > 0 ? juce::String (bufferSize) + ko (" 샘플") + " · " + juce::String (sampleRate / 1000.0, 1) + " kHz" : ko ("장치 없음"),
                          juce::dontSendNotification);
-    compactLatency.setText (ms > 0.0 ? ko ("지연 ") + juce::String (ms, 1) + " ms · " + juce::String (bufferSize) + ko (" 샘플") : ko ("장치 없음"),
-                            juce::dontSendNotification);
+    // its room is 134 px: a four-digit buffer ("지연 21.3 ms · 1024 샘플") did not fit and was cut - the word 샘플 goes
+    // first. Measured as the label cuts (text + its border), not labelWidthForText's extra margin: "· 480 샘플" fits
+    const auto latency = ko ("지연 ") + juce::String (ms, 1) + " ms · " + juce::String (bufferSize);
+    const auto withWord = latency + ko (" 샘플");
+    const bool wordFits = juce::GlyphArrangement::getStringWidthInt (compactLatency.getFont(), withWord)
+                        + compactLatency.getBorderSize().getLeftAndRight() <= compactLatencyWidth;
+    compactLatency.setText (ms <= 0.0 ? ko ("장치 없음") : wordFits ? withWord : latency, juce::dontSendNotification);
 }
 
 void MasterCard::setStrip (bool folded)
@@ -296,7 +301,7 @@ int MasterCard::obsControlsHeight (int width, int hintGap) const
 bool MasterCard::mediumLatencyFitsBesideChain (int width)
 {
     // One minimum-width chip and both actions, an 18 px gap, then latency + LUFS + the record button's slot.
-    return width - 418 >= ChipFlow::minWidth + 8 + 92 + 8 + 76 + 18 + 134 + 8 + 56 + 8 + recordSlotWidth();
+    return width - 418 >= ChipFlow::minWidth + 8 + 92 + 8 + 76 + 18 + compactLatencyWidth + 8 + 56 + 8 + recordSlotWidth();
 }
 
 MasterCard::ChainLayout MasterCard::measureChain (int width) const
@@ -459,7 +464,7 @@ void MasterCard::resized()
         title.setBounds (headRow.withWidth (juce::jmin (160, headRow.getWidth())));
         area.setTop (chain.bottom + 8);
         auto latency = area.removeFromTop (30);
-        compactLatency.setBounds (latency.removeFromLeft (134));
+        compactLatency.setBounds (latency.removeFromLeft (compactLatencyWidth));
         latency.removeFromLeft (8);
         lufsButton.setBounds (latency.removeFromLeft (56));
         latency.removeFromLeft (8);
@@ -495,7 +500,7 @@ void MasterCard::resized()
         latency.removeFromRight (8);
         lufsButton.setBounds (latency.removeFromRight (56));
         latency.removeFromRight (8);
-        compactLatency.setBounds (latency.removeFromRight (134));
+        compactLatency.setBounds (latency.removeFromRight (compactLatencyWidth));
         auto lower = content.withTop (chain.bottom + 17 + (inlineLatency ? 0 : 38));
         auto out = lower.removeFromLeft (372);
         lower.removeFromLeft (18);

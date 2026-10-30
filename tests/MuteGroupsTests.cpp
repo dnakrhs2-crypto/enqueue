@@ -89,6 +89,29 @@ public:
             expect (q.fx[0].muteGroup);
         }
 
+        beginTest ("a group has members only while a mic / FX carries its mark (the top bar switch asks before muting)");
+        {
+            MixEngine engine;
+            MixDocument doc (engine);
+            doc.newSession();   // one mic, one FX, no marks
+            MuteGroups groups (doc);
+            const auto mic = doc.getSession().channels[0].id;
+            const auto fx = doc.getSession().fx[0].id;
+            expect (! groups.hasMembers (MuteGroups::Group::mic));
+            expect (! groups.hasMembers (MuteGroups::Group::fx));
+
+            doc.setFxMuteGroup (fx, true);
+            expect (groups.hasMembers (MuteGroups::Group::fx));
+            expect (! groups.hasMembers (MuteGroups::Group::mic));
+
+            doc.setChannelMuteGroup (mic, true);
+            expect (groups.hasMembers (MuteGroups::Group::mic));
+
+            doc.setFxMuteGroup (fx, false);
+            expect (! groups.hasMembers (MuteGroups::Group::fx));
+            expect (groups.hasMembers (MuteGroups::Group::mic));
+        }
+
         beginTest ("the mic group mutes its members only and hands their switches back; the FX group silences the return");
         {
             MixEngine engine;
@@ -157,6 +180,94 @@ public:
             groups.apply();
             render (engine, io, 3);
             expectWithinAbsoluteError (io.last (0), 0.25f + 0.0f, 1e-6f);   // A muted: its send is cut with it, B remains
+        }
+
+        beginTest ("every mic / every FX (the top bar's switches) mutes with no mark set and hands each switch back");
+        {
+            MixEngine engine;
+            engine.prepare (sampleRate, blockSize);
+            MixDocument doc (engine);
+            doc.newSession();   // one mic, one FX, no marks
+            doc.applyToEngine();
+            const auto a = doc.getSession().channels[0].id;
+            const auto b = doc.addChannel();
+            const auto fx = doc.getSession().fx[0].id;
+            doc.setChannelInput (a, 0, false);
+            doc.setChannelInput (b, 1, false);
+            doc.setSend (a, fx, 1.0, false);   // A's 0.5 into the FX, returned in full
+
+            Io io;
+            io.setInput (0, 0.5f);
+            io.setInput (1, 0.25f);
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 1.25f, 1e-6f);   // both mics and the FX
+
+            MuteGroups groups (doc);
+            int changes = 0;
+            groups.onChanged = [&changes] { ++changes; };
+
+            groups.setAll (MuteGroups::Group::fx, true);
+            expectEquals (changes, 1);
+            expect (groups.isAllMuted (MuteGroups::Group::fx) && groups.isAnyMuted (MuteGroups::Group::fx));
+            expect (! groups.isMuted (MuteGroups::Group::fx));   // the group itself is not
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.75f, 1e-6f);   // every return silent, the mics stay
+            expect (doc.getSession().fx[0].on);
+            expectWithinAbsoluteError (doc.getSession().fx[0].returnAmount, 1.0, 1e-9);
+
+            groups.setAll (MuteGroups::Group::mic, true);
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.0f, 1e-6f);   // nothing left
+            expect (doc.getSession().channels[0].on && doc.getSession().channels[1].on);
+            expect (engine.areAllChannelsMuted() && engine.areAllFxMuted());
+
+            // a mic added while every mic is muted is silent from its very first block - before the app applies the
+            // groups again after the structure change
+            io.setInput (2, 0.5f);
+            const auto c = doc.addChannel();
+            doc.setChannelInput (c, 2, false);
+            render (engine, io, 1);
+            expectWithinAbsoluteError (io.out.getMagnitude (0, 0, blockSize), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.out.getMagnitude (1, 0, blockSize), 0.0f, 1e-6f);
+            io.setInput (2, 0.0f);   // out of the sums below
+
+            groups.setAll (MuteGroups::Group::mic, false);
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.75f, 1e-6f);
+
+            // a mic switched OFF before stays OFF after
+            doc.setChannelOn (b, false);
+            groups.setAll (MuteGroups::Group::mic, true);
+            groups.setAll (MuteGroups::Group::mic, false);
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.5f, 1e-6f);   // A only, the FX still muted
+            doc.setChannelOn (b, true);
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.75f, 1e-6f);
+
+            // release: everything of that kind and its group together, one change
+            doc.setFxMuteGroup (fx, true);
+            groups.set (MuteGroups::Group::fx, true);
+            changes = 0;
+            groups.release (MuteGroups::Group::fx);
+            expectEquals (changes, 1);
+            expect (! groups.isAnyMuted (MuteGroups::Group::fx));
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 1.25f, 1e-6f);
+            groups.release (MuteGroups::Group::fx);
+            expectEquals (changes, 1);   // nothing to release: no change
+
+            // the engine rebuilt (a session applied again) keeps everything muted
+            groups.setAll (MuteGroups::Group::fx, true);
+            doc.applyToEngine();
+            groups.apply();
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 0.75f, 1e-6f);
+
+            groups.reset();   // a session opened
+            expect (! groups.isAnyMuted (MuteGroups::Group::fx) && ! groups.isAnyMuted (MuteGroups::Group::mic));
+            render (engine, io, 3);
+            expectWithinAbsoluteError (io.last (0), 1.25f, 1e-6f);
         }
     }
 };

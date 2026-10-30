@@ -154,11 +154,12 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     refresh();
 }
 
-void FxDrawer::setGroupMuted (bool muted)
+void FxDrawer::setMuteState (bool allFx, bool group)
 {
-    if (groupMuted != muted)
+    if (allMuted != allFx || groupMuted != group)
     {
-        groupMuted = muted;
+        allMuted = allFx;
+        groupMuted = group;
         refresh();
     }
 }
@@ -214,7 +215,7 @@ void FxDrawer::refresh()
             name.setText (f->name, juce::dontSendNotification);
 
         returnSlider.setValue (f->returnAmount * 100.0, juce::dontSendNotification);
-        const bool mutedNow = groupMuted && f->muteGroup;
+        const bool mutedNow = allMuted || (groupMuted && f->muteGroup);
         returnValue.setText (mutedNow ? ko ("뮤트") : juce::String ((int) std::lround (f->returnAmount * 100.0)) + "%", juce::dontSendNotification);
         returnValue.setColour (juce::Label::textColourId, mutedNow ? Palette::danger : Palette::text);
         masterChip.setToggleState (f->output.master, juce::dontSendNotification);
@@ -226,6 +227,7 @@ void FxDrawer::refresh()
         monoChip.setToggleState (f->mono, juce::dontSendNotification);
         muteGroupChip.setToggleState (f->muteGroup, juce::dontSendNotification);
         lamp.setOn (f->on);
+        lamp.setMutedText (allMuted ? ko ("전체 뮤트 중") : ko ("뮤트그룹 - 뮤트 중"));
         lamp.setMuted (mutedNow);
     }
     else

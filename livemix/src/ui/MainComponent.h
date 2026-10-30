@@ -72,8 +72,20 @@ public:
 
     /** The audio device list changed (settings / hot-plug): refresh names and pickers. */
     void deviceChanged();
-    /** The two mute groups (the tray menu toggles them too). */
+    /** The two mute groups and the mute-everything switches (the tray menu toggles the groups too). */
     MuteGroups& getMuteGroups() noexcept { return muteGroups; }
+    /** A mute group's hotkey / tray item: its members muted or released. Nobody in it: nothing is muted, the status
+        line says where the '뮤트그룹' marks are (and the FX panel opens for the FX group). */
+    void toggleMuteGroup (MuteGroups::Group group);
+    /** The top bar's 마이크 뮤트 / FX 뮤트 and their hotkeys: every mic / every FX muted, or released - the mute group
+        is left as it is (its hotkey / tray item / Stream Deck key moves it). */
+    void toggleMuteAll (MuteGroups::Group group);
+    /** A global hotkey went off (GlobalHotkeys' id). */
+    void hotkeyPressed (int id);
+
+    static constexpr int allMicsHotkeyId = TrackHotkeys::lastId + 1;   // 마이크 전체 뮤트 (the top bar's 마이크 뮤트)
+    static constexpr int allFxHotkeyId = TrackHotkeys::lastId + 2;     // FX 전체 뮤트
+    static constexpr int lastHotkeyId = allFxHotkeyId;
     /** The app owns the server. Detach stops it before this component's mute groups can be destroyed. */
     void attachControlServer (ControlServer*);
     void detachControlServer();
@@ -154,7 +166,7 @@ private:
     }
     std::pair<int, int> registeredTrackCounts { -1, -1 };
     void layoutFxDrawer();       // the drawer's size inside its viewport
-    void muteGroupsChanged();    // badges, cards, drawer
+    void muteGroupsChanged();    // the top bar's switches, cards, drawer
     void showPluginManager();
     void showLoudnessWindow();   // the LUFS meter (the master card's button, the 설정 menu)
     void showCollabWindow();

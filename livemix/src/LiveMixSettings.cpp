@@ -47,6 +47,8 @@ namespace Keys
     constexpr const char* micMuteHotkey = "micMuteHotkey";
     constexpr const char* fxMuteHotkey = "fxMuteHotkey";
     constexpr const char* windowHotkey = "windowHotkey";
+    constexpr const char* micAllMuteHotkey = "micAllMuteHotkey";
+    constexpr const char* fxAllMuteHotkey = "fxAllMuteHotkey";
     constexpr const char* pluginGroupHotkey = "pluginGroupHotkey";   // + the group number (1..5)
     constexpr const char* micOnHotkey = "micOnHotkey";               // + the mic number (1..8)
     constexpr const char* fxOnHotkey = "fxOnHotkey";                 // + the FX number (1..4)
@@ -263,6 +265,10 @@ juce::String LiveMixSettings::getFxMuteHotkey() const { return settings->getValu
 void LiveMixSettings::setFxMuteHotkey (const juce::String& description) { settings->setValue (Keys::fxMuteHotkey, description.trim()); }
 juce::String LiveMixSettings::getWindowHotkey() const { return settings->getValue (Keys::windowHotkey); }
 void LiveMixSettings::setWindowHotkey (const juce::String& description) { settings->setValue (Keys::windowHotkey, description.trim()); }
+juce::String LiveMixSettings::getMicAllMuteHotkey() const { return settings->getValue (Keys::micAllMuteHotkey); }
+void LiveMixSettings::setMicAllMuteHotkey (const juce::String& description) { settings->setValue (Keys::micAllMuteHotkey, description.trim()); }
+juce::String LiveMixSettings::getFxAllMuteHotkey() const { return settings->getValue (Keys::fxAllMuteHotkey); }
+void LiveMixSettings::setFxAllMuteHotkey (const juce::String& description) { settings->setValue (Keys::fxAllMuteHotkey, description.trim()); }
 
 juce::String LiveMixSettings::getPluginGroupHotkey (int group) const
 {

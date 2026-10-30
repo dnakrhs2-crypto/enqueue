@@ -188,7 +188,7 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     {
         auto b = std::make_unique<juce::TextButton> (juce::String (i + 1));
         b->setWantsKeyboardFocus (false);
-        b->setColour (juce::TextButton::buttonOnColourId, Palette::danger);
+        b->setColour (juce::TextButton::buttonOnColourId, Palette::dangerFill);   // white text on it reads
         b->setColour (juce::TextButton::textColourOnId, juce::Colours::white);
         b->onClick = [this, i]
         {
@@ -290,7 +290,7 @@ void ChannelCard::refresh()
     fillDirectOutputCombo (directCombo, directChip, outputNames, device.isAsio(), device.output.isNotEmpty(),
                            c->output.directFirst, c->output.direct);
     muteGroupChip.setToggleState (c->muteGroup, juce::dontSendNotification);
-    micButton.setMuted (groupMuted && c->muteGroup);
+    showMuted();
     meter_.setStereo (c->stereo);
     panSlider.setValue (c->pan, juce::dontSendNotification);
     panValue.setText (panSlider.getTextFromValue (c->pan), juce::dontSendNotification);
@@ -322,12 +322,20 @@ void ChannelCard::refresh()
     repaint();
 }
 
-void ChannelCard::setGroupMuted (bool muted)
+void ChannelCard::setMuteState (bool allMics, bool groupMuted)
 {
-    groupMuted = muted;
+    allMuted = allMics;
+    groupOn = groupMuted;
+    showMuted();
+}
 
+void ChannelCard::showMuted()
+{
     if (const auto* c = channel())
-        micButton.setMuted (groupMuted && c->muteGroup);
+    {
+        micButton.setMutedText (allMuted ? ko ("전체 뮤트 중") : ko ("뮤트그룹 - 뮤트 중"));
+        micButton.setMuted (allMuted || (groupOn && c->muteGroup));
+    }
 }
 
 void ChannelCard::rebuildChain()

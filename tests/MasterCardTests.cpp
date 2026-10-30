@@ -160,7 +160,16 @@ public:
                 rect (withText (ko ("480 샘플") + " · 48.0 kHz"), { 783, 72, 168, 20 });
             }
             else
+            {
                 rect (withText (ko ("지연 53.0 ms · 480 샘플")), { narrow ? 14 : 740 - recordSlot, narrow ? 94 : 79, 134, 30 });
+                // a four-digit buffer does not fit beside its word: 샘플 goes, the number stays whole (design check 10/30)
+                card.setLatency (21.3, 1024, 48000.0);
+                auto* fourDigits = dynamic_cast<juce::Label*> (withText (ko ("지연 21.3 ms · 1024")));
+                expect (fourDigits != nullptr, "1024 without 샘플 @" + juce::String (width));
+                if (fourDigits != nullptr)
+                    expectGreaterOrEqual (fourDigits->getWidth(), labelWidthForText (*fourDigits, fourDigits->getText()));
+                card.setLatency (53.0, 480, 48000.0);
+            }
             rect (withText (ko ("메인 출력")), { wide ? 1136 : 14, wide ? 12 : narrow ? 132 : 126, 60, wide ? 26 : 30 });
             rect (withText (ko ("출력 미터 L / R")), { wide ? 1136 : 14, wide ? 46 : narrow ? 170 : 164, wide ? 250 : narrow ? 400 : 372, 18 });
             rect (withText (ko ("OBS로 보내기")), { wide ? 1136 : narrow ? 14 : 404, wide ? 118 : narrow ? 242 : 127, 117, 28 });
@@ -433,7 +442,8 @@ public:
             expect (! master->isStrip());
         }
         main.setTransform ({});
-        beginTest ("l03 top bar uses 24 px between groups and a 330 px device at the mockup status");
+        // 10/30 (gom chose B): 마이크 뮤트 / FX 뮤트 sit with the buttons and take the device's spare width (330 -> 168)
+        beginTest ("l03 top bar uses 24 px between groups at the mockup status, the mute switches with the buttons");
         MixEngine::DeviceFormat format;
         format.kind = MixEngine::DeviceFormat::Kind::windowsShared;
         format.inputBits = 16;
@@ -441,13 +451,24 @@ public:
         top->setStatus (48000.0, 480, 53.0, 0.03, true, format);
         for (auto* child : top->getChildren())
         {
-            if (dynamic_cast<juce::ComboBox*> (child) != nullptr) rect (*child, { 460, 15, 330, 34 });
+            // the CPU figure keeps a two-digit room (10/30: 9% <-> 10% no longer lays the bar out again)
+            if (dynamic_cast<juce::ComboBox*> (child) != nullptr) rect (*child, { 460, 15, 168, 34 });
             if (auto* label = dynamic_cast<juce::Label*> (child))
             {
                 if (label->getText() == ko ("윈도우")) rect (*child, { 404, 15, 48, 34 });
-                if (label->getText() == "CPU 3%") rect (*child, { 1037, 15, 57, 34 });
+                if (label->getText() == "CPU 3%") rect (*child, { 845, 15, 64, 34 });
                 if (label->getText() == ko ("저장 안 됨")) rect (*child, { 312, 15, 68, 34 });
             }
+        }
+        // the switches end the status group 24 px before themselves, then 마이크 뮤트 · FX 뮤트 · FX 채널 · 플러그인 관리
+        auto* micSwitch = top->findChildWithID ("mic-mute-group");
+        auto* fxSwitch = top->findChildWithID ("fx-mute-group");
+        expect (micSwitch != nullptr && fxSwitch != nullptr);
+        if (micSwitch != nullptr && fxSwitch != nullptr)
+        {
+            expectEquals (fxSwitch->getX() - micSwitch->getRight(), 8);
+            expectEquals (micSwitch->getY(), 15);
+            expectEquals (micSwitch->getHeight(), 34);
         }
     }
 };

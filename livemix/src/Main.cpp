@@ -578,8 +578,8 @@ private:
             case 7: toggleWindow(); break;
             case 2: if (document != nullptr) document->setAllChannelsOn (true); break;
             case 3: if (document != nullptr) document->setAllChannelsOn (false); break;
-            case 5: if (mainWindow != nullptr) mainWindow->getMainComponent().getMuteGroups().toggle (MuteGroups::Group::mic); break;
-            case 6: if (mainWindow != nullptr) mainWindow->getMainComponent().getMuteGroups().toggle (MuteGroups::Group::fx); break;
+            case 5: if (mainWindow != nullptr) mainWindow->getMainComponent().toggleMuteGroup (MuteGroups::Group::mic); break;
+            case 6: if (mainWindow != nullptr) mainWindow->getMainComponent().toggleMuteGroup (MuteGroups::Group::fx); break;
             case 4: systemRequestedQuit(); break;
             default: break;
         }

@@ -201,6 +201,16 @@ public:
         repaint();
     }
 
+    /** What it reads while muted: by its group, or by the top bar's switch for all of its kind. */
+    void setMutedText (const juce::String& text)
+    {
+        if (textMuted != text)
+        {
+            textMuted = text;
+            repaint();
+        }
+    }
+
     /** Muted by the mic mute group: drawn red, whatever the switch says (the switch is kept). */
     void setMuted (bool shouldBeMuted)
     {
@@ -232,9 +242,20 @@ public:
             const juce::Point<float> centre (bounds.getX() + 18.0f, bounds.getCentreY());
             g.setColour (Palette::danger);
             g.fillEllipse (juce::Rectangle<float> (lampR * 2.0f, lampR * 2.0f).withCentre (centre));
+            auto textArea = getLocalBounds().withTrimmedLeft (36);
+
+            // the switch under the mute: OFF shows at the right, so a click while muted is seen (it flips the switch,
+            // the mute stays) and nobody finds a mic off only after releasing the mute
+            if (! on)
+            {
+                g.setColour (Palette::dimText);
+                g.setFont (juce::Font (juce::FontOptions (pt (11.0f), juce::Font::bold)));
+                g.drawText ("OFF", textArea.removeFromRight (40).withTrimmedRight (10), juce::Justification::centredRight, false);
+            }
+
             g.setColour (Palette::danger);
             g.setFont (juce::Font (juce::FontOptions (pt (15.0f), juce::Font::bold)));
-            g.drawText (textMuted, getLocalBounds().withTrimmedLeft (36), juce::Justification::centredLeft, false);
+            g.drawFittedText (textMuted, textArea, juce::Justification::centredLeft, 1, 0.85f);   // beside OFF in a narrow card
             return;
         }
 
@@ -258,6 +279,58 @@ public:
 private:
     bool on = true, muted = false;
     juce::String textOn { ko ("마이크 ON") }, textOff { ko ("마이크 OFF") }, textMuted { ko ("뮤트그룹 - 뮤트 중") };
+};
+
+/** A window's bounds (its inside, the native frame not counted) for 'size': centred on 'centre' with the frame inside
+    'screen' less 12 px a side, shrunk to that room on a smaller screen. centreAroundComponent places the inside alone,
+    so a tall window's title bar went above a 1366x768 or 1080p-at-150% screen (design check 10/30). */
+inline juce::Rectangle<int> placeWithFrame (juce::Point<int> size, juce::Point<int> centre, juce::Rectangle<int> screen,
+                                             juce::BorderSize<int> frame)
+{
+    const auto room = screen.reduced (12);
+    const int w = juce::jmax (1, juce::jmin (size.x, room.getWidth() - frame.getLeftAndRight()));
+    const int h = juce::jmax (1, juce::jmin (size.y, room.getHeight() - frame.getTopAndBottom()));
+    return frame.subtractedFrom (frame.addedTo (juce::Rectangle<int> (w, h)).withCentre (centre).constrainedWithin (room));
+}
+
+/** 마이크 뮤트 / FX 뮤트 (the top bar): filled red while all of its kind is muted (the toggle state), a red edge and
+    red text while only its mute group is (partial, the way a muted mic's lamp shows its group), plain otherwise. */
+class MuteSwitch : public juce::TextButton
+{
+public:
+    MuteSwitch()
+    {
+        setClickingTogglesState (false);
+        setWantsKeyboardFocus (false);
+        setColour (juce::TextButton::buttonOnColourId, Palette::dangerFill);
+        setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    }
+
+    void setPartial (bool shouldBePartial)
+    {
+        if (partial != shouldBePartial)
+        {
+            partial = shouldBePartial;
+            setColour (juce::TextButton::textColourOffId, partial ? Palette::danger : Palette::text);
+            repaint();
+        }
+    }
+
+    bool isPartial() const noexcept { return partial; }
+
+    void paintButton (juce::Graphics& g, bool isMouseOverButton, bool isButtonDown) override
+    {
+        juce::TextButton::paintButton (g, isMouseOverButton, isButtonDown);
+
+        if (partial && ! getToggleState())
+        {
+            g.setColour (Palette::danger);
+            g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), Palette::controlRadius, 2.0f);
+        }
+    }
+
+private:
+    bool partial = false;
 };
 
 /** A toggle chip (마스터 / 직접 출력): outlined in the accent colour when on. */

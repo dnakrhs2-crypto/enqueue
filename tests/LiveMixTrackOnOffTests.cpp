@@ -413,9 +413,23 @@ public:
                     expect (labelWithText (*content, ko ("마이크 2 ON/OFF")) != nullptr);
                     expect (content->findChildWithID ("hotkey-mic-2") != nullptr);
 
-                    // each kind under its mute group: mic group, mics, FX group, FX
+                    // each kind under its mute switches: all mics, mic group, mics, all FX, FX group, FX (10/30)
                     auto y = [&content] (const juce::String& text) { auto* l = labelWithText (*content, text); return l != nullptr ? l->getY() : -1; };
+                    expect (y (ko ("마이크 전체 뮤트")) >= 0 && y (ko ("FX 전체 뮤트")) >= 0);
+                    expect (y (ko ("마이크 전체 뮤트")) < y (ko ("마이크 뮤트그룹")));
+                    expect (y (ko ("마이크 2 ON/OFF")) < y (ko ("FX 전체 뮤트")));
+                    expect (y (ko ("FX 전체 뮤트")) < y (ko ("FX 뮤트그룹")));
                     expect (y (ko ("마이크 뮤트그룹")) < y (ko ("메인 마이크 ON/OFF")));
+
+                    // the content is tall enough for every row: the last note (온라인 백업) is whole, not squeezed
+                    // into one cut line - the two all-mute rows (10/30) once took its height
+                    auto* backupNote = labelWithText (*content, ko ("위쪽 '온라인 백업' 메뉴의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
+                    expect (backupNote != nullptr);
+                    if (backupNote != nullptr)
+                    {
+                        expectEquals (backupNote->getHeight(), 56);
+                        expectLessOrEqual (backupNote->getBottom(), content->getHeight());
+                    }
                     expect (y (ko ("메인 마이크 ON/OFF")) < y (ko ("마이크 2 ON/OFF")));
                     expect (y (ko ("마이크 2 ON/OFF")) < y (ko ("FX 뮤트그룹")));
                     expect (y (ko ("FX 뮤트그룹")) < y ("room ON/OFF"));

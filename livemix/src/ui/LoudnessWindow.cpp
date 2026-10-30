@@ -460,9 +460,14 @@ private:
 
         for (int db = (int) scaleMin; db <= (int) scaleMax; db += 10)
         {
-            const float x = xFor (track, db);
+            // the end labels start / stop at their tick, inside the bar: centred on it they ran 18 px past the
+            // window's edge and lost '-60''s minus and half the 0
+            const int x = (int) xFor (track, db);
+            const auto label = db == (int) scaleMin ? juce::Rectangle<int> (x, scale.getY(), 36, scale.getHeight())
+                             : db == (int) scaleMax ? juce::Rectangle<int> (x - 36, scale.getY(), 36, scale.getHeight())
+                                                    : juce::Rectangle<int> (x - 18, scale.getY(), 36, scale.getHeight());
             const auto justification = db == (int) scaleMin ? juce::Justification::centredLeft : db == (int) scaleMax ? juce::Justification::centredRight : juce::Justification::centred;
-            g.drawText (juce::String (db), juce::Rectangle<int> ((int) x - 18, scale.getY(), 36, scale.getHeight()), justification, false);
+            g.drawText (juce::String (db), label, justification, false);
         }
     }
 

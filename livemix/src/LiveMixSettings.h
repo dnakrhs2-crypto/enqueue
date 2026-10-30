@@ -79,6 +79,11 @@ public:
     void setFxMuteHotkey (const juce::String& description);
     juce::String getWindowHotkey() const;
     void setWindowHotkey (const juce::String& description);
+    /** Every mic / every FX muted at once (the top bar's 마이크 뮤트 / FX 뮤트). */
+    juce::String getMicAllMuteHotkey() const;
+    void setMicAllMuteHotkey (const juce::String& description);
+    juce::String getFxAllMuteHotkey() const;
+    void setFxAllMuteHotkey (const juce::String& description);
     /** The hotkey of plugin group 'group' (1..MixSession::maxPluginGroups): it switches that numbered group off and
         on across every mic channel that has one. */
     juce::String getPluginGroupHotkey (int group) const;

@@ -146,7 +146,8 @@ public:
 
         g.setColour (colour);
         g.fillRoundedRectangle (bounds, Palette::controlRadius);
-        g.setColour (button.getToggleState() ? Palette::accent : Palette::line);
+        // a lit button's edge is its own lit colour (accent by default): a red one had a blue edge
+        g.setColour (button.getToggleState() ? button.findColour (juce::TextButton::buttonOnColourId) : Palette::line);
         g.drawRoundedRectangle (bounds, Palette::controlRadius, 1.0f);
     }
 

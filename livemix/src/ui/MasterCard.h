@@ -73,6 +73,7 @@ private:
     void refreshObsStatus();
     void refreshObsToggle();
     static constexpr int obsRowHeight = 28, obsRowGap = 8;
+    static constexpr int compactLatencyWidth = 134;   // "지연 5.3 ms · 128 샘플"; a longer buffer drops 샘플 (setLatency)
 
     MixDocument& document;
     juce::StringArray outputNames;

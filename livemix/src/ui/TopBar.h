@@ -8,8 +8,9 @@
 namespace gocue::livemix
 {
 
-/** The bar under the menu bar: logo, session name and state, audio device, rate / buffer / latency, CPU load, the
-    mute badges, and two buttons (FX 채널, 플러그인 관리). The session, backup, settings, 합방 and help live in the menu bar. */
+/** The bar under the menu bar: logo, session name and state, audio device, rate / buffer / latency, CPU load, and the
+    buttons: 마이크 뮤트 / FX 뮤트 (every mic / every FX; lit red while muted), FX 채널, 플러그인 관리. The session,
+    backup, settings, 합방 and help live in the menu bar. */
 class TopBar : public juce::Component
 {
 public:
@@ -29,14 +30,18 @@ public:
     static juce::String buildStatusText (double sampleRate, int bufferSize, double latencyMs, bool running,
                                          const MixEngine::DeviceFormat& format, bool showSampleWord = true);
     void setFxCount (int count);
-    /** The mute groups' state: a red badge each while one is muted. */
-    void setMuteGroups (bool micMuted, bool fxMuted);
+    /** Each kind's switch: filled red while all of it is muted, a red edge while only its mute group is. */
+    void setMuteState (bool allMics, bool micGroup, bool allFx, bool fxGroup);
+    /** Every mic / every FX muted (no group): setMuteState without the groups. */
+    void setMuteGroups (bool micMuted, bool fxMuted) { setMuteState (micMuted, false, fxMuted, false); }
 
     std::function<void (const juce::String& deviceName)> onDeviceChosen;
     std::function<void (const juce::String& deviceName)> onDeviceRepicked;   // the device already selected, picked again
     std::function<void()> onDevicesWanted;   // the list opens with setDevices() skipped earlier: the app sets them now
     std::function<void()> onFxPanel;
     std::function<void()> onPluginManager;
+    std::function<void()> onMicMuteGroup;   // '마이크 뮤트': every mic muted / released, as its hotkey does
+    std::function<void()> onFxMuteGroup;    // 'FX 뮤트': every FX
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -49,10 +54,11 @@ private:
     };
 
     MixDocument& document;
-    juce::Label logoMark, logoText, sessionName, sessionState, deviceLabel, statusLabel, dspLabel, micMuteBadge, fxMuteBadge;
+    juce::Label logoMark, logoText, sessionName, sessionState, deviceLabel, statusLabel, dspLabel;
     RepickComboBox deviceCombo;
     DspMeter dspMeter;
     juce::TextButton fxButton, pluginsButton;
+    MuteSwitch micMuteButton, fxMuteButton;
     juce::String fullStatusText, shortStatusText, minimalStatusText;
     bool refreshing = false;
     bool waitingDevices = false;   // setDevices() skipped in the middle of a pick from the device list

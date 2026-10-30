@@ -184,7 +184,7 @@ namespace
 
             styleCaption (hotkeyCaption, ko ("전역 핫키"));
             addAndMakeVisible (hotkeyCaption);
-            styleCaption (hotkeyNote, ko ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. 뮤트 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다. ON/OFF 핫키는 그 번호의 마이크·FX 하나만 켜고 끕니다 (다른 세션에서도 같은 번호). '창 숨기기/불러오기'는 창을 트레이로 숨기거나 다시 불러옵니다. 플러그인 그룹 핫키는 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (그룹은 채널의 '체인 열기' 옆에서 만듭니다)."));
+            styleCaption (hotkeyNote, ko ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. '전체 뮤트'는 위쪽 막대의 '마이크 뮤트'·'FX 뮤트' 버튼과 같이 모든 마이크·FX를 뮤트합니다. 뮤트그룹의 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다. ON/OFF 핫키는 그 번호의 마이크·FX 하나만 켜고 끕니다 (다른 세션에서도 같은 번호). '창 숨기기/불러오기'는 창을 트레이로 숨기거나 다시 불러옵니다. 플러그인 그룹 핫키는 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (그룹은 채널의 '체인 열기' 옆에서 만듭니다)."));
             hotkeyNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (hotkeyNote);
 
@@ -203,6 +203,16 @@ namespace
                              [&prefs, group] { return prefs.getPluginGroupHotkey (group); },
                              [&prefs, group] (const juce::String& d) { prefs.setPluginGroupHotkey (group, d); });
             }
+
+            // the top bar's 마이크 뮤트 / FX 뮤트: drawn above their kind's mute group (arrangeRows)
+            addFixedRow (micAllHotkeyLabel, ko ("마이크 전체 뮤트"), micAllHotkey, micAllHotkeyClear,
+                         [&prefs] { return prefs.getMicAllMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setMicAllMuteHotkey (d); });
+            micAllRow = fixedRows.back().get();
+            addFixedRow (fxAllHotkeyLabel, ko ("FX 전체 뮤트"), fxAllHotkey, fxAllHotkeyClear,
+                         [&prefs] { return prefs.getFxAllMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setFxAllMuteHotkey (d); });
+            fxAllRow = fixedRows.back().get();
+            micAllHotkey.setComponentID ("hotkey-mic-all");
+            fxAllHotkey.setComponentID ("hotkey-fx-all");
 
             rebuildTrackRows();
             arrangeRows();
@@ -585,8 +595,10 @@ namespace
             int reasonHeight = 0;
             for (const auto* row : order)
                 reasonHeight += row->reason->heightForWidth (560 - 40);
-            setSize (560, 848 + 28 + MixSession::maxPluginGroups * 36 - 160 + deviceHeight + reasonHeight
-                              + (int) trackRows.size() * 36 + hotkeyNoteHeight() - 90);
+            // every hotkey row is 36 (30 + 6): the fixed ones (the mute switches, the window, the plugin groups) and
+            // the session's mics / FX - counted, so a new row cannot squeeze the last note (온라인 백업) again
+            setSize (560, 740 + 28 - 160 + (int) (fixedRows.size() + trackRows.size()) * 36 + deviceHeight + reasonHeight
+                              + hotkeyNoteHeight() - 90);
         }
 
         /** The session's mics / FX changed: their ON/OFF rows follow (nothing moves when the list is the same). */
@@ -791,7 +803,9 @@ namespace
             Row row;
         };
 
-        std::vector<std::unique_ptr<Row>> fixedRows;           // the mute groups, the window, plugin groups 1..5
+        std::vector<std::unique_ptr<Row>> fixedRows;           // the mute groups, the window, plugin groups 1..5, all mics / FX
+        Row* micAllRow = nullptr;   // among fixedRows, drawn first of the mics
+        Row* fxAllRow = nullptr;    // first of the FX
         std::vector<std::unique_ptr<TrackRow>> trackRows;      // the session's mics, then its FX
         std::vector<Row*> order;   // every row in the order drawn: what the layout and the clash check walk
 
@@ -897,8 +911,8 @@ namespace
             return true;
         }
 
-        /** Each kind under its mute group (gom, 2026-10-15): the mic group, every mic, the FX group, every FX, then the
-            window and the plugin groups. */
+        /** Each kind under its mute switches (gom, 2026-10-15; every mic / every FX 2026-10-30): all mics, the mic
+            group, each mic, all FX, the FX group, each FX, then the window and the plugin groups. */
         void arrangeRows()
         {
             order.clear();
@@ -909,25 +923,29 @@ namespace
                         order.push_back (&r->row);
             };
 
+            order.push_back (micAllRow);            // 마이크 전체 뮤트
             order.push_back (fixedRows[0].get());   // 마이크 뮤트그룹
             tracksOf (TrackHotkeys::Kind::mic);
+            order.push_back (fxAllRow);             // FX 전체 뮤트
             order.push_back (fixedRows[1].get());   // FX 뮤트그룹
             tracksOf (TrackHotkeys::Kind::fx);
 
             for (size_t i = 2; i < fixedRows.size(); ++i)
-                order.push_back (fixedRows[i].get());
+                if (fixedRows[i].get() != micAllRow && fixedRows[i].get() != fxAllRow)
+                    order.push_back (fixedRows[i].get());
         }
 
         int hotkeyNoteHeight() const { return juce::jmax (90, textHeight (hotkeyNote)); }
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;
+        juce::Label micAllHotkeyLabel, fxAllHotkeyLabel;
         juce::Label typeCaption, outputCaption, rateCaption, sharedBufferNote;
         juce::Label bitDepthCaption, bitDepthDetail, bitDepthHint, bitDepthWarning;
         juce::Label groupHotkeyLabel[MixSession::maxPluginGroups];
         juce::Label controlCaption, controlNote, controlAddress, controlState;
         juce::HyperlinkButton controlHelp;
-        HotkeyButton micHotkey, fxHotkey, windowHotkey;
+        HotkeyButton micHotkey, fxHotkey, windowHotkey, micAllHotkey, fxAllHotkey;
         HotkeyButton groupHotkey[MixSession::maxPluginGroups];
-        juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" }, windowHotkeyClear { "x" };
+        juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" }, windowHotkeyClear { "x" }, micAllHotkeyClear { "x" }, fxAllHotkeyClear { "x" };
         juce::TextButton groupHotkeyClear[MixSession::maxPluginGroups];
         RepickComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo, bitDepthCombo;
         juce::TextButton panelButton, soundSettingsButton;
