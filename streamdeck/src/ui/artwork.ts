@@ -9,9 +9,9 @@ export const palette = {
   lampOn: "#35D07F", lampOff: "#3A3F47", brand: "#E5302D", danger: "#FF5A5F",
   warning: "#FFB454", white: "#FFFFFF"
 } as const;
-export type IconKind = "mic" | "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
+export type IconKind = "mic" | "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
 export type Lamp = "on" | "off" | "muted-on" | "muted-off" | "disconnected" | "disabled" | "checking" | "version" | "missing" | "duplicate";
-export type ActionLamp = "all-on" | "all-off" | "mixed" | "group-muted" | "group-clear" | "plugin-on" | "plugin-off" | "plugin-all-on" | "plugin-all-off" | "plugin-all-mixed" | "status-on" | "status-off";
+export type ActionLamp = "all-on" | "all-off" | "mixed" | "group-muted" | "group-clear" | "mute-every-muted" | "mute-every-clear" | "plugin-on" | "plugin-off" | "plugin-all-on" | "plugin-all-off" | "plugin-all-mixed" | "status-on" | "status-off";
 export type Labels = { [key: string]: string };
 export const xml = (s: string): string => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
 export const svgDocument = (size: number, body: string, viewBox = 144): string =>
@@ -38,6 +38,8 @@ export function glyph(kind: IconKind, color: string = palette.white, index = 1):
     case "all-mics": body = [4, 12, 20].map(x => '<rect x="' + (x - 2) + '" y="4" width="4" height="9" rx="2"/><path d="M' + (x - 3) + ' 11v2a3 3 0 0 0 6 0v-2M' + x + ' 16v4M' + (x - 2) + ' 20h4"/>').join(""); break;
     case "mic-mute-group": body = brackets + '<g transform="translate(4 3) scale(.667 .75)">' + mic + '</g>'; break;
     case "fx-mute-group": body = brackets + '<g transform="translate(2 2) scale(.833)">' + fx + '</g>'; break;
+    case "mic-mute-all": body = '<g transform="translate(4 3) scale(.667 .75)">' + mic + '</g>'; break;
+    case "fx-mute-all": body = '<g transform="translate(2 2) scale(.833)">' + fx + '</g>'; break;
     case "plugin-group": body = '<rect x="5" y="4" width="14" height="16" rx="3"/><path d="M2 8h3M2 16h3M19 8h3M19 16h3M9 1v3M15 1v3M9 20v3M15 20v3"/><path d="' + digits[Math.max(1, Math.min(5, index))] + '"/>'; break;
     case "plugin-group-all": body = '<path d="M7 2h11a3 3 0 0 1 3 3v13"/><rect x="4" y="5" width="14" height="16" rx="3"/><path d="M1 9h3M1 17h3M18 9h3M18 17h3M8 2v3M14 2v3"/><g transform="translate(-1 1)"><path d="' + digits[Math.max(1, Math.min(5, index))] + '"/></g>'; break;
     case "fx-send": body = '<path d="M5 16a8 8 0 1 1 14 0M12 12l4-5M9 21h6"/><circle cx="12" cy="12" r="1"/>'; break;
@@ -84,7 +86,8 @@ export function micSvg(lamp: Lamp, labels: Labels, stopped = false, unknownValue
 export function actionSvg(lamp: ActionLamp, labels: Labels, count = 0, total = 0, stopped = false, group: "mic" | "fx" = "mic", size = 144, index = 1): string {
   count = bounded(count, 8); total = bounded(total, 8);
   index = Math.max(1, bounded(index, 5));
-  const muted = lamp === "group-muted", off = lamp.endsWith("off");
+  const muteAll = lamp === "mute-every-muted" || lamp === "mute-every-clear";
+  const muted = lamp === "group-muted" || lamp === "mute-every-muted", off = lamp.endsWith("off");
   const color = muted || lamp === "plugin-off" || lamp === "plugin-all-off" ? palette.danger : lamp === "mixed" || lamp === "plugin-all-mixed" ? palette.warning
     : lamp === "plugin-on" || lamp === "plugin-all-on" ? palette.accent : off ? palette.lampOff : palette.lampOn;
   let body: string, label = labels[off ? "off" : "on"]!, detail = "";
@@ -95,10 +98,10 @@ export function actionSvg(lamp: ActionLamp, labels: Labels, count = 0, total = 0
     }).join("");
     if (lamp === "mixed") body += rect(55, 64, 34, 3, 1.5, palette.warning);
     label = labels[lamp === "mixed" ? "someOn" : off ? "allOff" : "allOn"]!; detail = count + "/" + total;
-  } else if (lamp.startsWith("group")) {
-    body = placed(glyph(group === "mic" ? "mic-mute-group" : "fx-mute-group", color), 43, 7, 58);
+  } else if (lamp.startsWith("group") || muteAll) {
+    body = placed(glyph(muteAll ? group === "mic" ? "mic-mute-all" : "fx-mute-all" : group === "mic" ? "mic-mute-group" : "fx-mute-group", color), 43, 7, 58);
     if (muted) body += stroke('<path d="M45 10l54 53"/>', palette.danger, 4);
-    label = labels[muted ? "muteState" : "unmuteState"]!; detail = labels.targets!.replace("{count}", String(count));
+    label = labels[muted ? "muteState" : "unmuteState"]!; detail = labels[muteAll ? "allTargets" : "targets"]!.replace("{count}", String(count));
   } else if (lamp.startsWith("plugin-all")) {
     body = placed(glyph("plugin-group", color, index), 43, 7, 58);
     label = labels[lamp === "plugin-all-mixed" ? "someOn" : off ? "allOff" : "allOn"]!; detail = count + "/" + total;

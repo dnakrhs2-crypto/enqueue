@@ -285,6 +285,9 @@ public:
         expectEquals (hello["type"].toString(), juce::String ("helloAck"));
         expectEquals (hello["server"]["version"].toString(),
                       f.options.appVersion.isEmpty() ? appVersionString() : f.options.appVersion);
+        expectEquals (hello["capabilities"].size(), 8);
+        expectEquals (hello["capabilities"][6].toString(), juce::String ("fxOn"));
+        expectEquals (hello["capabilities"][7].toString(), juce::String ("muteAll"));
         c.initial = c.take ("state");
         expectEquals (c.initial["reason"].toString(), juce::String ("initial"));
         c.instance = hello["instanceId"].toString(); c.session = c.initial["sessionId"].toString();
@@ -303,6 +306,7 @@ public:
         handshake();
         orderingAndState();
         fxOnOff();
+        muteAll();
         duplicates();
         clientLimits();
         queueLimits();
@@ -483,6 +487,37 @@ public:
         expect (delta["changes"]["fx"][0]["on"].isBool() && ! (bool) delta["changes"]["fx"][0]["on"]);
         expect (! f.document.getSession().fx[0].on);
         expectEquals (f.values, 1); expectEquals (f.structures, 0); expectEquals (f.groupChanges, 0);
+        expect (f.allOnMessageThread && ! c.malformed);
+    }
+
+    void muteAll()
+    {
+        beginTest ("toggleMuteAll over loopback returns its group and publishes an all-mute value delta");
+        Fixture f;
+        f.document.addChannel(); f.document.addFx();
+        f.values = f.structures = f.groupChanges = 0;
+        if (! start (f)) return;
+        Client c;
+        if (! authenticate (f, c)) return;
+        const auto revision = (juce::int64) c.initial["revision"];
+        expect (c.initial["state"]["muteAll"]["mic"].isBool() && ! (bool) c.initial["state"]["muteAll"]["mic"]);
+        expect (c.initial["state"]["muteAll"]["fx"].isBool() && ! (bool) c.initial["state"]["muteAll"]["fx"]);
+        auto args = object(); put (args, "group", "mic");
+        expect (c.send (c.command (2, "toggleMuteAll", args)));
+        const auto ack = c.take ("ack", "2");
+        expect ((bool) ack["changed"]);
+        expectEquals (ack["result"]["group"].toString(), juce::String ("mic"));
+        expect (ack["result"]["muted"].isBool() && (bool) ack["result"]["muted"]);
+        expectEquals ((juce::int64) ack["revision"], revision + 1);
+        const auto delta = c.take ("stateDelta");
+        expectEquals ((juce::int64) delta["baseRevision"], revision);
+        expectEquals ((juce::int64) delta["revision"], (juce::int64) ack["revision"]);
+        expect (delta["changes"]["muteAll"]["mic"].isBool() && (bool) delta["changes"]["muteAll"]["mic"]);
+        expect (! delta["changes"]["muteAll"].hasProperty ("fx"));
+        expect (! delta["changes"].hasProperty ("muteGroups"));
+        expect (f.groups.isAllMuted (MuteGroups::Group::mic) && f.engine.areAllChannelsMuted());
+        expect (! f.groups.isMuted (MuteGroups::Group::mic));
+        expectEquals (f.values, 0); expectEquals (f.structures, 0); expectEquals (f.groupChanges, 1);
         expect (f.allOnMessageThread && ! c.malformed);
     }
 

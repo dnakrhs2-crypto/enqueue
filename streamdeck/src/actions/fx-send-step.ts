@@ -2,6 +2,7 @@ import { action } from "@elgato/streamdeck";
 import { ConnectionError, type LiveMixConnection } from "../livemix/connection.js";
 import type { CommandQueue } from "../livemix/command-queue.js";
 import { sendTarget, type Snapshot } from "../livemix/protocol.js";
+import { micMuted, fxMuted } from "../livemix/muted.js";
 import { displayName, keyImage, sendImage, type Lamp } from "../ui/key-renderer.js";
 import type { Language } from "../ui/i18n.js";
 import { LiveMixAction, type ActionContext } from "./base.js";
@@ -25,7 +26,7 @@ export class FxSendStepAction extends LiveMixAction {
     const channel = this.channel(c, s), fx = this.fx(c, s), target = sendTarget(s, channel.id, fx.id)!;
     const { mode, stepPercent, targetPercent } = c.settings;
     const badge = mode === "set" ? `=${targetPercent}` : `${mode === "down" ? "−" : "+"}${stepPercent}`;
-    const muted = (channel.muteGroup && s.state.muteGroups.mic) || (fx.muteGroup && s.state.muteGroups.fx);
+    const muted = micMuted(s.state, channel) || fxMuted(s.state, fx);
     c.key!.render({ state: 0, image: sendImage(Math.round(target.send.amount * 100), badge, this.language, muted, !s.state.audio.running),
       title: displayName(`${channel.name} → ${fx.name}`) });
   }

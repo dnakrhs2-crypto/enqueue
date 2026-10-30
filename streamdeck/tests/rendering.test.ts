@@ -75,7 +75,8 @@ test("release images have localized labels, distinct group shapes and independen
   for (const language of ["ko", "en"] as const) {
     const t = strings[language];
     for (const [lamp, label, color] of [["mixed", t.someOn, "#FFB454"], ["group-muted", t.muteState, "#FF5A5F"],
-      ["group-clear", t.unmuteState, "#35D07F"], ["plugin-on", t.on, "#4C8DFF"], ["plugin-off", t.off, "#FF5A5F"],
+      ["group-clear", t.unmuteState, "#35D07F"], ["mute-every-muted", t.muteState, "#FF5A5F"], ["mute-every-clear", t.unmuteState, "#35D07F"],
+      ["plugin-on", t.on, "#4C8DFF"], ["plugin-off", t.off, "#FF5A5F"],
       ["plugin-all-on", t.allOn, "#4C8DFF"], ["plugin-all-off", t.allOff, "#FF5A5F"], ["plugin-all-mixed", t.someOn, "#FFB454"]] as const) {
       const image = actionImage(lamp, language, 2, 3, true), svg = Buffer.from(image.split(",")[1]!, "base64").toString("utf8");
       assert.ok(svg.includes(label) && svg.includes(color) && svg.includes(t.audioStopped));
@@ -83,13 +84,21 @@ test("release images have localized labels, distinct group shapes and independen
       assert.equal(actionImage(lamp, language, 2, 3, true), image);
     }
     assert.notEqual(actionImage("group-muted", language, 2, 0, false, "mic"), actionImage("group-muted", language, 2, 0, false, "fx"));
+    for (const group of ["mic", "fx"] as const) for (const muted of [false, true]) {
+      const lamp = muted ? "mute-every-muted" : "mute-every-clear";
+      const all = actionSvg(lamp, t, 2, 0, true, group), brackets = '<path d="M6 2H3v20h3M18 2h3v20h-3"/>';
+      assert.equal(all, actionSvg(muted ? "group-muted" : "group-clear", t, 2, 0, true, group)
+        .replace(brackets, "").replace(t.targets.replace("{count}", "2"), t.allTargets.replace("{count}", "2")));
+      assert.equal(glyph(`${group}-mute-all`), glyph(`${group}-mute-group`).replace(brackets, ""));
+      assert.equal(Buffer.from(actionImage(lamp, language, 2, 0, true, group).split(",")[1]!, "base64").toString("utf8"), all);
+    }
     assert.notEqual(actionImage("plugin-all-on", language, 2, 2, false, "mic", 1), actionImage("plugin-all-on", language, 2, 2, false, "mic", 2));
   }
 });
 
-test("ten manifest actions have required controllers/states, translated triggers and all assets", async () => {
+test("twelve manifest actions have required controllers/states, translated triggers and all assets", async () => {
   const manifest = JSON.parse(await readFile(resolve(pluginRoot, "manifest.json"), "utf8"));
-  assert.equal(manifest.Version, "1.3.0.0");
+  assert.equal(manifest.Version, "1.4.0.0");
   // The actual static previews and runtime rendering share the same geometry.
   const samples = [
     ["mic/on", micSvg("on", strings.en)],
@@ -98,6 +107,13 @@ test("ten manifest actions have required controllers/states, translated triggers
     ["fx-send-step/increase", sendSvg(35, "+5", strings.en)]
   ];
   for (const [path, expected] of samples) assert.equal((await readFile(resolve(pluginRoot, "imgs/actions/" + path + "@2x.svg"), "utf8")).trim(), expected);
+  for (const group of ["mic", "fx"] as const) for (const [name, lamp] of [["off", "mute-every-clear"], ["on", "mute-every-muted"]] as const) {
+    for (const [suffix, size] of [["", 72], ["@2x", 144]] as const) {
+      const expected = actionSvg(lamp, strings.en, 2, 0, false, group, size);
+      assert.equal((await readFile(resolve(pluginRoot, `imgs/actions/${group}-mute-all/${name}${suffix}.svg`), "utf8")).trim(), expected);
+      if (size === 144) assert.equal(Buffer.from(actionImage(lamp, "en", 2, 0, false, group).split(",")[1]!, "base64").toString("utf8"), expected);
+    }
+  }
   for (const lamp of ["off", "on", "muted-on", "muted-off"] as const) for (const [suffix, size] of [["", 72], ["@2x", 144]] as const) {
     const expected = micSvg(lamp, strings.en, false, false, size, "fx");
     assert.equal((await readFile(resolve(pluginRoot, `imgs/actions/fx/${lamp}${suffix}.svg`), "utf8")).trim(), expected);
@@ -119,7 +135,7 @@ test("ten manifest actions have required controllers/states, translated triggers
     }
   }
   assert.notEqual(glyph("plugin-group-all"), glyph("plugin-group"), "Distinct white menu glyph");
-  assert.deepEqual(manifest.Actions.map((a: any) => a.UUID), ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"].map(id => `com.gomtwigim.livemix.${id}`));
+  assert.deepEqual(manifest.Actions.map((a: any) => a.UUID), ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"].map(id => `com.gomtwigim.livemix.${id}`));
   const ko = JSON.parse(await readFile(resolve(pluginRoot, "ko.json"), "utf8")), en = JSON.parse(await readFile(resolve(pluginRoot, "en.json"), "utf8"));
   assert.deepEqual(Object.keys(ko.Localization).sort(), Object.keys(en.Localization).sort());
   for (const a of manifest.Actions) {
@@ -130,6 +146,13 @@ test("ten manifest actions have required controllers/states, translated triggers
     if (a.UUID.endsWith(".fx")) {
       assert.equal(a.Name, "FX On/Off"); assert.equal(ko[a.UUID].Name, "FX ON/OFF");
       assert.deepEqual(a.States.map((s: any) => s.Name), ["OFF", "ON"]);
+    }
+    if (a.UUID.endsWith("-mute-all")) {
+      const mic = a.UUID.endsWith(".mic-mute-all");
+      assert.equal(a.Name, mic ? "Mute All Mics" : "Mute All FX");
+      assert.equal(ko[a.UUID].Name, mic ? "마이크 전체 뮤트" : "FX 전체 뮤트");
+      assert.deepEqual(a.States.map((s: any) => s.Name), [strings.en.unmuteState, strings.en.muteState]);
+      assert.ok(a.Tooltip.includes("LiveMix 0.18.0+"));
     }
     if (a.UUID.endsWith(".plugin-group-all")) {
       assert.equal(a.Name, "Plugin Group (All Mics)"); assert.equal(ko[a.UUID].Name, "플러그인 그룹 (전체 마이크)");

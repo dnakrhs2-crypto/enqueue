@@ -25,13 +25,13 @@ class Socket {
   close(): void { this.onclose(); }
   receive(value: unknown): void { this.onmessage({ data: JSON.stringify(value) }); }
 }
-test("multi-action PI appends the exact ko/en note for all nine keys and preserves existing notes across updates/offline", async () => {
+test("multi-action PI appends the exact ko/en note for all eleven keys and preserves existing notes across updates/offline", async () => {
   const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
   const notes = {
     ko: "다중 동작에서는 키 그림과 상태 표시가 없습니다. 위 ‘동작’ 설정이 그대로 실행됩니다.",
     en: "In a multi-action there is no key artwork or state. The Mode above is what runs."
   };
-  for (const language of ["ko", "en"] as const) for (const kind of ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send-step", "status"]) {
+  for (const language of ["ko", "en"] as const) for (const kind of ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-all", "fx-send-step", "status"]) {
     const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
     const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
     const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
@@ -98,9 +98,9 @@ test("shipped PI script: text-only names, offline preservation, auto-save, stale
   }
 });
 
-test("all ten shipped PI views expose only relevant fields, localized modes/notes and instant offline-safe settings", async () => {
+test("all twelve shipped PI views expose only relevant fields, localized modes/notes and instant offline-safe settings", async () => {
   const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
-  for (const language of ["ko", "en"]) for (const kind of ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"]) {
+  for (const language of ["ko", "en"]) for (const kind of ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"]) {
     const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
     const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
     const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
@@ -112,6 +112,7 @@ test("all ten shipped PI views expose only relevant fields, localized modes/note
     const expected: Record<string, string[]> = {
       mic: ["channel", "mode", "fallback", "title"], fx: ["fx", "mode", "fallback", "title"], "all-mics": ["mode", "title"],
       "mic-mute-group": ["mode", "title"], "fx-mute-group": ["mode", "title"],
+      "mic-mute-all": ["mode", "title"], "fx-mute-all": ["mode", "title"],
       "plugin-group": ["channel", "group", "mode", "fallback", "title"],
       "plugin-group-all": ["group", "mode", "title"],
       "fx-send": ["channel", "fx", "step", "press", "fallback"],
@@ -121,7 +122,8 @@ test("all ten shipped PI views expose only relevant fields, localized modes/note
     if (kind === "all-mics") assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.setAllOn, locale.setAllOff]);
     if (["mic", "fx", "plugin-group-all"].includes(kind)) assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.on, locale.off]);
     if (kind === "fx") { assert.equal(elements.note!.hidden, true); assert.equal(elements.fx!.value, settings.fxId); }
-    if (kind.endsWith("mute-group")) assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.mute, locale.unmute]);
+    if (kind.endsWith("mute-group") || kind.endsWith("mute-all")) assert.deepEqual(elements.mode!.children.map(c => c.textContent), [locale.toggle, locale.mute, locale.unmute]);
+    if (kind.endsWith("mute-all")) assert.equal(elements.note!.hidden, true);
     if (kind === "fx-send") assert.deepEqual(elements.step!.children.map(c => c.value), ["1", "5"]);
     if (kind === "fx-send-step") {
       assert.deepEqual(elements.mode!.children.map(c => c.value), ["up", "down", "set"]);
@@ -136,6 +138,7 @@ test("all ten shipped PI views expose only relevant fields, localized modes/note
     assert.equal(elements.fx!.children[0]!.textContent, settings.fxName + " · fx");
     assert.deepEqual(elements.group!.children.map(c => c.value), ["1", "2"]);
     if (kind.endsWith("mute-group")) assert.equal(elements.note!.textContent, locale.membershipNote + "\n" + locale.targets.replace("{count}", kind.startsWith("mic") ? "2" : "1"));
+    if (kind.endsWith("mute-all")) { assert.equal(elements.note!.textContent, ""); assert.equal(elements.note!.hidden, true); }
     if (kind === "plugin-group") assert.equal(elements.note!.textContent, locale.groupNote);
     if (kind === "plugin-group-all") assert.equal(elements.note!.textContent, locale.groupAllNote + "\n" + locale.groupNote);
     if (kind === "fx-send") assert.equal(elements.note!.textContent, locale.dialNote);
@@ -148,12 +151,19 @@ test("all ten shipped PI views expose only relevant fields, localized modes/note
     for (const id of ["channel", "fx", "group"]) assert.equal(elements[id]!.disabled, true);
     assert.equal(elements.fx!.value, settings.fxId); assert.equal(elements.channel!.value, settings.channelId);
     const control = kind === "fx-send" ? "step" : kind === "status" ? "display" : "mode";
-    elements[control]!.value = control === "step" ? "5" : control === "display" ? "audio" : kind === "fx-send-step" ? "set" : kind.endsWith("mute-group") ? "mute" : "on";
+    elements[control]!.value = control === "step" ? "5" : control === "display" ? "audio" : kind === "fx-send-step" ? "set" : kind.endsWith("mute-group") || kind.endsWith("mute-all") ? "mute" : "on";
     elements[control]!.listeners.get("change")!();
     const saved = socket.sent.at(-1)!;
     assert.equal(saved.event, "setSettings"); assert.equal(saved.payload.channelId, settings.channelId); assert.equal(saved.payload.fxId, settings.fxId);
     assert.equal(saved.payload[control === "step" ? "stepPercent" : control], control === "step" ? 5 : elements[control]!.value);
     const count = socket.sent.length; socket.receive({ event: "didReceiveSettings", context: "pi", payload: { settings: saved.payload } }); assert.equal(socket.sent.length, count);
+    if (kind.endsWith("mute-all")) {
+      assert.equal(elements.mode!.value, "mute");
+      elements.mode!.value = "unmute"; elements.mode!.listeners.get("change")!(); assert.equal(socket.sent.at(-1)!.payload.mode, "unmute");
+      elements["short-title"]!.value = "방송 <&>"; elements["short-title"]!.listeners.get("input")!();
+      assert.equal(socket.sent.at(-1)!.payload.shortTitle, "방송 <&>");
+      assert.deepEqual(fields.filter(id => !elements[`${id}-row`]!.hidden), ["mode", "title"]);
+    }
     if (kind === "fx-send") {
       elements.press!.value = "none"; elements.press!.listeners.get("change")!(); assert.equal(socket.sent.at(-1)!.payload.pressMode, "none");
     }

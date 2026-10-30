@@ -19,6 +19,8 @@ ControlState::Snapshot ControlState::capture (const MixDocument& document, const
     p.audioRunning = audioRunning;
     p.micMuted = groups.isMuted (MuteGroups::Group::mic);
     p.fxMuted = groups.isMuted (MuteGroups::Group::fx);
+    p.allMicsMuted = groups.isAllMuted (MuteGroups::Group::mic);
+    p.allFxMuted = groups.isAllMuted (MuteGroups::Group::fx);
     const auto& session = document.getSession();
     for (const auto& c : session.channels)
     {
@@ -101,6 +103,8 @@ ControlState::Difference ControlState::diff (const Snapshot& published, const Sn
     if (a.audioRunning != b.audioRunning) changes.audioRunning = b.audioRunning;
     if (a.micMuted != b.micMuted) changes.micMuted = b.micMuted;
     if (a.fxMuted != b.fxMuted) changes.fxMuted = b.fxMuted;
+    if (a.allMicsMuted != b.allMicsMuted) changes.allMicsMuted = b.allMicsMuted;
+    if (a.allFxMuted != b.allFxMuted) changes.allFxMuted = b.allFxMuted;
     for (size_t i = 0; i < a.channels.size(); ++i)
     {
         const auto& x = a.channels[i];

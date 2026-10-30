@@ -1,3 +1,10 @@
+# LiveMix 1.4.0
+
+- Added Mute All Mics and Mute All FX, matching LiveMix's top bar mute switches without mute-group marks. Choose Toggle, Mute or Unmute, including in Multi Actions.
+- All-mute is independent of mute groups and individual ON/OFF switches. Releasing it restores the previous group-muted state. Mic, FX and send controls show all-mute with the existing muted feedback.
+- New keys show plain mic/FX glyphs, red slash when muted, total channel count and stopped audio. Setup offers Mode and Display name.
+- These two keys require LiveMix 0.18.0+ with External Control enabled. Older versions show an update message and send no all-mute commands. Existing action requirements are unchanged.
+
 # LiveMix 1.3.0
 
 - Added FX On/Off to toggle one FX channel or explicitly set it ON/OFF, including in Multi Actions. Send amounts and the FX mute group remain independent.

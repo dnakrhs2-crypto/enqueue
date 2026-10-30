@@ -39,11 +39,20 @@ test("FX duplicate names require reselection, while original rename updates futu
 
 test("Round 3 settings validate action-specific enum/index/step bounds and supply safe defaults", () => {
   for (const [kind, bad] of [["plugin-group", { groupIndex: 0 }], ["fx-send", { stepPercent: 2 }], ["fx-send", { pressMode: "reset" }],
-    ["status", { display: "start" }], ["mic-mute-group", { mode: "on" }], ["fx-mute-group", { mode: "off" }], ["all-mics", { mode: "mute" }]] as const) {
+    ["status", { display: "start" }], ["mic-mute-group", { mode: "on" }], ["fx-mute-group", { mode: "off" }],
+    ["mic-mute-all", { mode: "on" }], ["fx-mute-all", { mode: "off" }], ["all-mics", { mode: "mute" }]] as const) {
     assert.equal(actionSettings(kind, bad).valid, false);
   }
   const defaults = actionSettings("fx-send", {}); assert.equal(defaults.settings.stepPercent, 1); assert.equal(defaults.settings.pressMode, "pre-post");
   assert.equal(actionSettings("fx-send", defaults.settings).changed, false); assert.equal(actionSettings("status", {}).settings.display, "connection");
+  for (const kind of ["mic-mute-all", "fx-mute-all"] as const) {
+    const defaults = actionSettings(kind, {}); assert.equal(defaults.valid, true); assert.equal(defaults.settings.mode, "toggle");
+    for (const mode of ["toggle", "mute", "unmute"]) {
+      const parsed = actionSettings(kind, { mode, shortTitle: "모든 채널" });
+      assert.equal(parsed.valid, true); assert.equal(parsed.settings.mode, mode); assert.equal(parsed.settings.shortTitle, "모든 채널");
+      assert.equal(actionSettings(kind, parsed.settings).changed, false);
+    }
+  }
 });
 test("invalid enum/future settings versions disable input; malformed UUID does not select a channel", () => {
   for (const raw of [{ mode: "TOGGLE" }, { settingsVersion: 2 }, { nameFallback: "true" }]) assert.equal(migrateSettings(raw).valid, false);

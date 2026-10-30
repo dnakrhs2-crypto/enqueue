@@ -5,7 +5,7 @@
   let socket, context, uuid, kind = "mic", settings = {}, channels = [], fx = [], groupIndices = [], counts;
   let request = 0, requestId = "", sequence = -1, session, revision = -1, ready = false, isInMultiAction = false;
   let t = window.LiveMixStrings.en;
-  const isMute = () => kind.endsWith("mute-group");
+  const isMute = () => kind.endsWith("mute-group") || kind.endsWith("mute-all");
   const isSendStep = () => kind === "fx-send-step";
   const isGroupAll = () => kind === "plugin-group-all";
   function send(event, payload) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ event, context: uuid, payload })); }
@@ -45,7 +45,7 @@
     }
     for (const n of indices) group.append(option(n, t.group + " " + n + (isGroupAll() ? " · " + (groupCounts.get(n) === 1 ? t.groupMicCountOne : t.groupMicCount).replace("{count}", String(groupCounts.get(n))) : "")));
     group.value = String(index);
-    const note = isMute() ? t.membershipNote + "\n" + t.targets.replace("{count}", String(ready && counts ? counts[kind === "mic-mute-group" ? "mic" : "fx"] : "—"))
+    const note = kind.endsWith("mute-group") ? t.membershipNote + "\n" + t.targets.replace("{count}", String(ready && counts ? counts[kind === "mic-mute-group" ? "mic" : "fx"] : "—"))
       : isGroupAll() ? t.groupAllNote + "\n" + t.groupNote : kind === "plugin-group" ? t.groupNote : kind === "fx-send" ? t.dialNote : "";
     byId("note").textContent = [note, isInMultiAction ? t.multiActionNote : ""].filter(Boolean).join("\n");
     byId("note").hidden = !byId("note").textContent;

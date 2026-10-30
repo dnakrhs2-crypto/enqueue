@@ -22,8 +22,8 @@ test("hello token, v1, instance and complete snapshot gate readiness", async t =
   assert.equal(connection.ready, false);
   await assert.rejects(connection.command(mic(server.snapshot.state.channels[0].id)), /DISCONNECTED/);
   assert.equal(server.received[0].token, server.token); assert.deepEqual(server.received[0].supportedVersions, [1]);
-  assert.equal(server.received[0].client.version, "1.3.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
-  assert.equal(connection.capabilities.at(-1), "fxOn");
+  assert.equal(server.received[0].client.version, "1.4.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
+  assert.deepEqual(connection.capabilities.slice(-2), ["fxOn", "muteAll"]);
   server.broadcastState("initial"); await ready();
   assert.equal(connection.store.snapshot?.instanceId, server.snapshot.instanceId);
 });
@@ -36,6 +36,8 @@ test("ACK validation follows each command result and rejects malformed group/sen
     { command: { command: "setFxOn", args: { fxId: snapshot.state.fx[0].id, on: true } }, result: { on: true }, bad: { on: 1 } },
     { command: { command: "setAllChannelsOn", args: { on: true } }, result: { on: true, count: 3 }, bad: { on: true, count: -1 } },
     { command: { command: "toggleMuteGroup", args: { group: "mic" } }, result: { group: "mic", muted: true }, bad: { group: "fx", muted: true } },
+    { command: { command: "toggleMuteAll", args: { group: "mic" } }, result: { group: "mic", muted: true }, bad: { group: "fx", muted: true } },
+    { command: { command: "setMuteAll", args: { group: "fx", muted: false } }, result: { group: "fx", muted: false }, bad: { group: "fx", muted: "false" } },
     { command: { command: "setPluginGroupOff", args: { channelId: snapshot.state.channels[0].id, index: 2, off: false } }, result: { index: 2, off: false }, bad: { index: 1, off: false } },
     ...[{ index: 1, off: false, count: 3 }, { index: 2, off: "false", count: 3 }, { index: 2, off: false }, { index: 2, off: false, count: 1.5 }, { index: 2, off: false, count: "3" }].map(bad => ({
       command: { command: "setPluginGroupOffEverywhere" as const, args: { index: 2, off: false } }, result: { index: 2, off: false, count: 3 }, bad })),
@@ -117,6 +119,56 @@ test("FX on is optional in snapshots and deltas, with strict boolean validation 
     source.state.fx[0].on = on;
     assert.throws(() => validateServerMessage(source), { code: "INVALID_MESSAGE" });
     assert.throws(() => validateServerMessage({ ...delta, changes: { fx: [{ id: fxId, on }] } }), { code: "INVALID_MESSAGE" });
+  }
+});
+
+for (const group of ["mic", "fx"] as const) test(`${group} mute-all wire: canonical partial delta, no-op ACK, validation and independent group`, async t => {
+  const { server, connection, ready } = await setup(t); await ready();
+  const initial = structuredClone(server.snapshot.state), revision = server.snapshot.revision, sent: any[] = [];
+  const send = server.send.bind(server);
+  server.send = (client: any, message: any) => { sent.push(message); send(client, message); };
+  server.behavior.omitDelta = true;
+  const ack = await connection.command({ command: "toggleMuteAll", args: { group } });
+  assert.deepEqual(ack.result, { group, muted: true }); assert.equal(ack.changed, true); assert.equal(ack.revision, revision + 1);
+  assert.equal(connection.store.snapshot?.revision, revision);
+  assert.deepEqual(connection.store.snapshot?.state.muteAll, initial.muteAll, "ACK never patches canonical state");
+  server.behavior.omitDelta = false; server.publishDelta();
+  await until(connection.store, "change", () => connection.store.snapshot?.revision === ack.revision);
+  assert.deepEqual(sent.find(m => m.type === "stateDelta").changes, { muteAll: { [group]: true } });
+  assert.deepEqual(connection.store.snapshot?.state.muteAll, { ...initial.muteAll, [group]: true });
+  const same = await connection.command({ command: "setMuteAll", args: { group, muted: true } });
+  assert.equal(same.changed, false); assert.equal(same.revision, ack.revision); assert.deepEqual(same.result, ack.result);
+  const restored = await connection.command({ command: "setMuteAll", args: { group, muted: false } });
+  await until(connection.store, "change", () => connection.store.snapshot?.revision === restored.revision);
+  assert.equal(restored.changed, true); assert.deepEqual(restored.result, { group, muted: false });
+  assert.deepEqual(connection.store.snapshot?.state, initial);
+  for (const command of ["toggleMuteAll", "setMuteAll"]) for (const args of [null, [], {}, { group: "all", muted: true }, { group: 1, muted: true }]) {
+    await assert.rejects(connection.command({ command, args } as unknown as Command), /INVALID_ARGUMENT/);
+  }
+  for (const muted of [undefined, null, 1, "true"]) {
+    await assert.rejects(connection.command({ command: "setMuteAll", args: { group, muted } } as unknown as Command), /INVALID_ARGUMENT/);
+  }
+  assert.equal(server.snapshot.revision, restored.revision); assert.deepEqual(server.snapshot.state, initial);
+});
+
+test("muteAll is optional; partial snapshots default absent keys and deltas merge only present booleans", async () => {
+  const source = await fixture("initial-state"); delete source.state.muteAll;
+  const snapshot = validateServerMessage(source) as Snapshot, store = new StateStore(); store.accept(snapshot);
+  assert.deepEqual(snapshot.state.muteAll, { mic: false, fx: false });
+  for (const muteAll of [{}, { mic: true }, { fx: true }, { mic: true, fx: false }]) {
+    assert.deepEqual((validateServerMessage({ ...source, state: { ...source.state, muteAll } }) as Snapshot).state.muteAll,
+      { mic: false, fx: false, ...muteAll });
+  }
+  const delta = { v: 1, type: "stateDelta", instanceId: snapshot.instanceId, sessionId: snapshot.sessionId, baseRevision: 1, revision: 2, changes: {} };
+  for (const [i, changes] of [{ muteAll: { mic: true } }, { muteAll: { fx: true } }, { audio: { running: true } }, { muteAll: {} }, { muteAll: { mic: false } }].entries()) {
+    const parsed = validateServerMessage({ ...delta, baseRevision: i + 1, revision: i + 2, changes }) as Delta;
+    assert.deepEqual(parsed.changes, changes); assert.equal(store.accept(parsed), true);
+    assert.deepEqual(store.snapshot?.state.muteAll, { mic: i < 4, fx: i > 0 });
+    assert.deepEqual(store.snapshot?.state.muteGroups, { mic: false, fx: false });
+  }
+  for (const muteAll of [undefined, null, true, 0, "mute", [], { mic: undefined }, { fx: undefined }, { mic: null }, { fx: "false" }, { mic: 1 }]) {
+    assert.throws(() => validateServerMessage({ ...source, state: { ...source.state, muteAll } }), { code: "INVALID_MESSAGE" });
+    assert.throws(() => validateServerMessage({ ...delta, changes: { muteAll } }), { code: "INVALID_MESSAGE" });
   }
 });
 

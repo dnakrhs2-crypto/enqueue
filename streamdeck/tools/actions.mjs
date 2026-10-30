@@ -5,6 +5,8 @@ export const actions = [
   { id: "all-mics", name: "allMics", tooltip: "allMicsTooltip", states: ["allOff", "allOn"] },
   { id: "mic-mute-group", name: "micMuteGroup", tooltip: "micMuteGroupTooltip", states: ["unmuteState", "muteState"] },
   { id: "fx-mute-group", name: "fxMuteGroup", tooltip: "fxMuteGroupTooltip", states: ["unmuteState", "muteState"] },
+  { id: "mic-mute-all", name: "micMuteAll", tooltip: "micMuteAllTooltip", states: ["unmuteState", "muteState"] },
+  { id: "fx-mute-all", name: "fxMuteAll", tooltip: "fxMuteAllTooltip", states: ["unmuteState", "muteState"] },
   { id: "plugin-group", name: "pluginGroup", tooltip: "pluginGroupTooltip", states: ["off", "on"] },
   { id: "plugin-group-all", name: "pluginGroupAll", tooltip: "pluginGroupAllTooltip", states: ["allOff", "allOn"] },
   { id: "fx-send", name: "fxSend", tooltip: "fxSendTooltip", states: ["fxSend"] },

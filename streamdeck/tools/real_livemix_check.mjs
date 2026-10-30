@@ -1,5 +1,5 @@
 // Run the built plugin under the fake Stream Deck host against REAL LiveMix (External Control ON).
-// An independent TCP observer checks mic, all-mics group and FX toggles; original values are restored.
+// An independent TCP observer checks mic, all-mics group, FX and all-mute toggles; original values are restored.
 // Usage from streamdeck/: node tools/real_livemix_check.mjs
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import net from "node:net";
 import { FakeHost } from "../tests/fake-host.mjs";
 import { actionSvg, micSvg } from "../src/ui/artwork.ts";
+import { micMuted, fxMuted } from "../src/livemix/muted.ts";
 import { locales } from "./locales.mjs";
 
 const appdata = process.env.APPDATA;
@@ -25,12 +26,12 @@ observer.on("data", chunk => {
   let i;
   while ((i = buffer.indexOf("\n")) >= 0) {
     const m = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1); lines.push(m);
-    if (m.type === "state") snapshot = m;
+    if (m.type === "state") snapshot = { ...m, state: { ...m.state, muteAll: { mic: false, fx: false, ...m.state.muteAll } } };
     else if (m.type === "stateDelta") {
       if (!snapshot || m.instanceId !== snapshot.instanceId || m.sessionId !== snapshot.sessionId || m.baseRevision !== snapshot.revision) {
         observerIssue = new Error("Observer state needs resynchronization"); continue;
       }
-      for (const key of ["session", "audio", "muteGroups"]) if (m.changes[key]) Object.assign(snapshot.state[key], m.changes[key]);
+      for (const key of ["session", "audio", "muteGroups", "muteAll"]) if (m.changes[key]) Object.assign(snapshot.state[key], m.changes[key]);
       for (const key of ["channels", "fx"]) for (const patch of m.changes[key] || []) {
         const item = snapshot.state[key].find(item => item.id === patch.id);
         if (item) Object.assign(item, patch); else observerIssue = new Error("Observer received an unknown target");
@@ -51,7 +52,7 @@ const waitObserver = (predicate, ms = 6000) => new Promise((res, rej) => {
 });
 const svg = image => image?.startsWith("data:image/svg+xml;base64,") ? Buffer.from(image.split(",")[1], "base64").toString("utf8") : "";
 const groupTargets = () => snapshot.state.channels.flatMap(c => c.pluginGroups.filter(g => g.index === 1).map(g => ({ channelId: c.id, off: g.off })));
-let origin, originalMic, originalGroups, originalFx, micTouched = false, groupsTouched = false, fxTouched = false;
+let origin, originalMic, originalGroups, originalFx, originalMuteAll, micTouched = false, groupsTouched = false, fxTouched = false, muteAllTouched = false;
 const sameSession = () => snapshot.instanceId === origin.instanceId && snapshot.sessionId === origin.sessionId;
 async function restoreCommand(command, args) {
   assert.ok(sameSession(), "Session changed; restoration cannot edit another session");
@@ -82,15 +83,26 @@ async function fxVisual(on) {
   await host.wait(() => {
     const fx = snapshot.state.fx.find(f => f.id === originalFx.fxId);
     if (!fx || fx.on !== on) return false;
-    const lamp = snapshot.state.muteGroups.fx && fx.muteGroup ? (on ? "muted-on" : "muted-off") : on ? "on" : "off";
+    const lamp = fxMuted(snapshot.state, fx) ? (on ? "muted-on" : "muted-off") : on ? "on" : "off";
     const v = host.visual("fx-real");
     return v.state === (on ? 1 : 0) && svg(v.image) === micSvg(lamp, locales.ko, !snapshot.state.audio.running, false, 144, "fx");
   }, 8000);
 }
 
+async function muteAllVisual(muted, channelId) {
+  await host.wait(() => {
+    const mic = snapshot.state.channels.find(c => c.id === channelId);
+    if (!mic || snapshot.state.muteAll.mic !== muted) return false;
+    const lamp = micMuted(snapshot.state, mic) ? (mic.on ? "muted-on" : "muted-off") : mic.on ? "on" : "off";
+    const all = host.visual("mute-all-real"), channel = host.visual("mute-all-mic-real"), stopped = !snapshot.state.audio.running;
+    return all.state === (muted ? 1 : 0) && svg(all.image) === actionSvg(muted ? "mute-every-muted" : "mute-every-clear", locales.ko, snapshot.state.channels.length, 0, stopped)
+      && channel.state === (mic.on ? 1 : 0) && svg(channel.image) === micSvg(lamp, locales.ko, stopped);
+  }, 8000);
+}
+
 try {
   await waitObserver(() => !observer.connecting);
-  observer.write(JSON.stringify({ v: 1, type: "hello", id: "1", supportedVersions: [1], token: discovery.token, client: { name: "real-check-observer", version: "1.3.0" } }) + "\n");
+  observer.write(JSON.stringify({ v: 1, type: "hello", id: "1", supportedVersions: [1], token: discovery.token, client: { name: "real-check-observer", version: "1.4.0" } }) + "\n");
   await waitObserver(() => snapshot);
   origin = { instanceId: snapshot.instanceId, sessionId: snapshot.sessionId };
   const mic = snapshot.state.channels[0]; assert.ok(mic, "No mic channel in the current session");
@@ -98,7 +110,7 @@ try {
   await host.start(appdata, "ko");
   host.appear("key-real", { settingsVersion: 1, channelId: mic.id, channelName: mic.name, mode: "toggle", nameFallback: false });
   await host.wait(() => {
-    const muted = snapshot.state.muteGroups.mic && mic.muteGroup;
+    const muted = micMuted(snapshot.state, mic);
     const lamp = muted ? mic.on ? "muted-on" : "muted-off" : mic.on ? "on" : "off";
     return host.visual("key-real").state === (mic.on ? 1 : 0) && svg(host.visual("key-real").image) === micSvg(lamp, locales.ko, !snapshot.state.audio.running);
   }, 8000);
@@ -148,10 +160,29 @@ try {
     fxTouched = false;
     console.log("FX_ON_OK");
   }
+  const muteMic = snapshot.state.channels[0];
+  if (!hello?.capabilities.includes("muteAll")) console.log("MUTE_ALL_SKIPPED (LiveMix does not advertise muteAll)");
+  else if (!muteMic) console.log("MUTE_ALL_SKIPPED (no mic in the current session)");
+  else {
+    originalMuteAll = snapshot.state.muteAll.mic;
+    host.appear("mute-all-real", { mode: "toggle" }, 3, "mic-mute-all");
+    host.appear("mute-all-mic-real", { channelId: muteMic.id, channelName: muteMic.name, mode: "toggle", nameFallback: false }, 4);
+    await muteAllVisual(originalMuteAll, muteMic.id);
+    muteAllTouched = true;
+    for (const muted of [!originalMuteAll, originalMuteAll]) {
+      const revision = snapshot.revision;
+      host.keyDown("mute-all-real"); host.keyUp("mute-all-real");
+      await waitObserver(() => sameSession() && snapshot.revision > revision && snapshot.state.muteAll.mic === muted);
+      await muteAllVisual(muted, muteMic.id);
+    }
+    muteAllTouched = false;
+    console.log("MUTE_ALL_OK");
+  }
   assert.equal(host.output.includes(discovery.token), false, "Token must not appear in plugin logs");
   console.log("REAL_CHECK_OK");
 } finally {
   try {
+    if (muteAllTouched) await restoreCommand("setMuteAll", { group: "mic", muted: originalMuteAll });
     if (fxTouched) await restoreCommand("setFxOn", originalFx);
     if (groupsTouched) await restoreGroups();
     if (micTouched) await restoreCommand("setChannelOn", originalMic);

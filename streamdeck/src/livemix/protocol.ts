@@ -36,11 +36,13 @@ export type Projection = {
   channels: Channel[];
   fx: Fx[];
   muteGroups: { mic: boolean; fx: boolean };
+  muteAll: { mic: boolean; fx: boolean };
 };
 export type Changes = {
   session?: Partial<Projection["session"]>;
   audio?: Partial<Projection["audio"]>;
   muteGroups?: Partial<Projection["muteGroups"]>;
+  muteAll?: Partial<Projection["muteAll"]>;
   channels?: (Partial<Channel> & { id: string })[];
   fx?: (Partial<Fx> & { id: string })[];
 };
@@ -62,6 +64,8 @@ export type EditCommand = MicCommand
   | { command: "setAllChannelsOn"; args: { on: boolean } }
   | { command: "toggleMuteGroup"; args: { group: "mic" | "fx" } }
   | { command: "setMuteGroup"; args: { group: "mic" | "fx"; muted: boolean } }
+  | { command: "toggleMuteAll"; args: { group: "mic" | "fx" } }
+  | { command: "setMuteAll"; args: { group: "mic" | "fx"; muted: boolean } }
   | { command: "setPluginGroupOff"; args: { channelId: string; index: number; off: boolean } }
   | { command: "setPluginGroupOffEverywhere"; args: { index: number; off: boolean } }
   | { command: "setSend"; args: { channelId: string; fxId: string } & ({ amount: number; pre?: never } | { pre: boolean; amount?: never }) };
@@ -74,7 +78,7 @@ export function validAck(command: Command, ack: Ack): boolean {
     case "requestState": return isRevision(r.snapshotRevision) && r.snapshotRevision === ack.revision && !ack.changed;
     case "toggleChannel": case "setChannelOn": case "toggleFx": case "setFxOn": return typeof r.on === "boolean";
     case "setAllChannelsOn": return typeof r.on === "boolean" && isRevision(r.count) && r.count <= 8;
-    case "toggleMuteGroup": case "setMuteGroup": return r.group === command.args.group && typeof r.muted === "boolean";
+    case "toggleMuteGroup": case "setMuteGroup": case "toggleMuteAll": case "setMuteAll": return r.group === command.args.group && typeof r.muted === "boolean";
     case "setPluginGroupOff": return r.index === command.args.index && typeof r.off === "boolean";
     case "setPluginGroupOffEverywhere": return r.index === command.args.index && typeof r.off === "boolean" && Number.isInteger(r.count);
     case "setSend": return typeof r.amount === "number" && Number.isFinite(r.amount) && r.amount >= 0 && r.amount <= 1 && typeof r.pre === "boolean";
@@ -106,8 +110,10 @@ function fx(value: unknown): Fx {
 }
 export function validateProjection(value: unknown): Projection {
   const o = object(value), session = object(o.session), audio = object(o.audio), mute = object(o.muteGroups);
+  const all = "muteAll" in o ? object(o.muteAll) : {};
   const p = {
     session: { name: str(session.name), dirty: bool(session.dirty) }, audio: { running: bool(audio.running) },
+    muteAll: { mic: "mic" in all ? bool(all.mic) : false, fx: "fx" in all ? bool(all.fx) : false },
     muteGroups: { mic: bool(mute.mic), fx: bool(mute.fx) }, channels: list(o.channels, 8, channel, c => c.id), fx: list(o.fx, 4, fx, f => f.id)
   };
   requireValue(p.channels.every(c => c.sends.every(s => p.fx.some(f => f.id === s.fxId))));
@@ -125,6 +131,11 @@ function changes(value: unknown): Changes {
     const m = object(o.muteGroups); result.muteGroups = {};
     if (m.mic !== undefined) result.muteGroups.mic = bool(m.mic);
     if (m.fx !== undefined) result.muteGroups.fx = bool(m.fx);
+  }
+  if ("muteAll" in o) {
+    const m = object(o.muteAll); result.muteAll = {};
+    if ("mic" in m) result.muteAll.mic = bool(m.mic);
+    if ("fx" in m) result.muteAll.fx = bool(m.fx);
   }
   if (o.channels !== undefined) result.channels = list(o.channels, 8, value => {
     const c = object(value), patch: Partial<Channel> & { id: string } = { id: uuid(c.id) };

@@ -3,8 +3,8 @@
   "UUID": "com.gomtwigim.livemix",
   "Name": "LiveMix",
   "Author": "Gomtwigim",
-  "Version": "1.3.0.0",
-  "Description": "Control LiveMix microphones, FX channels, mute groups, plugin groups and FX sends on this Windows PC.",
+  "Version": "1.4.0.0",
+  "Description": "Control LiveMix microphones, FX channels, mute groups, mute-all, plugin groups and FX sends on this Windows PC.",
   "Category": "LiveMix",
   "CategoryIcon": "imgs/category",
   "Icon": "imgs/plugin",
@@ -163,6 +163,64 @@
         {
           "Name": "Muted",
           "Image": "imgs/actions/fx-mute-group/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.mic-mute-all",
+      "Name": "Mute All Mics",
+      "Tooltip": "Mute or unmute every LiveMix microphone at once, as LiveMix's Mic Mute button does - no mute group marks needed (LiveMix 0.18.0+).",
+      "Icon": "imgs/actions/mic-mute-all/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": true,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "Unmuted",
+          "Image": "imgs/actions/mic-mute-all/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "Muted",
+          "Image": "imgs/actions/mic-mute-all/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.fx-mute-all",
+      "Name": "Mute All FX",
+      "Tooltip": "Mute or unmute every LiveMix FX channel at once, as LiveMix's FX Mute button does - no mute group marks needed (LiveMix 0.18.0+).",
+      "Icon": "imgs/actions/fx-mute-all/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": true,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "Unmuted",
+          "Image": "imgs/actions/fx-mute-all/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "Muted",
+          "Image": "imgs/actions/fx-mute-all/on",
           "TitleAlignment": "bottom",
           "FontSize": 12
         }

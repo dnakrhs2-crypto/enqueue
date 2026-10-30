@@ -20,8 +20,9 @@ export class FakeLiveMix extends EventEmitter {
   discoveryState = "ready";
   token = randomBytes(32).toString("base64url");
   behavior = { omitState: false, omitDelta: false, omitAck: false, omitPong: false, holdCommands: false, holdHello: false, split: false, version: 1, rejectAuth: false, helloInstance: "" };
-  constructor({ pluginGroupsEverywhere = true, legacyFx = false, fxOn = !legacyFx } = {}) {
+  constructor({ pluginGroupsEverywhere = true, legacyFx = false, fxOn = !legacyFx, legacyMuteAll = legacyFx, muteAll = !legacyMuteAll } = {}) {
     super(); this.pluginGroupsEverywhere = pluginGroupsEverywhere; this.fxOn = fxOn; this.legacyFx = legacyFx;
+    this.muteAll = muteAll; this.legacyMuteAll = legacyMuteAll;
   }
   async start() {
     this.appdata = await mkdtemp(join(tmpdir(), "livemix-sd-"));
@@ -30,10 +31,12 @@ export class FakeLiveMix extends EventEmitter {
     await mkdir(this.directory, { recursive: true });
     this.snapshot = await fixture("initial-state"); this.helloFixture = await fixture("hello-ack");
     if (this.legacyFx) for (const fx of this.snapshot.state.fx) delete fx.on;
-    this.helloFixture.capabilities = this.helloFixture.capabilities.filter(c => !["pluginGroupsEverywhere", "fxOn"].includes(c));
+    if (this.legacyMuteAll) delete this.snapshot.state.muteAll;
+    this.helloFixture.capabilities = this.helloFixture.capabilities.filter(c => !["pluginGroupsEverywhere", "fxOn", "muteAll"].includes(c));
     if (this.pluginGroupsEverywhere) this.helloFixture.capabilities.push("pluginGroupsEverywhere");
     if (this.fxOn) this.helloFixture.capabilities.push("fxOn");
-    this.helloFixture.server.version = this.fxOn ? "0.16.0" : this.pluginGroupsEverywhere ? "0.15.5" : "0.9.0";
+    if (this.muteAll) this.helloFixture.capabilities.push("muteAll");
+    this.helloFixture.server.version = this.muteAll ? "0.18.0" : this.fxOn ? "0.17.7" : this.pluginGroupsEverywhere ? "0.15.5" : "0.9.0";
     this.ordering = await fixture("ordering"); this.errorsFixture = await fixture("errors"); this.clientHello = await fixture("hello");
     await this.listen(); await this.publishDiscovery();
     this.heartbeatTimer = setInterval(() => { void this.publishDiscovery().catch(error => this.errors.push(error)); }, 5000);
@@ -108,6 +111,12 @@ export class FakeLiveMix extends EventEmitter {
       if (!targets.length) { this.error(client, m.id, "PLUGIN_GROUP_NOT_FOUND"); return; }
       for (const group of targets) group.off = a.off;
       result = { index: a.index, off: a.off, count: targets.length };
+    } else if (m.command === "toggleMuteAll" || m.command === "setMuteAll") {
+      if (!this.muteAll) { this.error(client, m.id, "UNKNOWN_COMMAND"); return; }
+      if (!a || typeof a !== "object" || Array.isArray(a) || !["mic", "fx"].includes(a.group)
+        || (m.command === "setMuteAll" && typeof a.muted !== "boolean")) { this.error(client, m.id, "INVALID_ARGUMENT"); return; }
+      state.muteAll[a.group] = m.command === "toggleMuteAll" ? !state.muteAll[a.group] : a.muted;
+      result = { group: a.group, muted: state.muteAll[a.group] };
     } else if (m.command === "toggleMuteGroup" || m.command === "setMuteGroup") {
       assert.ok(a.group === "mic" || a.group === "fx");
       if (m.command === "setMuteGroup") assert.equal(typeof a.muted, "boolean");
@@ -171,6 +180,8 @@ export class FakeLiveMix extends EventEmitter {
       const fx = this.snapshot.state.fx.filter(fx => JSON.stringify(fx) !== JSON.stringify(c.published.state.fx.find(old => old.id === fx.id)));
       if (fx.length) changes.fx = fx;
       for (const key of ["audio", "session", "muteGroups"]) if (JSON.stringify(c.published.state[key]) !== JSON.stringify(this.snapshot.state[key])) changes[key] = this.snapshot.state[key];
+      const muteAll = Object.fromEntries(Object.entries(this.snapshot.state.muteAll ?? {}).filter(([key, value]) => c.published.state.muteAll?.[key] !== value));
+      if (Object.keys(muteAll).length) changes.muteAll = muteAll;
       this.send(c, { ...this.ordering[4], ...this.context(), baseRevision: c.published.revision, changes });
       c.published = structuredClone(this.snapshot);
     }

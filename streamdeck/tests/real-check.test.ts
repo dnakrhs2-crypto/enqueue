@@ -16,6 +16,8 @@ for (const scenario of ["on", "off", "mixed", "absent"]) test(`real-app checker:
   if (scenario === "mixed") state.channels[1]!.pluginGroups[0]!.off = true;
   state.fx[0]!.on = scenario !== "off";
   state.fx[0]!.muteGroup = true; state.muteGroups.fx = scenario === "mixed";
+  state.muteAll = { mic: scenario === "off", fx: scenario === "mixed" };
+  const beforeMuteAll = { ...state.muteAll }, beforeMuteGroups = { ...state.muteGroups };
   const before = structuredClone(state.channels), beforeFx = structuredClone(state.fx);
   const { stdout, stderr } = await promisify(execFile)(process.execPath, ["tools/real_livemix_check.mjs"], {
     cwd: packageRoot, env: { ...process.env, APPDATA: server.appdata }, windowsHide: true, timeout: 30000
@@ -23,9 +25,12 @@ for (const scenario of ["on", "off", "mixed", "absent"]) test(`real-app checker:
   assert.ok(stdout.includes("MIC_OK") && stdout.includes("REAL_CHECK_OK"));
   assert.ok(stdout.includes(scenario === "absent" ? "GROUP_ALL_SKIPPED (no group 1 in the current session)" : "GROUP_ALL_OK"));
   assert.ok(stdout.includes("FX_ON_OK"));
+  assert.ok(stdout.includes("MUTE_ALL_OK"));
   assert.equal((stdout + stderr).includes(server.token), false);
   assert.deepEqual(state.channels, before);
   assert.deepEqual(state.fx, beforeFx);
+  assert.deepEqual(state.muteAll, beforeMuteAll); assert.deepEqual(state.muteGroups, beforeMuteGroups);
+  assert.deepEqual(server.received.filter((m: any) => m.command === "toggleMuteAll").map((m: any) => m.args), [{ group: "mic" }, { group: "mic" }]);
   assert.deepEqual(server.received.filter((m: any) => m.command === "toggleFx").map((m: any) => m.args), [{ fxId: state.fx[0]!.id }, { fxId: state.fx[0]!.id }]);
   const commands = server.received.filter((m: any) => m.command === "setPluginGroupOffEverywhere");
   assert.deepEqual(commands.map((m: any) => m.args.off), scenario === "absent" ? [] : scenario === "off" ? [false, true] : [true, false]);
@@ -44,4 +49,16 @@ for (const scenario of ["legacy", "no-fx"] as const) test(`real-app checker: ${s
   assert.ok(stdout.includes(scenario === "legacy" ? "FX_ON_SKIPPED (LiveMix does not advertise fxOn)" : "FX_ON_SKIPPED (no FX in the current session)"));
   assert.ok(stdout.includes("REAL_CHECK_OK")); assert.equal((stdout + stderr).includes(server.token), false);
   assert.equal(server.received.filter((m: any) => m.command === "toggleFx" || m.command === "setFxOn").length, 0);
+  assert.ok(stdout.includes(scenario === "legacy" ? "MUTE_ALL_SKIPPED (LiveMix does not advertise muteAll)" : "MUTE_ALL_OK"));
+});
+
+test("real-app checker: LiveMix 0.17.x skips mute-all without commands and keeps existing checks", async t => {
+  const server = await new FakeLiveMix({ legacyMuteAll: true }).start(); t.after(() => server.close());
+  const { stdout, stderr } = await promisify(execFile)(process.execPath, ["tools/real_livemix_check.mjs"], {
+    cwd: packageRoot, env: { ...process.env, APPDATA: server.appdata }, windowsHide: true, timeout: 30000
+  });
+  assert.ok(stdout.includes("MUTE_ALL_SKIPPED (LiveMix does not advertise muteAll)"));
+  assert.ok(stdout.includes("MIC_OK") && stdout.includes("FX_ON_OK") && stdout.includes("REAL_CHECK_OK"));
+  assert.equal((stdout + stderr).includes(server.token), false);
+  assert.equal(server.received.filter((m: any) => m.command === "toggleMuteAll" || m.command === "setMuteAll").length, 0);
 });

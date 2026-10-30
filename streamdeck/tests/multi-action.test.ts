@@ -6,7 +6,7 @@ import { FakeHost } from "./fake-host.mjs";
 import { until } from "./helpers.mjs";
 import { setupActions, options, alerts, commands, title } from "./action-helpers.js";
 
-const kinds = ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send-step", "status"] as const;
+const kinds = ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-all", "fx-send-step", "status"] as const;
 const visualEvents = ["setState", "setImage", "setTitle"];
 const assertSilent = (host: FakeHost, id: string): void => {
   assert.deepEqual(host.records.filter(r => r.context === id && visualEvents.includes(r.event)), [], id);
@@ -31,11 +31,11 @@ for (const kind of kinds) test(`${kind}: multi-action stays silent on appear/ref
       for (const send of channel.sends) send.amount = 0.6;
     }
     for (const fx of s.state.fx) fx.on = false;
-    s.state.muteGroups = { mic: true, fx: true }; s.state.audio.running = false;
+    s.state.muteGroups = { mic: true, fx: true }; s.state.muteAll = { mic: true, fx: true }; s.state.audio.running = false;
   }, true);
   await until(host, "pi", () => pi.messages.at(-1)?.payload.revision === server.snapshot.revision);
   await host.wait(() => host.visual("normal").image !== before.image);
-  assert.equal(host.visual("normal").state, kind.endsWith("mute-group") ? 1 : 0);
+  assert.equal(host.visual("normal").state, kind.endsWith("mute-group") || kind.endsWith("mute-all") ? 1 : 0);
   assertSilent(host, "multi");
 
   const expected = {
@@ -44,6 +44,8 @@ for (const kind of kinds) test(`${kind}: multi-action stays silent on appear/ref
     "all-mics": { command: "setAllChannelsOn", args: { on: true } },
     "mic-mute-group": { command: "toggleMuteGroup", args: { group: "mic" } },
     "fx-mute-group": { command: "toggleMuteGroup", args: { group: "fx" } },
+    "mic-mute-all": { command: "toggleMuteAll", args: { group: "mic" } },
+    "fx-mute-all": { command: "toggleMuteAll", args: { group: "fx" } },
     "plugin-group": { command: "setPluginGroupOff", args: { channelId: settings.channelId, index: 1, off: false } },
     "plugin-group-all": { command: "setPluginGroupOffEverywhere", args: { index: 1, off: false } },
     "fx-send-step": { command: "setSend", args: { channelId: settings.channelId, fxId: settings.fxId, amount: 0.61 } },
@@ -81,6 +83,24 @@ for (const kind of ["mic", "fx", "all-mics", "plugin-group", "plugin-group-all"]
     assertSilent(host, "multi");
   }
   await host.fence(); assert.equal(commands(server).length, 5); assert.equal(alerts(host, "multi").length, 0);
+});
+
+for (const group of ["mic", "fx"] as const) test(`${group} mute-all: multi-action runs Mode and ignores userDesiredState without artwork`, async t => {
+  const { server, host } = await setupActions(t);
+  host.appear("multi", { mode: "toggle" }, 0, `${group}-mute-all`, "Keypad", { isInMultiAction: true });
+  const { pi } = await options(host, "multi");
+  await until(host, "pi", () => pi.messages.at(-1)?.payload.connection === "ready");
+  const expected: { command: string; args: object }[] = [];
+  for (const [mode, userDesiredState, muted] of [["toggle", 0, true], ["unmute", 1, false], ["mute", 0, true], ["toggle", 1, false]] as const) {
+    host.settings("multi", { ...host.contexts.get("multi")!.settings, mode });
+    host.keyDown("multi", { userDesiredState }); host.keyUp("multi");
+    expected.push(mode === "toggle" ? { command: "toggleMuteAll", args: { group } } : { command: "setMuteAll", args: { group, muted } });
+    await until(server, "command", () => commands(server).length === expected.length);
+    await until(host, "pi", () => pi.messages.at(-1)?.payload.revision === server.snapshot.revision);
+    assert.equal(server.snapshot.state.muteAll[group], muted);
+    assert.deepEqual(commands(server).map(m => ({ command: m.command, args: m.args })), expected); assertSilent(host, "multi");
+  }
+  await host.fence(); assert.equal(alerts(host, "multi").length, 0); host.assertBudget();
 });
 
 for (const kind of ["mic", "plugin-group"] as const) test(`${kind}: missing binding and disconnection still alert in a multi-action without visual output`, async t => {

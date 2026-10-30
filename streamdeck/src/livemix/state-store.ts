@@ -27,6 +27,7 @@ export class StateStore extends EventEmitter {
     try {
       const state = validateProjection({
         session: { ...s.session, ...c.session }, audio: { ...s.audio, ...c.audio }, muteGroups: { ...s.muteGroups, ...c.muteGroups },
+        muteAll: { ...s.muteAll, ...c.muteAll },
         channels: s.channels.map(x => ({ ...x, ...c.channels?.find(p => p.id === x.id) })),
         fx: s.fx.map(x => ({ ...x, ...c.fx?.find(p => p.id === x.id) }))
       });

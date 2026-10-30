@@ -4,6 +4,7 @@ import { LiveMixConnection, ConnectionError } from "../livemix/connection.js";
 import { MicBinding, migrateSettings, type MicSettings } from "../livemix/bindings.js";
 import { CommandQueue } from "../livemix/command-queue.js";
 import { isObject } from "../livemix/protocol.js";
+import { micMuted } from "../livemix/muted.js";
 import { displayName, statusTitle, keyImage, KeyRenderer, type KeyOutput, type Lamp } from "../ui/key-renderer.js";
 import { translator, type Language } from "../ui/i18n.js";
 
@@ -102,7 +103,7 @@ export class MicrophoneAction extends SingletonAction<MicSettings> {
       else {
         const channel = binding.channel;
         state = channel.on ? 1 : 0;
-        lamp = snapshot.state.muteGroups.mic && channel.muteGroup ? channel.on ? "muted-on" : "muted-off" : channel.on ? "on" : "off";
+        lamp = micMuted(snapshot.state, channel) ? channel.on ? "muted-on" : "muted-off" : channel.on ? "on" : "off";
         title = context.settings.shortTitle || channel.name;
         isName = true;
         audioStopped = !snapshot.state.audio.running;

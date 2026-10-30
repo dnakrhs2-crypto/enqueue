@@ -60,6 +60,30 @@
       }
     ]
   },
+  "com.gomtwigim.livemix.mic-mute-all": {
+    "Name": "Mute All Mics",
+    "Tooltip": "Mute or unmute every LiveMix microphone at once, as LiveMix's Mic Mute button does - no mute group marks needed (LiveMix 0.18.0+).",
+    "States": [
+      {
+        "Name": "Unmuted"
+      },
+      {
+        "Name": "Muted"
+      }
+    ]
+  },
+  "com.gomtwigim.livemix.fx-mute-all": {
+    "Name": "Mute All FX",
+    "Tooltip": "Mute or unmute every LiveMix FX channel at once, as LiveMix's FX Mute button does - no mute group marks needed (LiveMix 0.18.0+).",
+    "States": [
+      {
+        "Name": "Unmuted"
+      },
+      {
+        "Name": "Muted"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.plugin-group": {
     "Name": "Plugin Group",
     "Tooltip": "Toggle an existing numbered plugin group on a microphone.",
@@ -156,6 +180,11 @@
     "micMuteGroupTooltip": "Mute or unmute the microphones assigned to LiveMix's mute group.",
     "fxMuteGroup": "FX Mute Group",
     "fxMuteGroupTooltip": "Mute or unmute the FX assigned to LiveMix's mute group.",
+    "micMuteAll": "Mute All Mics",
+    "micMuteAllTooltip": "Mute or unmute every LiveMix microphone at once, as LiveMix's Mic Mute button does - no mute group marks needed (LiveMix 0.18.0+).",
+    "fxMuteAll": "Mute All FX",
+    "fxMuteAllTooltip": "Mute or unmute every LiveMix FX channel at once, as LiveMix's FX Mute button does - no mute group marks needed (LiveMix 0.18.0+).",
+    "allTargets": "All {count}",
     "pluginGroup": "Plugin Group",
     "pluginGroupTooltip": "Toggle an existing numbered plugin group on a microphone.",
     "pluginGroupAll": "Plugin Group (All Mics)",

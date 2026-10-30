@@ -82,10 +82,12 @@ public:
             f.document.setFxMuteGroup (f.fx(), true); f.document.setFxReturn (f.fx(), 0.8);
             f.document.setFxOn (f.fx(), false);
             f.groups.set (MuteGroups::Group::mic, true); f.groups.set (MuteGroups::Group::fx, true);
+            f.groups.setAll (MuteGroups::Group::mic, true); f.groups.setAll (MuteGroups::Group::fx, true);
             const auto snapshot = f.capture (true);
             const auto& p = snapshot.projection;
             expect (snapshot.sessionId == f.document.getSessionGeneration());
             expectEquals (p.session.name, f.document.getDisplayName()); expect (p.session.dirty && p.audioRunning && p.micMuted && p.fxMuted);
+            expect (p.allMicsMuted && p.allFxMuted);
             expectEquals ((int) p.channels.size(), 2); expectEquals ((int) p.fx.size(), 2);
             expect (p.channels[0].id == f.channel() && p.channels[1].id == second);
             expectEquals (p.channels[0].name, juce::String ("Mic A")); expect (! p.channels[0].on && p.channels[0].muteGroup);
@@ -99,7 +101,7 @@ public:
             expectWithinAbsoluteError (p.fx[0].returnAmount, 0.8, 1.0e-12);
             expect (! p.fx[0].on && p.fx[1].on);
             const auto json = P::toVar (p);
-            expectEquals (json.getDynamicObject()->getProperties().size(), 5);
+            expectEquals (json.getDynamicObject()->getProperties().size(), 6);
             expectEquals (json["channels"][0].getDynamicObject()->getProperties().size(), 7);
             expect (json["channels"][0]["pan"].isDouble());
             expectWithinAbsoluteError ((double) json["channels"][0]["pan"], -0.3, 1e-12);
@@ -216,6 +218,49 @@ public:
                 merge (client, changes);
                 expectEquals (juce::JSON::toString (client, true), juce::JSON::toString (P::toVar (state.getCurrent().projection), true));
             }
+        }
+
+        beginTest ("all-mute capture and deltas carry only the changed switch without a structure revision");
+        {
+            Fixture f;
+            f.document.addChannel(); f.document.addFx(); f.document.discardUnsavedChanges();
+            ControlState state (f.capture());
+            expect (! state.getCurrent().projection.allMicsMuted && ! state.getCurrent().projection.allFxMuted);
+            for (const bool muted : { true, false })
+                for (const auto group : { MuteGroups::Group::mic, MuteGroups::Group::fx })
+                {
+                    const auto published = state.getCurrent();
+                    f.groups.setAll (group, muted);
+                    expect (state.update (f.capture()));
+                    const auto& current = state.getCurrent();
+                    expect (current.projection.allMicsMuted == f.groups.isAllMuted (MuteGroups::Group::mic));
+                    expect (current.projection.allFxMuted == f.groups.isAllMuted (MuteGroups::Group::fx));
+                    expect (! current.projection.micMuted && ! current.projection.fxMuted);
+                    const auto delta = ControlState::diff (published, current);
+                    expect (delta.kind == ControlState::ChangeKind::values && ! delta.needsFullState());
+                    expect (! delta.changes.empty());
+                    expectEquals (delta.baseRevision, published.revision);
+                    expectEquals (delta.revision, published.revision + 1);
+                    expectEquals (current.structureRevision, published.structureRevision);
+                    if (group == MuteGroups::Group::mic)
+                        expect (delta.changes.allMicsMuted == std::optional<bool> (muted) && ! delta.changes.allFxMuted);
+                    else
+                        expect (delta.changes.allFxMuted == std::optional<bool> (muted) && ! delta.changes.allMicsMuted);
+                    const auto changes = P::toVar (delta.changes);
+                    expectEquals (changes.getDynamicObject()->getProperties().size(), 1);
+                    const auto value = changes["muteAll"];
+                    expect (value.getDynamicObject() != nullptr);
+                    if (value.getDynamicObject() != nullptr) expectEquals (value.getDynamicObject()->getProperties().size(), 1);
+                    const auto* key = group == MuteGroups::Group::mic ? "mic" : "fx";
+                    expect (value[key].isBool() && (bool) value[key] == muted);
+                    auto client = P::toVar (published.projection);
+                    merge (client, changes);
+                    expectEquals (juce::JSON::toString (client, true), juce::JSON::toString (P::toVar (current.projection), true));
+                    const auto same = current;
+                    expect (state.update (f.capture()));
+                    expect (ControlState::diff (same, state.getCurrent()).kind == ControlState::ChangeKind::none);
+                    expectEquals (state.getCurrent().revision, same.revision);
+                }
         }
 
         beginTest ("same projection is silent, polls catch audio/dirty without callbacks, unrelated fields do not advance revision");

@@ -1,3 +1,109 @@
+# 1.4.0 validation - 2026-10-30
+
+Implemented the Stream Deck half of all-mute in
+`C:\Users\claude\gocue-mutebtn\streamdeck` for `livemix-mute-buttons`.
+Package/hello version **1.4.0**, generated manifest **1.4.0.0**.
+Node **24.13.0** and the global Elgato CLI **1.9.0** are available.
+
+**Verification is incomplete: this worktree has no `streamdeck/node_modules`.**
+The expected prepared dependencies were absent, and no installed dependency
+tree was found in the sibling `gocue*` worktrees. The user was asked to restore
+that directory or identify its existing location. No npm install/ci, dependency
+directory edit, lockfile edit or git command was performed. The real SDK plugin
+has not yet been built or exercised in this worktree.
+
+| Exact command (from `streamdeck/`) | Actual result |
+|---|---|
+| `node tools/generate-assets.mjs` | Exit 0; generated the new icons, manifest and ko/en resources. |
+| `npm.cmd run typecheck` | Exit 1 before compilation: `'tsc' is not recognized as an internal or external command`. No typecheck result. |
+| `npm.cmd run build` | Exit 1; generation succeeded, then `'rollup' is not recognized as an internal or external command`. No `bin/plugin.js` produced. |
+| `npm.cmd test` | Exit 1 in its build prerequisite for the same missing Rollup executable. **0 suite tests executed**. This was not a host/deadline failure, so no CPU-timeout rerun was applicable. |
+| `npm.cmd run validate -- --no-update-check` | Asset checks passed: **37 manifest image references / 74 files**, **186 packaged images**, ko/en complete. CLI exit 1: `CodePath file not found, 'bin/plugin.js'`. |
+| `npm.cmd run pack -- -f` | Exit 1; remote schema fetches were unavailable, then the global CLI could not write its `.cli.cache` in the read-only global npm directory (`EPERM`). No package produced. The missing bundle also prevents a valid package. |
+
+## Partial tests without installed dependencies
+
+Node's built-in `node:module.stripTypeScriptTypes` with `mode: "transform"`
+staged 15 source/test modules into `.test-build/`, plus the existing helper and
+fake LiveMix `.mjs` files. This performs **no TypeScript typecheck** and uses no
+SDK substitute. Only tests that do not require the absent SDK/ws dependencies
+were run:
+
+```powershell
+node --test --test-concurrency=1 .test-build/tests/bindings.test.js .test-build/tests/connection.test.js .test-build/tests/inspector.test.js .test-build/tests/rendering.test.js
+```
+
+Exit **0**: **63 tests, 63 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo**,
+**8965.9028 ms**. This includes strict optional projection/delta parsing,
+partial mute-all merges, wire commands and no-op results, ACKs not patching
+canonical state, localized PI rows and static/runtime SVG agreement. These
+results do not establish the new real-SDK key/Multi Action flows or the
+real-app checker. Those tests are implemented but await the full npm suite.
+
+## Behavior and files
+
+The new UUIDs are `com.gomtwigim.livemix.mic-mute-all` and
+`com.gomtwigim.livemix.fx-mute-all`, registered after the two mute-group actions.
+They use `LiveMixAction` with capability `muteAll`. Key down queues on
+`mute-all/mic` or `mute-all/fx`, owned by the context ID. Toggle sends
+`toggleMuteAll { group }`; Mute/Unmute sends `setMuteAll { group, muted }` with
+true/false. The usual v1 envelope supplies request ID and current
+instance/session; there is no computed revision, retry or key-up command.
+ACK results validate group/boolean only. Normal snapshots/deltas drive state.
+
+State 1 is muted, with the existing red slash; state 0 is clear/green. Glyphs
+retain the group glyph placement with only brackets removed. Labels reuse
+`muteState`/`unmuteState`, with `전체 {count}개` / `All {count}`, stopped-audio
+badge and the configured short title or action name. PI exposes only Mode
+(Toggle / Mute / Unmute) and Display name, plus the existing connection status
+and Multi Action note. Multi Actions execute Mode with no artwork/state/title.
+Absent capability produces the existing unsupported text and one input alert
+without a command.
+
+`micMuted` / `fxMuted` in `src/livemix/muted.ts` each combine all-mute with
+marked group mute using OR. Mic/FX keys keep the individual ON/OFF state; send
+key/dial uses the OR of those helpers. Group keys, All Microphones, plugin
+groups and Status keep their existing rules. Older snapshots fill absent
+mute-all flags with false; invalid present values are rejected.
+
+| Area | Changed/new files relative to `streamdeck/` |
+|---|---|
+| Runtime/actions | New `src/actions/mute-all.ts`, `mic-mute-all.ts`, `fx-mute-all.ts`; `mic.ts`, `fx.ts`, `fx-send.ts`, `fx-send-step.ts`; `src/plugin.ts` |
+| Protocol/state/settings | New `src/livemix/muted.ts`; `protocol.ts`, `state-store.ts`, `bindings.ts`, `connection.ts`; `package.json` |
+| Artwork/generation | `src/ui/artwork.ts`; `tools/actions.mjs`, `locales.mjs`, `generate-assets.mjs`; generated `src/ui/strings.ts` |
+| Package/PI | `com.gomtwigim.livemix.sdPlugin/ui/inspector.js`; generated `ui/strings.js`, `manifest.json`, `en.json`, `ko.json`; new `imgs/actions/{mic-mute-all,fx-mute-all}/*.svg` and matching `design/actions/` files |
+| Tests/fixtures | New `tests/mute-all.test.ts`; `action-helpers.ts`, `actions.test.ts`, `bindings.test.ts`, `connection.test.ts`, `fake-livemix-server.mjs`, `inspector.test.ts`, `multi-action.test.ts`, `real-check.test.ts`, `rendering.test.ts`; `tests/fixtures/control/README.md`, `hello-ack.json`, `initial-state.json` |
+| Checker/docs | `tools/real_livemix_check.mjs`; `README.md`, `CHANGELOG.md`, `VALIDATION.md`; assigned shared design spec and Marketplace `listing-en.md`, `listing-ko.md`, `release-notes-en.md` |
+
+The checker now verifies mic all-mute and the bound mic's muted image after the
+FX step, toggles back, and prints `MUTE_ALL_OK`. Missing capability prints
+`MUTE_ALL_SKIPPED (LiveMix does not advertise muteAll)` with no mute-all command.
+An initially enabled latch is toggled off then on, preserving its original
+state. Failure cleanup follows the existing checker restoration pattern.
+
+## Preservation, deviations and remaining work
+
+Baseline hashes were recorded without git. After generation, all **347
+pre-existing files** under `design/` and packaged `imgs/` remain byte-identical.
+There are **32 new SVGs**, only in the two new action folders across design and
+package output. All **10 Marketplace PNG/HTML files** and `package-lock.json`
+are unchanged. JavaScript syntax checks passed for the PI, fake server and
+real-app checker. The final inventory is **40 changed existing files and 37 new
+files**, including the 32 SVGs; generated `.test-build/` is excluded from this count.
+C++, CMake, the C++ build directory, installer, site and release notes were not
+edited. The existing KeyRenderer and its rolling 10-call budget are reused.
+
+The brief called the existing Korean state labels `뮤트 중 / 뮤트 아님`; this
+checkout actually uses `뮤트 / 해제`. Those existing strings were preserved,
+as required for unchanged group artwork. The mute helpers live in a small
+standalone file so the real-app checker can import them with Node's built-in
+type stripping.
+
+Remaining: restore the prepared dependencies, run source/test typecheck, build,
+the complete npm test suite, offline validation and pack. **No distributable,
+size or SHA-256 is available for 1.4.0 yet.** Claude's real LiveMix 0.18.0,
+audio, Stream Deck/Mobile, install and release checks remain as assigned.
+
 # 1.3.0 validation - 2026-10-25
 
 Implemented the individual FX switch in `C:\Users\claude\gocue-sdfx\streamdeck`

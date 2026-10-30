@@ -128,7 +128,7 @@ public:
             expectEquals ((int) decoder.bufferedBytes(), 0);
         }
 
-        beginTest ("all eleven commands, hello negotiation, ping and session-free requestState have typed values");
+        beginTest ("all thirteen commands, hello negotiation, ping and session-free requestState have typed values");
         {
             const std::string channel = "\"channelId\":\"11111111111141118111111111111111\"";
             const std::string fx = "\"fxId\":\"22222222222242228222222222222222\"";
@@ -139,7 +139,9 @@ public:
                 { "setPluginGroupOff", "{" + channel + ",\"index\":2,\"off\":true}" },
                 { "setPluginGroupOffEverywhere", "{\"index\":2,\"off\":true}" },
                 { "setSend", "{" + channel + "," + fx + ",\"amount\":0.38,\"pre\":false}" },
-                { "toggleFx", "{" + fx + "}" }, { "setFxOn", "{" + fx + ",\"on\":false}" }, { "requestState", "{}" }
+                { "toggleFx", "{" + fx + "}" }, { "setFxOn", "{" + fx + ",\"on\":false}" },
+                { "toggleMuteAll", "{\"group\":\"mic\"}" }, { "setMuteAll", "{\"group\":\"fx\",\"muted\":false}" },
+                { "requestState", "{}" }
             };
             for (size_t i = 0; i < std::size (commands); ++i)
             {
@@ -164,6 +166,8 @@ public:
                             expectEquals (a->fxId.toString(), juce::String ("22222222222242228222222222222222"));
                             expect (! a->on);
                         }
+                        if (const auto* a = std::get_if<P::ToggleMuteAll> (&c->args)) expect (a->group == P::MuteGroup::mic);
+                        if (const auto* a = std::get_if<P::SetMuteAll> (&c->args)) expect (a->group == P::MuteGroup::fx && ! a->muted);
                     }
                 }
             }
@@ -256,6 +260,48 @@ public:
             }
         }
 
+        beginTest ("all-mute commands require a mic/fx group, a boolean muted value and the edit-command envelope");
+        {
+            for (const auto* commandName : { "toggleMuteAll", "setMuteAll" })
+            {
+                auto request = juce::JSON::parse (command (commandName, "{\"group\":\"fx\",\"muted\":true}").c_str());
+                request.getDynamicObject()->setProperty ("ifRevision", (juce::int64) 7);
+                const auto validated = P::validate (request);
+                const auto* message = std::get_if<P::ClientMessage> (&validated);
+                expect (message != nullptr);
+                if (message != nullptr)
+                {
+                    const auto* c = std::get_if<P::Command> (message);
+                    expect (c != nullptr);
+                    if (c != nullptr)
+                    {
+                        expect (c->ifRevision == 7);
+                        if (const auto* a = std::get_if<P::ToggleMuteAll> (&c->args)) expect (a->group == P::MuteGroup::fx);
+                        if (const auto* a = std::get_if<P::SetMuteAll> (&c->args)) expect (a->group == P::MuteGroup::fx && a->muted);
+                    }
+                }
+                for (const auto* field : { "group", "instanceId", "sessionId" })
+                {
+                    auto bad = request.clone();
+                    auto object = juce::String (field) == "group" ? bad["args"] : bad;
+                    object.getDynamicObject()->removeProperty (field);
+                    invalid (bad);
+                }
+                for (const auto* value : { "null", "1", "true", "\"master\"" })
+                    invalid (juce::JSON::parse (command (commandName, "{\"group\":" + std::string (value) + ",\"muted\":true}").c_str()));
+            }
+            invalid (juce::JSON::parse (command ("setMuteAll", "{\"group\":\"mic\"}").c_str()));
+            for (const auto* value : { "null", "0", "1", "\"true\"" })
+                invalid (juce::JSON::parse (command ("setMuteAll", "{\"group\":\"mic\",\"muted\":" + std::string (value) + "}").c_str()));
+            const P::CommandArgs invalidArgs[] { P::ToggleMuteAll { (P::MuteGroup) 99 }, P::SetMuteAll { (P::MuteGroup) 99, true } };
+            for (const auto& args : invalidArgs)
+            {
+                const auto error = P::validateCommand ({ "2", juce::Uuid(), juce::Uuid(), {}, args });
+                expect (error.has_value());
+                if (error) expect (error->code == P::ErrorCode::invalidArgument);
+            }
+        }
+
         beginTest ("strict ids, enums, required fields, bools, indexes, numeric ranges and unknown direction/command");
         {
             for (const auto* id : { "", "0", "01", "-1", "1.0", "9007199254740992", "10000000000000000", "1a" }) expect (! P::isRequestId (id));
@@ -340,6 +386,42 @@ public:
             }
         }
 
+        beginTest ("all-mute snapshots always include both switches and deltas include only present switches");
+        {
+            P::Projection projection;
+            expect (! projection.allMicsMuted && ! projection.allFxMuted);
+            for (const bool muted : { false, true })
+            {
+                projection.allMicsMuted = muted; projection.allFxMuted = ! muted;
+                const auto state = P::toVar (projection);
+                expect (state["muteAll"]["mic"].isBool() && (bool) state["muteAll"]["mic"] == muted);
+                expect (state["muteAll"]["fx"].isBool() && (bool) state["muteAll"]["fx"] == ! muted);
+                for (const auto group : { P::MuteGroup::mic, P::MuteGroup::fx })
+                {
+                    P::Changes changes;
+                    expect (changes.empty()); expect (! P::toVar (changes).hasProperty ("muteAll"));
+                    if (group == P::MuteGroup::mic) changes.allMicsMuted = muted;
+                    else changes.allFxMuted = muted;
+                    expect (! changes.empty());
+                    const auto delta = P::toVar (changes);
+                    expectEquals (delta.getDynamicObject()->getProperties().size(), 1);
+                    const auto value = delta["muteAll"];
+                    expect (value.getDynamicObject() != nullptr);
+                    if (value.getDynamicObject() != nullptr) expectEquals (value.getDynamicObject()->getProperties().size(), 1);
+                    const auto* key = group == P::MuteGroup::mic ? "mic" : "fx";
+                    expect (value[key].isBool() && (bool) value[key] == muted);
+                    expect (! value.hasProperty (group == P::MuteGroup::mic ? "fx" : "mic"));
+                }
+            }
+            P::Changes changes;
+            changes.micMuted = true;
+            expect (! P::toVar (changes).hasProperty ("muteAll"));
+            changes.allMicsMuted = false; changes.allFxMuted = true;
+            const auto both = P::toVar (changes)["muteAll"];
+            expect (both["mic"].isBool() && ! (bool) both["mic"]);
+            expect (both["fx"].isBool() && (bool) both["fx"]);
+        }
+
         beginTest ("every server message and ack result encodes required fields, errors are stable and states are bounded");
         {
             const P::Context context { juce::Uuid(), juce::Uuid(), P::maxSafeInteger };
@@ -347,10 +429,11 @@ public:
             expectEquals (hello["type"].toString(), juce::String ("helloAck"));
             expectEquals (hello["server"]["version"].toString(), juce::String ("0.5.3"));
             expectEquals ((int) hello["v"], 1);
-            expectEquals (hello["capabilities"].size(), 7);
+            expectEquals (hello["capabilities"].size(), 8);
             expectEquals (hello["capabilities"][4].toString(), juce::String ("sends"));
             expectEquals (hello["capabilities"][5].toString(), juce::String ("pluginGroupsEverywhere"));
             expectEquals (hello["capabilities"][6].toString(), juce::String ("fxOn"));
+            expectEquals (hello["capabilities"][7].toString(), juce::String ("muteAll"));
             expectEquals ((int) hello["eventIntervalMs"], 100); expectEquals ((int) hello["heartbeatIntervalMs"], 5000);
             P::Projection projection;
             projection.session.name = juce::String::fromUTF8 ("곰 \"방송\"\n");
@@ -359,6 +442,8 @@ public:
                 const auto state = encoded (P::State { context, reason, "9", projection });
                 expectEquals (state["type"].toString(), juce::String ("state"));
                 expectEquals (state["state"]["session"]["name"].toString(), projection.session.name);
+                expect (state["state"]["muteAll"]["mic"].isBool() && ! (bool) state["state"]["muteAll"]["mic"]);
+                expect (state["state"]["muteAll"]["fx"].isBool() && ! (bool) state["state"]["muteAll"]["fx"]);
                 expect (state.hasProperty ("requestId") == (reason == P::StateReason::requested));
                 expectEquals ((juce::int64) state["revision"], P::maxSafeInteger);
             }
@@ -368,6 +453,7 @@ public:
             expectEquals (delta["changes"].getDynamicObject()->getProperties().size(), 0);
             expectEquals ((juce::int64) delta["baseRevision"], context.revision - 2);
             const P::CommandResult results[] { P::OnResult { true }, P::OnResult { false }, P::AllChannelsResult { false, 2 }, P::MuteGroupResult { P::MuteGroup::fx, true },
+                                              P::MuteGroupResult { P::MuteGroup::mic, false },
                                               P::PluginGroupResult { 2, true }, P::PluginGroupEverywhereResult { 2, true, 3 },
                                               P::SendResult { 0.38, false }, P::RequestStateResult { context.revision } };
             for (const auto& result : results)
@@ -382,6 +468,13 @@ public:
                     const auto& value = ack["result"];
                     expectEquals (value.getDynamicObject()->getProperties().size(), 1);
                     expect (value["on"].isBool() && (bool) value["on"] == r->on);
+                }
+                if (const auto* r = std::get_if<P::MuteGroupResult> (&result))
+                {
+                    const auto& value = ack["result"];
+                    expectEquals (value.getDynamicObject()->getProperties().size(), 2);
+                    expectEquals (value["group"].toString(), juce::String (r->group == P::MuteGroup::mic ? "mic" : "fx"));
+                    expect (value["muted"].isBool() && (bool) value["muted"] == r->muted);
                 }
                 if (const auto* r = std::get_if<P::PluginGroupEverywhereResult> (&result))
                 {

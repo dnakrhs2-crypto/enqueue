@@ -82,14 +82,14 @@ export class FxBinding {
   }
 }
 
-export type ActionKind = "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
+export type ActionKind = "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
 export type ActionSettings = Omit<MicSettings, "mode"> & {
   mode: "toggle" | "on" | "off" | "mute" | "unmute" | "up" | "down" | "set";
   fxId: string; fxName: string; groupIndex: number;
   stepPercent: 1 | 5 | 10; targetPercent: number; pressMode: "pre-post" | "none"; display: "connection" | "session" | "audio";
 };
 export function actionSettings(kind: ActionKind, value: unknown): { settings: ActionSettings; valid: boolean; changed: boolean } {
-  const o = isObject(value) ? value : {}, mute = kind.endsWith("mute-group"), sendStep = kind === "fx-send-step";
+  const o = isObject(value) ? value : {}, mute = kind.endsWith("mute-group") || kind.endsWith("mute-all"), sendStep = kind === "fx-send-step";
   const modes = sendStep ? ["up", "down", "set"] : mute ? ["toggle", "mute", "unmute"] : ["toggle", "on", "off"];
   const steps = sendStep ? [1, 5, 10] : [1, 5];
   const validTarget = typeof o.targetPercent === "number" && Number.isInteger(o.targetPercent) && o.targetPercent >= 0 && o.targetPercent <= 100;

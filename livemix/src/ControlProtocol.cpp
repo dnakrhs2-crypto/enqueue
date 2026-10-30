@@ -396,6 +396,16 @@ ControlProtocol::ValidationResult ControlProtocol::validate (const juce::var& v)
             c.args = SetMuteGroup { readGroup (a["group"]), (bool) a["muted"] };
         }
     }
+    else if (name == "toggleMuteAll" || name == "setMuteAll")
+    {
+        if (! group (a["group"])) return fail (Code::invalidArgument);
+        if (name == "toggleMuteAll") c.args = ToggleMuteAll { readGroup (a["group"]) };
+        else
+        {
+            if (! a["muted"].isBool()) return fail (Code::invalidArgument);
+            c.args = SetMuteAll { readGroup (a["group"]), (bool) a["muted"] };
+        }
+    }
     else if (name != "requestState") return fail (Code::unknownCommand);
     if (const auto error = validateCommand (c)) return *error;
     return ClientMessage { std::move (c) };
@@ -416,7 +426,8 @@ std::optional<ControlProtocol::Error> ControlProtocol::validateCommand (const Co
         else if constexpr (std::is_same_v<T, SetPluginGroupOffEverywhere>) return a.index >= 1 && a.index <= 5;
         else if constexpr (std::is_same_v<T, SetSend>) return ! a.channelId.isNull() && ! a.fxId.isNull()
             && (a.amount || a.pre) && (! a.amount || amount (*a.amount));
-        else if constexpr (std::is_same_v<T, SetMuteGroup> || std::is_same_v<T, ToggleMuteGroup>) return group (a.group);
+        else if constexpr (std::is_same_v<T, SetMuteGroup> || std::is_same_v<T, ToggleMuteGroup>
+                           || std::is_same_v<T, SetMuteAll> || std::is_same_v<T, ToggleMuteAll>) return group (a.group);
         else return true;
     }, c.args);
     if (! valid) return Error { Code::invalidArgument, isRequestId (c.id) ? c.id : juce::String() };
@@ -467,15 +478,17 @@ bool ControlProtocol::ChannelChanges::empty() const { return ! name && ! on && !
 bool ControlProtocol::FxChanges::empty() const { return ! name && ! muteGroup && ! returnAmount && ! on; }
 bool ControlProtocol::Changes::empty() const
 {
-    return ! sessionName && ! sessionDirty && ! audioRunning && ! micMuted && ! fxMuted && channels.empty() && fx.empty();
+    return ! sessionName && ! sessionDirty && ! audioRunning && ! micMuted && ! fxMuted
+        && ! allMicsMuted && ! allFxMuted && channels.empty() && fx.empty();
 }
 
 juce::var ControlProtocol::toVar (const Projection& p)
 {
-    auto v = object(), session = object(), audio = object(), muted = object();
+    auto v = object(), session = object(), audio = object(), muted = object(), allMuted = object();
     put (session, "name", p.session.name); put (session, "dirty", p.session.dirty);
     put (audio, "running", p.audioRunning); put (muted, "mic", p.micMuted); put (muted, "fx", p.fxMuted);
     put (v, "session", session); put (v, "audio", audio); put (v, "muteGroups", muted);
+    put (allMuted, "mic", p.allMicsMuted); put (allMuted, "fx", p.allFxMuted); put (v, "muteAll", allMuted);
     juce::Array<juce::var> channels, fx;
     for (const auto& c : p.channels)
     {
@@ -507,6 +520,10 @@ juce::var ControlProtocol::toVar (const Changes& p)
     if (p.micMuted || p.fxMuted)
     {
         auto m = object(); putOptional (m, "mic", p.micMuted); putOptional (m, "fx", p.fxMuted); put (v, "muteGroups", m);
+    }
+    if (p.allMicsMuted || p.allFxMuted)
+    {
+        auto m = object(); putOptional (m, "mic", p.allMicsMuted); putOptional (m, "fx", p.allFxMuted); put (v, "muteAll", m);
     }
     if (! p.channels.empty())
     {
@@ -549,7 +566,7 @@ ControlProtocol::EncodeResult ControlProtocol::encode (const ServerMessage& mess
             put (v, "type", "helloAck"); put (v, "id", m.id); put (v, "instanceId", m.instanceId.toString());
             auto server = object(); put (server, "name", "LiveMix"); put (server, "version", m.serverVersion); put (v, "server", server);
             juce::Array<juce::var> capabilities;
-            for (const auto* name : { "stateDelta", "mic", "muteGroups", "pluginGroups", "sends", "pluginGroupsEverywhere", "fxOn" }) capabilities.add (name);
+            for (const auto* name : { "stateDelta", "mic", "muteGroups", "pluginGroups", "sends", "pluginGroupsEverywhere", "fxOn", "muteAll" }) capabilities.add (name);
             put (v, "capabilities", capabilities); put (v, "eventIntervalMs", 100); put (v, "heartbeatIntervalMs", 5000);
         }
         else if constexpr (std::is_same_v<T, State>)

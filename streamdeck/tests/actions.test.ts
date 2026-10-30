@@ -214,7 +214,7 @@ test("no microphones, offline and invalid settings never send commands; explicit
 
 test("each new action PI gets live channels/FX/slots/counts; offline options preserve saved selections", async t => {
   const { server, host, settings } = await setupActions(t, "en");
-  for (const kind of ["fx", "all-mics", "mic-mute-group", "fx-mute-group", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"]) {
+  for (const kind of ["fx", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"]) {
     if (kind === "fx-send") host.appearDial(kind, settings); else host.appear(kind, { ...settings, ...(kind === "fx-send-step" ? { mode: "up" } : {}) }, 0, kind);
     const { pi, request } = await options(host, kind);
     await until(host, "pi", () => pi.messages.at(-1)?.payload.connection === "ready");

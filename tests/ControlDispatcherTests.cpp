@@ -331,6 +331,82 @@ public:
             expect (f.callbacksOnMessageThread);
         }
 
+        beginTest ("all-mute toggle/set reaches every unmarked mic and FX with one announcement and value revision");
+        for (const auto group : { P::MuteGroup::mic, P::MuteGroup::fx })
+        {
+            Fixture f;
+            f.document.addChannel(); f.document.addFx(); f.clean();
+            expectEquals ((int) f.document.getSession().channels.size(), 2);
+            expectEquals ((int) f.document.getSession().fx.size(), 2);
+            for (const auto& c : f.document.getSession().channels) expect (! c.muteGroup);
+            for (const auto& fx : f.document.getSession().fx) expect (! fx.muteGroup);
+            const auto g = group == P::MuteGroup::mic ? MuteGroups::Group::mic : MuteGroups::Group::fx;
+            const auto before = f.state.getCurrent();
+            const auto muted = ack (f, P::ToggleMuteAll { group });
+            expect (muted.changed && result<P::MuteGroupResult> (muted).muted);
+            expect (result<P::MuteGroupResult> (muted).group == group);
+            expect (f.groups.isAllMuted (g));
+            expect (f.engine.areAllChannelsMuted() == (group == P::MuteGroup::mic));
+            expect (f.engine.areAllFxMuted() == (group == P::MuteGroup::fx));
+            expect (! f.groups.isMuted (MuteGroups::Group::mic) && ! f.groups.isMuted (MuteGroups::Group::fx));
+            expectEquals (f.groupCalls, 1); expectEquals (f.valueCalls, 0); expectEquals (f.structureCalls, 0);
+            expectEquals (muted.context.revision, before.revision + 1);
+            expectEquals (f.state.getCurrent().structureRevision, before.structureRevision);
+
+            const auto same = ack (f, P::SetMuteAll { group, true });
+            expect (! same.changed && result<P::MuteGroupResult> (same).muted);
+            expect (result<P::MuteGroupResult> (same).group == group);
+            expectEquals (same.context.revision, muted.context.revision); expectEquals (f.groupCalls, 1);
+            const P::CommandArgs staleArgs[] { P::ToggleMuteAll { group }, P::SetMuteAll { group, false } };
+            for (const auto& args : staleArgs)
+            {
+                auto stale = f.command (args); stale.ifRevision = before.revision;
+                error (f, stale, P::ErrorCode::revisionConflict);
+            }
+
+            const auto released = ack (f, P::SetMuteAll { group, false });
+            expect (released.changed && ! result<P::MuteGroupResult> (released).muted);
+            expect (result<P::MuteGroupResult> (released).group == group);
+            expect (! f.groups.isAllMuted (g));
+            expect (! f.engine.areAllChannelsMuted() && ! f.engine.areAllFxMuted());
+            expectEquals (released.context.revision, before.revision + 2);
+            expectEquals (f.state.getCurrent().structureRevision, before.structureRevision);
+            expectEquals (f.groupCalls, 2); expectEquals (f.valueCalls, 0); expectEquals (f.structureCalls, 0);
+            expect (f.state.getCurrent().projection == before.projection);
+            expect (! f.document.isDirty()); expect (f.callbacksOnMessageThread);
+        }
+
+        beginTest ("FX all-mute and the marked mute group remain independent when both are active");
+        {
+            Fixture f;
+            f.document.addChannel(); f.document.addFx();
+            f.document.setFxMuteGroup (f.fx(), true);
+            expect (ack (f, P::SetMuteGroup { P::MuteGroup::fx, true }).changed);
+            f.clean();
+            for (const bool muted : { true, false })
+            {
+                const auto toggled = ack (f, P::ToggleMuteAll { P::MuteGroup::fx });
+                expect (toggled.changed && result<P::MuteGroupResult> (toggled).muted == muted);
+                expect (f.groups.isAllMuted (MuteGroups::Group::fx) == muted);
+                expect (f.engine.areAllFxMuted() == muted);
+                expect (f.groups.isMuted (MuteGroups::Group::fx));
+            }
+            expectEquals (f.groupCalls, 2);
+            expect (ack (f, P::ToggleMuteGroup { P::MuteGroup::fx }).changed);
+            expect (! f.groups.isMuted (MuteGroups::Group::fx));
+            expect (! f.groups.isAllMuted (MuteGroups::Group::fx) && ! f.engine.areAllFxMuted());
+            expect (ack (f, P::SetMuteAll { P::MuteGroup::fx, true }).changed);
+            expect (! f.groups.isMuted (MuteGroups::Group::fx));
+            expect (ack (f, P::ToggleMuteGroup { P::MuteGroup::fx }).changed);
+            expect (f.groups.isMuted (MuteGroups::Group::fx));
+            expect (f.groups.isAllMuted (MuteGroups::Group::fx) && f.engine.areAllFxMuted());
+            expect (ack (f, P::SetMuteGroup { P::MuteGroup::fx, false }).changed);
+            expect (! f.groups.isMuted (MuteGroups::Group::fx));
+            expect (f.groups.isAllMuted (MuteGroups::Group::fx) && f.engine.areAllFxMuted());
+            expect (f.document.getSession().fx[0].muteGroup && ! f.document.getSession().fx[1].muteGroup);
+            expectEquals (f.valueCalls, 0); expectEquals (f.structureCalls, 0); expect (! f.document.isDirty());
+        }
+
         beginTest ("plugin groups convert 1-based indexes and preserve overlapping bypass semantics in the engine");
         {
             Fixture f;
@@ -411,6 +487,7 @@ public:
             const auto revision = f.state.getCurrent().revision;
             const P::CommandArgs commands[] { P::SetChannelOn { f.channel(), true }, P::SetAllChannelsOn { true },
                 P::SetMuteGroup { P::MuteGroup::mic, false }, P::SetMuteGroup { P::MuteGroup::fx, false },
+                P::SetMuteAll { P::MuteGroup::mic, false }, P::SetMuteAll { P::MuteGroup::fx, false },
                 P::SetPluginGroupOff { f.channel(), 1, false }, P::SetPluginGroupOffEverywhere { 1, false },
                 P::SetSend { f.channel(), f.fx(), 0.0, {} },
                 P::SetSend { f.channel(), f.fx(), {}, false }, P::SetFxOn { f.fx(), true }, P::RequestState {} };
@@ -447,6 +524,8 @@ public:
             error (f, f.command (P::ToggleFx { juce::Uuid::null() }), P::ErrorCode::invalidArgument);
             error (f, f.command (P::SetFxOn { juce::Uuid::null(), false }), P::ErrorCode::invalidArgument);
             error (f, f.command (P::SetMuteGroup { (P::MuteGroup) 99, true }), P::ErrorCode::invalidArgument);
+            error (f, f.command (P::ToggleMuteAll { (P::MuteGroup) 99 }), P::ErrorCode::invalidArgument);
+            error (f, f.command (P::SetMuteAll { (P::MuteGroup) 99, true }), P::ErrorCode::invalidArgument);
             auto c = f.command (P::ToggleChannel { f.channel() }); c.instanceId = juce::Uuid();
             error (f, c, P::ErrorCode::instanceChanged);
             c = f.command (P::ToggleChannel { f.channel() }); c.sessionId = juce::Uuid();

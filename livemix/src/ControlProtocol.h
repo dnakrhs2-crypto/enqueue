@@ -52,9 +52,12 @@ public:
     struct SetSend { juce::Uuid channelId, fxId; std::optional<double> amount; std::optional<bool> pre; };
     struct ToggleFx { juce::Uuid fxId; };
     struct SetFxOn { juce::Uuid fxId; bool on = false; };
+    struct ToggleMuteAll { MuteGroup group = MuteGroup::mic; };
+    struct SetMuteAll { MuteGroup group = MuteGroup::mic; bool muted = false; };
     struct RequestState {};
     using CommandArgs = std::variant<SetChannelOn, ToggleChannel, SetAllChannelsOn, ToggleMuteGroup,
-                                     SetMuteGroup, SetPluginGroupOff, SetPluginGroupOffEverywhere, SetSend, ToggleFx, SetFxOn, RequestState>;
+                                     SetMuteGroup, SetPluginGroupOff, SetPluginGroupOffEverywhere, SetSend, ToggleFx, SetFxOn,
+                                     ToggleMuteAll, SetMuteAll, RequestState>;
     struct Command
     {
         juce::String id;
@@ -146,10 +149,12 @@ public:
         std::vector<Channel> channels;
         std::vector<Fx> fx;
         bool micMuted = false, fxMuted = false;
+        // Additive v1 field: older clients may ignore muteAll; absent on older servers means both false.
+        bool allMicsMuted = false, allFxMuted = false;
         bool operator== (const Projection& o) const
         {
-            return std::tie (session, audioRunning, channels, fx, micMuted, fxMuted)
-                == std::tie (o.session, o.audioRunning, o.channels, o.fx, o.micMuted, o.fxMuted);
+            return std::tie (session, audioRunning, channels, fx, micMuted, fxMuted, allMicsMuted, allFxMuted)
+                == std::tie (o.session, o.audioRunning, o.channels, o.fx, o.micMuted, o.fxMuted, o.allMicsMuted, o.allFxMuted);
         }
     };
     struct ChannelChanges
@@ -175,6 +180,7 @@ public:
     {
         std::optional<juce::String> sessionName;
         std::optional<bool> sessionDirty, audioRunning, micMuted, fxMuted;
+        std::optional<bool> allMicsMuted, allFxMuted;
         std::vector<ChannelChanges> channels;
         std::vector<FxChanges> fx;
         bool empty() const;

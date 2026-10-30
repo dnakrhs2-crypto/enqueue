@@ -22,9 +22,20 @@ LiveMix 0.16.0 adds the boolean `fx[].on` field (initially `true`) and the
 include them. Older projections omit `on`; the plugin defaults it to `true`
 but rejects a present non-boolean value. Deltas omit unchanged fields.
 
+LiveMix 0.18.0 adds `muteAll: { mic: false, fx: false }` to the initial
+projection and the `muteAll` helloAck capability after `fxOn`. Older snapshots
+omit the object; the plugin fills absent mic/FX keys with false. A present
+non-object or non-boolean key is invalid. Deltas carry only changed keys and
+merge independently of `muteGroups`.
+
 The fake server loads these files, substitutes the live port/instance/token and
 current document values, and sends the same envelopes. It implements hello,
-ping, requestState and the mic, FX, mute-group, plugin-group and send commands.
+ping, requestState and the mic, FX, mute-group, mute-all, plugin-group and send commands.
 `fxOn:false` omits that capability; `legacyFx:true` also omits FX `on` fields
 and defaults `fxOn` to false, serving a LiveMix 0.15.5-shaped snapshot.
 `pluginGroupsEverywhere:false` independently omits that capability.
+`muteAll:false` independently omits the new capability. `legacyMuteAll:true`
+also omits the projection object and defaults the capability to false, serving
+a LiveMix 0.17.7-shaped snapshot. `legacyFx:true` defaults `legacyMuteAll` to true.
+`toggleMuteAll` / `setMuteAll` return `{ group, muted }`, preserve mute groups,
+and use the normal revision/delta path; identical sets return `changed:false`.

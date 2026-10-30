@@ -86,6 +86,17 @@ ControlDispatcher::Result ControlDispatcher::dispatch (const ControlProtocol::Co
                 }
                 return P::CommandResult { P::MuteGroupResult { a.group, groups.isMuted (group) } };
             }
+            else if constexpr (std::is_same_v<T, P::SetMuteAll> || std::is_same_v<T, P::ToggleMuteAll>)
+            {
+                const auto group = a.group == P::MuteGroup::mic ? MuteGroups::Group::mic : MuteGroups::Group::fx;
+                bool muted;
+                if constexpr (std::is_same_v<T, P::SetMuteAll>) muted = a.muted;
+                else muted = ! groups.isAllMuted (group);
+                changed = groups.isAllMuted (group) != muted;
+                if (! canAdvance()) return Code::internalError;
+                if (changed) groups.setAll (group, muted);
+                return P::CommandResult { P::MuteGroupResult { a.group, muted } };
+            }
             else if constexpr (std::is_same_v<T, P::ToggleFx> || std::is_same_v<T, P::SetFxOn>)
             {
                 const auto* fx = session.findFx (a.fxId);

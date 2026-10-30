@@ -37,6 +37,8 @@ function states(id, size) {
       mixed: actionSvg("mixed", en, 2, 3, false, "mic", size) };
     case "mic-mute-group":
     case "fx-mute-group": return Object.fromEntries([["off", "group-clear"], ["on", "group-muted"]].map(([name, state]) => [name, actionSvg(state, en, 2, 0, false, id.startsWith("fx") ? "fx" : "mic", size)]));
+    case "mic-mute-all":
+    case "fx-mute-all": return Object.fromEntries([["off", "mute-every-clear"], ["on", "mute-every-muted"]].map(([name, state]) => [name, actionSvg(state, en, 2, 0, false, id.startsWith("fx") ? "fx" : "mic", size)]));
     case "plugin-group": return Object.fromEntries([["off", "plugin-off"], ["on", "plugin-on"]].flatMap(([name, state]) => [
       [name, actionSvg(state, en, 1, 0, false, "mic", size)],
       ...[1, 2, 3, 4, 5].map(index => ["group-" + index + "-" + name, actionSvg(state, en, index, 0, false, "mic", size)])
@@ -81,7 +83,7 @@ for (const [language, strings] of Object.entries(locales)) await write(resolve(p
 const manifest = JSON.parse(await readFile(resolve(plugin, "manifest.json"), "utf8"));
 const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 manifest.Version = pkg.version + ".0";
-manifest.Description = "Control LiveMix microphones, FX channels, mute groups, plugin groups and FX sends on this Windows PC.";
+manifest.Description = "Control LiveMix microphones, FX channels, mute groups, mute-all, plugin groups and FX sends on this Windows PC.";
 manifest.Actions = actions.map(a => ({ UUID: `com.gomtwigim.livemix.${a.id}`, Name: locales.en[a.name], Tooltip: locales.en[a.tooltip],
   Icon: `imgs/actions/${a.id}/icon`, PropertyInspectorPath: "ui/inspector.html", Controllers: [a.id === "fx-send" ? "Encoder" : "Keypad"],
   DisableAutomaticStates: true, DisableCaching: true, UserTitleEnabled: false, SupportedInMultiActions: a.id !== "fx-send", SupportedInKeyLogicActions: false,
