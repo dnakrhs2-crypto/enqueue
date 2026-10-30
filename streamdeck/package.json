@@ -5,7 +5,7 @@
   "type": "module",
   "engines": { "node": ">=24.13.0" },
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "typecheck": "node tools/generate-assets.mjs && tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "build": "node tools/generate-assets.mjs && rollup -c",
     "media": "node tools/generate-marketplace.mjs",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test --test-concurrency=1 .test-build/tests/*.test.js",
