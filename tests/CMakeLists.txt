@@ -138,7 +138,6 @@ target_sources(EnqueueTests PRIVATE
     LiveMixTrackOnOffTests.cpp
     LiveMixMuteButtonTests.cpp
     LiveMixNameFitTests.cpp
-    LiveMixDesignAuditShots.cpp
     ControlProtocolTests.cpp
     ControlDispatcherTests.cpp
     ControlStateTests.cpp
