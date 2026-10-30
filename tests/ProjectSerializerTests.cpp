@@ -160,10 +160,10 @@ public:
             expectEquals (warnings.size(), 1);
         }
 
-        beginTest ("a file from before the fade-out time keeps F on the cue's own stop fade (0); a new project starts at 1 s");
+        beginTest ("a file from before the fade-out time keeps F on the cue's own stop fade (0); a new project starts at 2 s");
         {
             Project fresh;
-            expectWithinAbsoluteError (fresh.settings.fadeOutSeconds, 1.0, 1e-9);
+            expectWithinAbsoluteError (fresh.settings.fadeOutSeconds, 2.0, 1e-9);
 
             Project p;
             auto json = ProjectSerializer::toJson (p);

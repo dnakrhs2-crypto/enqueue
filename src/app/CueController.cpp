@@ -2133,13 +2133,16 @@ bool CueController::fadeOutTarget()
     if (id.isNull())
         return false;
 
-    // 페이드아웃 (F): over the project's fade-out time, or (0) the cue's own stop fade
-    const double seconds = document.settings.fadeOutSeconds;
+    // 페이드아웃 (F): over the project's fade-out time, or (0) the cue's own stop fade - and a cue without one fades over
+    // the new-project default instead of stopping in the 5 ms de-click: a file from before 0.10.4 opens with 0 and a
+    // stop fade is 0 until someone sets it, so F and the phone's 페이드아웃 cut such a cue at once (2026-10-30 report)
+    const auto* cue = document.findCueAnywhere (id);
+    const bool ownStopFade = document.settings.fadeOutSeconds <= 0.0 && cue != nullptr && cue->fadeOutMs > 0;
+    const double seconds = ownStopFade ? 0.0
+                         : document.settings.fadeOutSeconds > 0.0 ? document.settings.fadeOutSeconds
+                         : WorkspaceSettings::defaultFadeOutSeconds;
 
-    if (seconds > 0.0)
-        engine.fadeOutAndStop (id, (int) std::lround (seconds * 1000.0));
-    else
-        engine.fadeOutAndStop (id);
+    engine.fadeOutAndStop (id, ownStopFade ? cue->fadeOutMs : (int) std::lround (seconds * 1000.0));
 
     if (const int index = document.cues.indexOf (id); index >= 0)
         status (ko ("페이드아웃") + (seconds > 0.0 ? " (" + WorkspaceSettings::secondsText (seconds) + ko ("초)") : juce::String()) + ": " + cueLabel (index, document.cues.get (index)));

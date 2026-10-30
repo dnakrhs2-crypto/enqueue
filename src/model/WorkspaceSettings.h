@@ -21,7 +21,7 @@ struct WorkspaceSettings
     bool requireKeyUp = false;             // the GO key must be released before it fires again
     bool doubleGoHotkeys = true;           // the GO window also refuses the same cue's hotkey / cart click inside it
     double panicSeconds = 1.0;             // Esc: fade everything out over this, then stop
-    double fadeOutSeconds = 1.0;           // F: the target cue fades out over this; 0 = the cue's own stop fade (fadeOutMs)
+    double fadeOutSeconds = defaultFadeOutSeconds;   // F: the target cue fades out over this; 0 = the cue's own stop fade (fadeOutMs)
     bool autoNumber = true;
     double numberIncrement = 1.0;
     bool autoLoadNewCues = false;
@@ -52,6 +52,7 @@ struct WorkspaceSettings
 
     static constexpr double maxPanicSeconds = 600.0;
     static constexpr double maxFadeOutSeconds = maxPanicSeconds;   // F: the same range as the panic time
+    static constexpr double defaultFadeOutSeconds = 2.0;           // F in a new project, and for a cue without a stop fade under 0 (gom 2026-10-30: 2 s)
     static constexpr double maxDoubleGoSeconds = 60.0;
 
     /** A fade time is kept on a 0.01 s grid, so that its text (two decimals) reads back as exactly the value that is set. */
@@ -83,7 +84,7 @@ struct WorkspaceSettings
 
         fix (doubleGoSeconds, 0.0, maxDoubleGoSeconds, 0.0);
         fix (panicSeconds, 0.0, maxPanicSeconds, 1.0);
-        fix (fadeOutSeconds, 0.0, maxFadeOutSeconds, 1.0);
+        fix (fadeOutSeconds, 0.0, maxFadeOutSeconds, defaultFadeOutSeconds);
 
         // a fade time sits on the 0.01 s grid, and a positive one stays positive (at least 0.01 s): shown with two decimals
         // it must read back as exactly what is set, and never as 0 (= 즉시 정지 / 큐별)

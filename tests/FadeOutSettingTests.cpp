@@ -112,10 +112,36 @@ public:
             render (engine, scheduler, now, out, 2);
         }
 
-        beginTest ("the setting is clamped and defaults to one second");
+        beginTest ("fade-out time 0 and no stop fade on the cue: F still fades over the default two seconds, not a 5 ms cut");
+        {
+            // every project file from before 0.10.4 opens with 0 (큐별), and a cue's stop fade is 0 until someone sets it:
+            // the phone's 페이드아웃 and F cut such a cue at once (2026-10-30 user report)
+            auto settings = document.settings;
+            settings.fadeOutSeconds = 0.0;
+            document.setSettings (settings);
+            Cue b;
+            b.name = "b"; b.file = tone;   // fadeOutMs = 0: nobody set a stop fade
+            document.cues.add (b);
+            const int bIndex = document.cues.indexOf (b.id);
+            document.cues.setPlayheadIndex (bIndex);
+            document.cues.setSelectedIndex (bIndex);
+            expect (controller.go() == CueController::GoResult::started);
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 20);
+            expect (controller.fadeOutTarget());
+            render (engine, scheduler, now, out, 150);  // 1.74 s into the fade: still there (a 5 ms de-click would be long over)
+            expect (engine.isPlaying (b.id), "F cut a cue without a stop fade instead of fading it out");
+            render (engine, scheduler, now, out, 30);   // 2.09 s: over
+            expect (! engine.isPlaying (b.id), "the fade-out did not end after the default two seconds");
+            controller.hardStopAll();
+            render (engine, scheduler, now, out, 2);
+            document.cues.setSelectedIndex (0);
+        }
+
+        beginTest ("the setting is clamped and defaults to two seconds");
         {
             WorkspaceSettings s;
-            expectWithinAbsoluteError (s.fadeOutSeconds, 1.0, 1.0e-9);
+            expectWithinAbsoluteError (s.fadeOutSeconds, 2.0, 1.0e-9);
             s.fadeOutSeconds = -3.0;
             s.sanitise();
             expectWithinAbsoluteError (s.fadeOutSeconds, 0.0, 1.0e-9);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Cue.h"
+#include "model/WorkspaceSettings.h"
 #include "app/ShortcutService.h"
 
 #include "ui/GainControl.h"
@@ -100,7 +101,7 @@ private:
     GoButton goButton { "GO" };
     GearButton panicSettingsButton;
     double panicSeconds = 1.0;
-    double fadeOutSeconds = 1.0;
+    double fadeOutSeconds = WorkspaceSettings::defaultFadeOutSeconds;
     TransportButton pauseButton { TransportButton::Icon::pause }, fadeOutButton { TransportButton::Icon::fade }, panicButton { TransportButton::Icon::stop };
     juce::Label standbyTitle, cueNumber, cueName, cueFile, playingLabel, statusLabel, contextLabel;
     MetaLabel cueMeta;

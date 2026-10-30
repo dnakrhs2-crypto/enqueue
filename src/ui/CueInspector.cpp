@@ -180,7 +180,7 @@ public:
         styleNumberEditor (postEditor, "0123456789:.", 12);
         textEditor (fadeOutEditor, [this] { commitStopFade(); });
         styleNumberEditor (fadeOutEditor, "0123456789", 7);
-        fadeOutEditor.setTooltip (ko ("F(페이드아웃 정지)에 걸리는 시간. 0이면 5 ms 디클릭만"));
+        fadeOutEditor.setTooltip (ko ("페이드아웃 시간이 '큐별'일 때 F(페이드아웃 정지)에 걸리는 시간. 0이면 2초"));
 
         fillColourCombo (colourCombo);
         colourCombo.setWantsKeyboardFocus (false);
@@ -453,8 +453,8 @@ public:
         hotkeyConflict.setText (conflict, juce::dontSendNotification);
         hotkeyConflict.setTooltip (conflict);
         resized();
-        fadeOutEditor.setTooltip (ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected)
-                                 + ko (" (페이드아웃 정지)에 걸리는 시간. 0이면 5 ms 디클릭만"));
+        fadeOutEditor.setTooltip (ko ("페이드아웃 시간이 '큐별'일 때 ") + ShortcutDisplay::currentKeys (shortcuts, CommandIDs::fadeOutSelected)
+                                 + ko (" (페이드아웃 정지)에 걸리는 시간. 0이면 2초"));
         flagToggle.setToggleState (cue->flagged, juce::dontSendNotification);
         armedToggle.setToggleState (! cue->armed, juce::dontSendNotification);
         autoLoadToggle.setToggleState (cue->autoLoad, juce::dontSendNotification);
