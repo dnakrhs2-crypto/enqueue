@@ -57,6 +57,8 @@ public:
         double filePositionSeconds = 0.0;   // audible position inside the file (waveform playhead)
         int passIndex = 0;                  // 0-based loop pass
         bool fadingOut = false;
+        double fadeOutProgress = -1.0;      // 0..1 through a stop fade under way (페이드아웃, ×, 전체 페이드 정지); -1 = none
+        double fadeOutRemainingSeconds = 0.0;
         bool paused = false;
         bool loaded = false;                // prepared but not started yet (QLab "loaded")
         bool audition = false;              // started by an audition GO / preview

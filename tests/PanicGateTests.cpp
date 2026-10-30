@@ -402,6 +402,8 @@ public:
             expectGreaterThan (out.getSample (0, 0), 0.45f);                             // the fade starts from the ringing level
             expectLessThan (out.getSample (0, blockSize - 1), out.getSample (0, 0));     // and goes down inside the block
             expectGreaterThan (out.getSample (0, blockSize - 1), 0.3f);                  // not cut
+            const double startProgress = engine.getPlayingCues().front().fadeOutProgress;   // the web's 전체 페이드 정지 bar
+            expect (startProgress >= 0.0 && startProgress < 0.2, "panic progress at the start of a tail fade: " + juce::String (startProgress));
 
             const int fadeBlocks = (int) std::ceil (0.2 * sampleRate / blockSize);
 
@@ -410,6 +412,8 @@ public:
 
             expectEquals (engine.getNumPlaying(), 1);   // still fading halfway through
             expectGreaterThan (out.getMagnitude (0, 0, blockSize), 0.1f);
+            const double halfProgress = engine.getPlayingCues().front().fadeOutProgress;
+            expect (halfProgress > startProgress + 0.3, "panic progress stands still through a ringing tail: " + juce::String (halfProgress));
 
             for (int i = 0; i < fadeBlocks; ++i)
             {

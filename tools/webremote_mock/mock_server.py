@@ -148,9 +148,18 @@ class Model:
         self.seq += 1
         next_cue = self.find(self.playhead.get(self.active))
         fields = ("id", "no", "name", "remain", "elapsed", "dur", "progress", "st", "order")
+
+        def playing(item):
+            value = {key: item[key] for key in fields}
+            if item["st"] == "fade" and "fade_left" in item:   # a stop fade under way: the 페이드아웃 bar (app 0.17.5)
+                value.update(fade=max(0.0, min(1.0, 1 - item["fade_left"] / 1.5)), fadeLeft=max(0.0, item["fade_left"]))
+            for key in ("fade", "fadeLeft"):                   # fixture-injected values win
+                if key in item:
+                    value[key] = item[key]
+            return value
         return dict(t="state", seq=self.seq, mode=self.mode, now=now_ms(),
                     next={key: next_cue[key] for key in ("id", "no", "name", "len")} if next_cue else None,
-                    playing=[{key: item[key] for key in fields} for item in self.playing], waits=self.waits,
+                    playing=[playing(item) for item in self.playing], waits=self.waits,
                     counts=dict(playing=len(self.playing),
                                 paused=sum(item["st"] == "pause" for item in self.playing), waiting=len(self.waits)),
                     panic=self.panic, goLocked=self.go_locked)

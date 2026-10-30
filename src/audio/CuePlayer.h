@@ -184,6 +184,20 @@ public:
     /** A live edit published a seek that the audio thread has not consumed yet. */
     bool hasPendingLiveEdit() const noexcept      { return pendingVirtualPosition.load (std::memory_order_relaxed) >= 0.0; }
     bool isFadingOut() const noexcept             { return fadingOut.load (std::memory_order_relaxed); }
+    /** A stop fade under way (페이드아웃, ×, 전체 페이드 정지): 0..1 through it, -1 when there is none. Any thread. */
+    double getFadeOutFraction() const noexcept
+    {
+        if (! isFadingOut())
+            return -1.0;
+
+        const int total = fadeOutTotalSamples.load (std::memory_order_relaxed);
+        return total > 0 ? juce::jlimit (0.0, 1.0, 1.0 - (double) fadeOutLeftSamples.load (std::memory_order_relaxed) / total) : 1.0;
+    }
+    /** Seconds left of that stop fade (0 when there is none). Any thread. */
+    double getFadeOutRemainingSeconds() const noexcept
+    {
+        return isFadingOut() && currentSampleRate > 0.0 ? fadeOutLeftSamples.load (std::memory_order_relaxed) / currentSampleRate : 0.0;
+    }
     bool isPaused() const noexcept                { return pausedFlag.load (std::memory_order_relaxed); }
     /** A stop / fade-out has been requested (the instance is on its way out). */
     bool isStopPending() const noexcept           { return stopRequested.load (std::memory_order_relaxed) || hardStopRequested.load (std::memory_order_relaxed) || pendingFadeOutMs.load (std::memory_order_relaxed) >= 0; }
@@ -274,6 +288,8 @@ private:
     std::atomic<bool> finished { false };
     std::atomic<bool> endedNaturally { false };   // finished because the stream ended (a live edit that adds material undoes it)
     std::atomic<bool> fadingOut { false };
+    std::atomic<int> fadeOutTotalSamples { 0 };   // the stop fade's length and what is left of it: published by the audio thread
+    std::atomic<int> fadeOutLeftSamples { 0 };    // for the remote's 페이드아웃 progress (the envelope itself is audio-thread only)
     std::atomic<bool> pauseRequested { false };
     std::atomic<bool> resumeRequested { false };
     std::atomic<bool> pausedFlag { false };

@@ -71,6 +71,20 @@ button:active:not(:disabled) { filter: brightness(.88); }
 .command.pause .icon { color: var(--yellow); }
 .command.fade { border-color: var(--orange); }
 .command.fade .icon { color: var(--orange); }
+/* A running fade-out fills its button from the left (deep tint, bright edge below): 페이드아웃 green, 전체 페이드 정지 red;
+   a paused cue lights 일시정지. */
+.command.pause, .command.fade, .command.panic { position: relative; overflow: hidden; isolation: isolate; }
+.command.fade { --progress-fill: var(--green-row); --progress-edge: var(--green); }
+.command.panic { --progress-fill: #552629; --progress-edge: var(--red); }
+.command.fade::before, .command.fade::after, .command.panic::before, .command.panic::after { content: ""; position: absolute; left: 0; right: 0; transform-origin: left; transform: scaleX(var(--fade-progress, 0)); opacity: 0; pointer-events: none; }
+.command.fade::before, .command.panic::before { top: 0; bottom: 0; z-index: -1; background: var(--progress-fill); }
+.command.fade::after, .command.panic::after { bottom: 0; z-index: -1; height: 4px; background: var(--progress-edge); }   /* under the label and the focus ring */
+.command:is(.fade, .panic).is-active { box-shadow: inset 0 0 0 1px var(--progress-edge); }   /* a second line from the start: not colour alone */
+.command:is(.fade, .panic).is-active::before, .command:is(.fade, .panic).is-active::after { opacity: 1; }
+.command.fade.is-active { border-color: var(--green); }
+.command.fade.is-active .icon { color: var(--green); }
+.command.pause.is-active { background: var(--yellow-row); box-shadow: inset 0 0 0 1px var(--yellow); }
+.command.pause.is-active .command-label { color: var(--yellow); }
 .command.panic { grid-column: 1 / -1; color: var(--red); border-color: var(--red); background: #3b2c31; }
 .is-locked .command, .is-locked .mode-switch { opacity: .5; }
 .tabs-strip { --active-tab-width: 88px; grid-area: tabs; position: relative; min-width: 0; overflow: hidden; border-radius: 12px; background: var(--input); }
@@ -212,5 +226,9 @@ button:active:not(:disabled) { filter: brightness(.88); }
   .next-cue { padding: 10px 16px; }
   .next-title { --next-font: 24px; }
   .connection-notice { left: calc(max(8px, env(safe-area-inset-left)) + clamp(144px, 20.35vw, 240px) / 2); top: calc(max(8px, env(safe-area-inset-top)) + 56px); }
+}
+@media (max-width: 340px) {   /* a 360-390 px phone zoomed to 150 %: '일시정지 중' and '페이드아웃' keep their whole width */
+  .command { font-size: 14px; gap: 6px; }
+  .command .icon { width: 20px; height: 20px; }
 }
 @media (prefers-reduced-motion: reduce) { .go.is-pressed { transform: none; } }

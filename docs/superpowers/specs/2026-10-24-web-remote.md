@@ -26,7 +26,7 @@
 |---|---|---|
 | `hello` | 연결 직후 1번 | `proto:1, server:"<설치 id>", pc:"<컴퓨터 이름>", project:"<프로젝트 이름>", app:"<앤큐 버전>"` |
 | `lists` | 연결 직후 + 탭·큐 구조·이름·번호·순서·재생 헤드·모드·활성 탭이 바뀔 때 | `gen:N, active:"<탭 id>", mode:"edit"\|"show", tabs:[{id,name,kind:"list"\|"cart",cols,rows}], cues:{"<탭 id>":[{id,no,name,kind,depth,parent,len,armed,color,slot}]}, playhead:{"<탭 id>":"<큐 id>"\|null}` — `cues`는 표에 보이는 순서(그룹 자식 포함, depth로 들여쓰기), `len`은 PC 길이 칸 글자 그대로(`"0:12.0"`, `"∞"`, `""`), `slot`은 카트 칸 번호(리스트면 null) |
-| `state` | 재생·대기 중이면 초당 10번, 아니면 바뀔 때 + 1초마다 | `seq:N, mode, next:{id,no,name,len}\|null, playing:[{id,no,name,remain,elapsed,dur,progress,st:"play"\|"pause"\|"fade",order}], waits:[{cue,no,name,kind:"pre"\|"post"\|"wait",remain,startId}], counts:{playing,paused,waiting}, panic:bool, goLocked:bool` (시간은 초, 소수) |
+| `state` | 재생·대기 중이면 초당 10번, 아니면 바뀔 때 + 1초마다 | `seq:N, mode, next:{id,no,name,len}\|null, playing:[{id,no,name,remain,elapsed,dur,progress,st:"play"\|"pause"\|"fade",order,fade?,fadeLeft?}], waits:[{cue,no,name,kind:"pre"\|"post"\|"wait",remain,startId}], counts:{playing,paused,waiting}, panic:bool, goLocked:bool` (시간은 초, 소수; `fade`·`fadeLeft` = 정지 페이드 진행 0..1·남은 초, 정지 페이드 중일 때만 있음, 웹 '페이드아웃' 진행바용, 0.17.5) |
 | `ack` | 요청마다 | `id, ok:bool, msg?:"<짧은 한국어 이유>"` — ok는 '요청을 받아 처리함'. 실제 재생 여부는 state로 본다 |
 | `bye` | 닫기 전 | `reason:"key"\|"off"\|"newkey"` |
 

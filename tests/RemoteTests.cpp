@@ -465,6 +465,44 @@ void RemoteInputTests::testAudio()
         expect (ok (f.send (command ("panic")))); f.render(); expect (! f.engine.isPlaying (id));
         expect (f.controller().isPanicLatched());
     }
+    beginTest ("the state carries a running fade-out's progress for the web 페이드아웃 bar, and a paused cue as pause");
+    {
+        Fixture f; const auto id = f.sound(); RemoteTestAccess::cart (*f.main, id, false); f.render();
+        remote::SnapshotModel model (f.document());
+        const auto item = [&] { return model.state (remote::PlaybackSnapshot::capture (f.engine, f.controller()), false)["playing"][0]; };
+        expect (! item().hasProperty ("fade"));
+        expect (ok (f.send (command ("fade")))); f.render();
+        const auto first = item();
+        expectEquals (first["st"].toString(), juce::String ("fade"));
+        const double early = first["fade"], leftEarly = first["fadeLeft"];
+        expect (early >= 0.0 && early < 0.05, "fade progress at the start: " + juce::String (early));
+        expect (leftEarly > 1.8 && leftEarly <= 2.0, "the default 2 s fade-out: " + juce::String (leftEarly));
+        f.render (86);   // 0.5 s on
+        const auto later = item();
+        expect ((double) later["fade"] > early + 0.2, "fade progress does not move: " + later["fade"].toString());
+        expect ((double) later["fadeLeft"] < leftEarly - 0.4, "fade time left does not move: " + later["fadeLeft"].toString());
+    }
+    {
+        Fixture f; const auto id = f.sound(); RemoteTestAccess::cart (*f.main, id, false); f.render();
+        remote::SnapshotModel model (f.document());
+        expect (ok (f.send (command ("pause")))); f.render();
+        const auto item = model.state (remote::PlaybackSnapshot::capture (f.engine, f.controller()), false)["playing"][0];
+        expectEquals (item["st"].toString(), juce::String ("pause"));
+        expect (! item.hasProperty ("fade"));
+    }
+    {
+        // 전체 페이드 정지: the same progress, with panic set - the web fills 전체 페이드 정지 instead of 페이드아웃
+        Fixture f; const auto id = f.sound(); RemoteTestAccess::cart (*f.main, id, false); f.render();
+        f.document().settings.panicSeconds = 1;
+        remote::SnapshotModel model (f.document());
+        expect (ok (f.send (command ("panic")))); f.render();
+        const auto value = model.state (remote::PlaybackSnapshot::capture (f.engine, f.controller()), false);
+        expect ((bool) value["panic"]);
+        const auto item = value["playing"][0];
+        expectEquals (item["st"].toString(), juce::String ("fade"));
+        expect ((double) item["fade"] >= 0.0 && (double) item["fade"] < 0.1, "panic fade progress: " + item["fade"].toString());
+        expect ((double) item["fadeLeft"] > 0.9 && (double) item["fadeLeft"] <= 1.0, "panic fade left: " + item["fadeLeft"].toString());
+    }
 }
 
 void RemoteInputTests::testWaits()

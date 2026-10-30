@@ -101,9 +101,16 @@ juce::var SnapshotModel::state (const PlaybackSnapshot& snapshot, bool show) con
         if (p.loaded) continue;
         const auto* cue = document.findCueAnywhere (p.id);
         const bool fade = p.fadingOut || std::any_of (snapshot.fades.begin(), snapshot.fades.end(), [&] (const auto& f) { return f.fadeId == p.id; });
-        playing.add (object ({ { "id", p.id.toString() }, { "no", cue != nullptr ? cue->number : juce::String() },
+        auto item = object ({ { "id", p.id.toString() }, { "no", cue != nullptr ? cue->number : juce::String() },
             { "name", cue != nullptr ? cue->name : juce::String() }, { "remain", p.remainingSeconds }, { "elapsed", p.positionSeconds },
-            { "dur", p.lengthSeconds }, { "progress", p.progress }, { "st", p.paused ? "pause" : fade ? "fade" : "play" }, { "order", p.startOrder } }));
+            { "dur", p.lengthSeconds }, { "progress", p.progress }, { "st", p.paused ? "pause" : fade ? "fade" : "play" }, { "order", p.startOrder } });
+        if (! p.paused && p.fadingOut && p.fadeOutProgress >= 0.0)
+        {
+            // a stop fade under way: the web's 페이드아웃 button fills with it
+            item.getDynamicObject()->setProperty ("fade", p.fadeOutProgress);
+            item.getDynamicObject()->setProperty ("fadeLeft", p.fadeOutRemainingSeconds);
+        }
+        playing.add (item);
     }
     for (const auto& w : snapshot.waits)
     {

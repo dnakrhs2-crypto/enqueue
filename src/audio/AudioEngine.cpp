@@ -1623,6 +1623,8 @@ std::vector<AudioEngine::PlayingCue> AudioEngine::getPlayingCues() const
         info.filePositionSeconds = p->getFilePositionSeconds();
         info.passIndex = p->getPassIndex();
         info.fadingOut = p->isFadingOut();
+        info.fadeOutProgress = p->getFadeOutFraction();
+        info.fadeOutRemainingSeconds = p->getFadeOutRemainingSeconds();
         info.paused = p->isPaused();
         info.loaded = p->isLoadedNotStarted();
         info.audition = p->isAudition();

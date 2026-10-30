@@ -119,6 +119,7 @@
       view.node.tabIndex = locked ? -1 : 0;
       view.handle.disabled = locked || mode !== "edit" || Boolean(pendingMove);
     });
+    renderCommands(performance.now());
     syncAnimation();
   }
 
@@ -537,6 +538,32 @@
 
   function waitLabel(kind) { return kind === "pre" ? "프리웨이트" : kind === "post" ? "포스트웨이트" : "대기"; }
 
+  // The command buttons say what the PC is doing: a running fade-out fills 페이드아웃 (전체 페이드 정지 while the panic
+  // runs), a paused cue lights 일시정지.
+  const fadeCommand = document.querySelector('[data-command="fade"]');
+  const pauseCommand = document.querySelector('[data-command="pause"]');
+  const pauseLabel = pauseCommand.querySelector(".command-label");
+  function renderCommands(now) {
+    let progress = null;
+    if (!locked) {
+      for (const item of state.playing) {
+        if (item.st !== "fade" || !Number.isFinite(item.fade) || !Number.isFinite(item.fadeLeft)) continue;
+        const total = item.fadeLeft / Math.max(1e-6, 1 - item.fade);
+        const left = Math.max(0, item.fadeLeft - (now - stateAt) / 1000);
+        const value = total > 0 ? 1 - left / total : 1;
+        if (progress === null || value < progress) progress = value; // the newest fade-out
+      }
+    }
+    const panic = Boolean(state.panic);
+    for (const [node, on] of [[fadeCommand, !panic], [$("panic"), panic]]) {
+      node.classList.toggle("is-active", on && progress !== null);
+      node.style.setProperty("--fade-progress", String(on ? progress ?? 0 : 0));
+    }
+    const paused = !locked && state.playing.some(item => item.st === "pause");
+    pauseCommand.classList.toggle("is-active", paused);
+    setText(pauseLabel, paused ? "일시정지 중" : "일시정지");
+  }
+
   function groupStatuses() {
     const statuses = new Map();
     const rank = { wait: 1, pause: 2, play: 3 };
@@ -651,6 +678,7 @@
   }
 
   function updateTimes(now) {
+    renderCommands(now);
     rowViews.forEach(view => {
       const item = playingByCue.get(view.cue.id);
       const wait = waitsByCue.get(view.cue.id);

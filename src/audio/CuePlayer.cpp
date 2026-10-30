@@ -711,6 +711,8 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
     if (fadeMs >= 0)
     {
         envelope.fadeOut (fadeMs);
+        fadeOutTotalSamples.store (envelope.getRemainingSamples(), std::memory_order_relaxed);
+        fadeOutLeftSamples.store (envelope.getRemainingSamples(), std::memory_order_relaxed);
         stopRequested.store (true, std::memory_order_relaxed);
         fadingOut.store (true, std::memory_order_relaxed);
 
@@ -834,6 +836,9 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
         envelope.applyToBuffer (buffer, 0, numSamples);
         pauseGate.applyToBuffer (buffer, 0, numSamples);
 
+        if (envelope.isFadingOut())
+            fadeOutLeftSamples.store (envelope.getRemainingSamples(), std::memory_order_relaxed);
+
         if (pausing && pauseGate.hasReachedSilence())
         {
             pausing = false;
@@ -918,6 +923,11 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
             tailFadeGain = next;
             tailFadeSamplesLeft -= step;
 
+            // the remote's progress goes on through the tail, never backwards (a tail that only takes the gate's close
+            // ramp after the envelope used the whole panic time stays complete)
+            fadeOutLeftSamples.store ((int) juce::jmin<juce::int64> (fadeOutLeftSamples.load (std::memory_order_relaxed), juce::jmax<juce::int64> (0, tailFadeSamplesLeft)),
+                                      std::memory_order_relaxed);
+
             if (tailFadeSamplesLeft <= 0)
             {
                 finished.store (true, std::memory_order_relaxed);
@@ -963,6 +973,7 @@ bool CuePlayer::renderNextBlock (juce::AudioBuffer<float>& fullBuffer, int numSa
         if (tailSamplesLeft > 0)
         {
             inTail = true;
+            fadeOutLeftSamples.store (0, std::memory_order_relaxed);   // the source is over: so is its stop fade (only the insert rings on)
             return true;
         }
 
