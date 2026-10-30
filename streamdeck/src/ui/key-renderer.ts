@@ -1,9 +1,9 @@
 import { performance } from "node:perf_hooks";
 import type { Language } from "./i18n.js";
 import { strings } from "./strings.js";
-import { micSvg, sendSvg, actionSvg, type Lamp, type ActionLamp } from "./artwork.js";
+import { micSvg, sendSvg, actionSvg, type Lamp, type ActionLamp, type MuteCause } from "./artwork.js";
 export { xml } from "./artwork.js";
-export type { Lamp, ActionLamp } from "./artwork.js";
+export type { Lamp, ActionLamp, MuteCause } from "./artwork.js";
 
 export interface KeyOutput {
   setState(state: 0 | 1): Promise<void>;
@@ -29,16 +29,16 @@ export function statusTitle(title: string): string {
 }
 const images = new Map<string, string>();
 const dataUrl = (svg: string): string => "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
-export function keyImage(lamp: Lamp, language: Language, audioStopped = false, unknownValue = false, lampGlyph: "mic" | "fx" = "mic"): string {
-  const key = [lamp, language, audioStopped, unknownValue, lampGlyph].join("/");
+export function keyImage(lamp: Lamp, language: Language, audioStopped = false, unknownValue = false, lampGlyph: "mic" | "fx" = "mic", mutedBy: MuteCause = "group"): string {
+  const key = [lamp, language, audioStopped, unknownValue, lampGlyph, mutedBy].join("/");
   const cached = images.get(key); if (cached) return cached;
-  const image = dataUrl(micSvg(lamp, strings[language], audioStopped, unknownValue, 144, lampGlyph));
+  const image = dataUrl(micSvg(lamp, strings[language], audioStopped, unknownValue, 144, lampGlyph, mutedBy));
   images.set(key, image); return image;
 }
 
 /** Amount/badge combinations are not cached; KeyRenderer deduplicates output. */
-export function sendImage(percent: number, badge: string, language: Language, muted = false, audioStopped = false): string {
-  return dataUrl(sendSvg(percent, badge, strings[language], muted, audioStopped));
+export function sendImage(percent: number, badge: string, language: Language, muted = false, audioStopped = false, mutedBy: MuteCause = "group"): string {
+  return dataUrl(sendSvg(percent, badge, strings[language], muted, audioStopped, 144, mutedBy));
 }
 
 /** Cache only bounded state/count/index/group combinations, never user names. */

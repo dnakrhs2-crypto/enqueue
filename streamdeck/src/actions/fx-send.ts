@@ -4,7 +4,7 @@ import { ConnectionError, type LiveMixConnection } from "../livemix/connection.j
 import type { CommandQueue } from "../livemix/command-queue.js";
 import type { ActionSettings } from "../livemix/bindings.js";
 import { sendTarget, type Snapshot } from "../livemix/protocol.js";
-import { micMuted, fxMuted } from "../livemix/muted.js";
+import { sendMuteCause } from "../livemix/muted.js";
 import type { Language } from "../ui/i18n.js";
 import { LiveMixAction, type ActionContext } from "./base.js";
 
@@ -41,10 +41,10 @@ export class FxSendAction extends LiveMixAction {
   private target(s: Snapshot, channelId: string, fxId: string): string { return `send/${s.instanceId}/${s.sessionId}/${channelId}/${fxId}`; }
   protected override draw(c: ActionContext, s: Snapshot): void {
     const channel = this.channel(c, s), fx = this.fx(c, s), target = sendTarget(s, channel.id, fx.id)!;
-    const muted = micMuted(s.state, channel) || fxMuted(s.state, fx);
+    const cause = sendMuteCause(s.state, channel, fx), muted = cause !== undefined;
     const name = `${channel.name} → ${fx.name}`.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
     const percent = Math.round(target.send.amount * 100);
     c.feedback!.render({ name, amount: `${percent}%`, mode: this.t(target.send.pre ? "pre" : "post"), level: { value: percent, enabled: true },
-      status: { value: c.error ?? (muted ? this.t("muteApplied") : !s.state.audio.running ? this.t("audioStopped") : ""), font: { size: 13 } } });
+      status: { value: c.error ?? (muted ? this.t(cause === "all" ? "muteAllApplied" : "muteApplied") : !s.state.audio.running ? this.t("audioStopped") : ""), font: { size: 13 } } });
   }
 }

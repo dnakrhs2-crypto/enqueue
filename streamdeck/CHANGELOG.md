@@ -5,7 +5,7 @@
 ### 한국어
 
 - 마이크 전체 뮤트와 FX 전체 뮤트 키를 추가했습니다. LiveMix 위쪽 마이크 뮤트·FX 뮤트 버튼처럼 뮤트그룹 지정 없이 모든 해당 채널을 토글 / 뮤트 / 해제합니다. 키를 뗄 때는 명령을 보내지 않습니다.
-- 전체 뮤트와 뮤트그룹은 독립적입니다. 전체 뮤트를 해제해도 원래 뮤트된 그룹은 유지하며 개별 ON/OFF, 보내는 양과 프리/포스트는 바꾸지 않습니다. 기존 마이크·FX·보내기 키와 다이얼도 전체 뮤트를 그룹 뮤트와 같은 방식으로 표시합니다.
+- 전체 뮤트와 뮤트그룹은 독립적입니다. 전체 뮤트를 해제해도 원래 뮤트된 그룹은 유지하며 개별 ON/OFF, 보내는 양과 프리/포스트는 바꾸지 않습니다. 기존 마이크·FX·보내기 키와 다이얼도 전체 뮤트를 그룹 뮤트와 같은 빨간 뮤트로 표시하고, 이유 글자는 '뮤트그룹' 대신 '전체 뮤트'(다이얼은 '전체 뮤트 적용')로 보여 줍니다. 둘 다 걸려 있으면 전체 뮤트를 먼저 표시합니다.
 - 새 키는 그룹 괄호 없는 마이크·FX 그림, 뮤트 시 빨간색과 사선, 기존 뮤트/해제 문구, 전체 채널 수와 오디오 멈춤 배지를 표시합니다. 설정에는 동작과 표시 이름만 제공하며 다중 동작에서는 설정한 동작만 실행하고 키 그림·상태·제목을 보내지 않습니다.
 - 두 새 키에는 LiveMix 0.18.0+의 `muteAll` 기능이 필요합니다. 이전 버전에서는 기존 업데이트 안내와 입력 실패 알림만 표시하고 명령을 보내지 않습니다. `muteAll`이 없는 이전 상태도 읽으며 기존 열 액션의 요구 버전은 유지합니다.
 - 실제 SDK를 사용하는 가짜 호스트·LiveMix 테스트에 명령, 독립성, 구버전 호환, ko/en 설정과 정적/실시간 그림 검증을 추가했습니다. 실제 LiveMix 검사 도구는 마이크 전체 뮤트를 두 번 토글해 원래 상태로 복구하고, 미지원 버전은 건너뜁니다.
@@ -13,7 +13,7 @@
 ### English
 
 - Added Mute All Mics and Mute All FX. Toggle, Mute or Unmute every matching channel, like LiveMix's top bar switches, without assigning mute-group marks. Key release sends nothing.
-- All-mute and mute groups are independent. Releasing all-mute preserves any muted group and leaves individual ON/OFF switches, send amounts and pre/post intact. Existing mic, FX, send keys and send dials show all-mute just like group mute.
+- All-mute and mute groups are independent. Releasing all-mute preserves any muted group and leaves individual ON/OFF switches, send amounts and pre/post intact. Existing mic, FX, send keys and send dials show all-mute in the same red muted style and name the cause "Mute all" (dial: "Mute all applied") instead of "Mute group"; all-mute is named first when both apply.
 - New keys use plain mic/FX glyphs without group brackets, red with a slash when muted, the existing muted/unmuted labels, total target count and stopped-audio badge. Setup exposes only Mode and Display name. Multi Actions execute Mode without key artwork, state or title.
 - These two keys require LiveMix 0.18.0+ and `muteAll`. Older versions show the existing update message and alert on input without commands. Snapshots without `muteAll` still parse; requirements for the existing ten actions are unchanged.
 - Extended real-SDK fake-host/LiveMix tests for commands, independence, compatibility, ko/en PI and static/runtime artwork. The real-app checker toggles mic all-mute twice and restores its original state, or skips unsupported versions.

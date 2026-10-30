@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 import net from "node:net";
 import { FakeHost } from "../tests/fake-host.mjs";
 import { actionSvg, micSvg } from "../src/ui/artwork.ts";
-import { micMuted, fxMuted } from "../src/livemix/muted.ts";
+import { micMuted, fxMuted, micMuteCause, fxMuteCause } from "../src/livemix/muted.ts";
 import { locales } from "./locales.mjs";
 
 const appdata = process.env.APPDATA;
@@ -85,7 +85,7 @@ async function fxVisual(on) {
     if (!fx || fx.on !== on) return false;
     const lamp = fxMuted(snapshot.state, fx) ? (on ? "muted-on" : "muted-off") : on ? "on" : "off";
     const v = host.visual("fx-real");
-    return v.state === (on ? 1 : 0) && svg(v.image) === micSvg(lamp, locales.ko, !snapshot.state.audio.running, false, 144, "fx");
+    return v.state === (on ? 1 : 0) && svg(v.image) === micSvg(lamp, locales.ko, !snapshot.state.audio.running, false, 144, "fx", fxMuteCause(snapshot.state, fx) ?? "group");
   }, 8000);
 }
 
@@ -96,7 +96,7 @@ async function muteAllVisual(muted, channelId) {
     const lamp = micMuted(snapshot.state, mic) ? (mic.on ? "muted-on" : "muted-off") : mic.on ? "on" : "off";
     const all = host.visual("mute-all-real"), channel = host.visual("mute-all-mic-real"), stopped = !snapshot.state.audio.running;
     return all.state === (muted ? 1 : 0) && svg(all.image) === actionSvg(muted ? "mute-every-muted" : "mute-every-clear", locales.ko, snapshot.state.channels.length, 0, stopped)
-      && channel.state === (mic.on ? 1 : 0) && svg(channel.image) === micSvg(lamp, locales.ko, stopped);
+      && channel.state === (mic.on ? 1 : 0) && svg(channel.image) === micSvg(lamp, locales.ko, stopped, false, 144, "mic", micMuteCause(snapshot.state, mic) ?? "group");
   }, 8000);
 }
 
@@ -112,7 +112,7 @@ try {
   await host.wait(() => {
     const muted = micMuted(snapshot.state, mic);
     const lamp = muted ? mic.on ? "muted-on" : "muted-off" : mic.on ? "on" : "off";
-    return host.visual("key-real").state === (mic.on ? 1 : 0) && svg(host.visual("key-real").image) === micSvg(lamp, locales.ko, !snapshot.state.audio.running);
+    return host.visual("key-real").state === (mic.on ? 1 : 0) && svg(host.visual("key-real").image) === micSvg(lamp, locales.ko, !snapshot.state.audio.running, false, 144, "mic", micMuteCause(snapshot.state, mic) ?? "group");
   }, 8000);
   micTouched = true;
   for (const on of [!originalMic.on, originalMic.on]) {

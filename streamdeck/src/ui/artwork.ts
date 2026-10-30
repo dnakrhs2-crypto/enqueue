@@ -13,6 +13,8 @@ export type IconKind = "mic" | "fx" | "all-mics" | "mic-mute-group" | "fx-mute-g
 export type Lamp = "on" | "off" | "muted-on" | "muted-off" | "disconnected" | "disabled" | "checking" | "version" | "missing" | "duplicate";
 export type ActionLamp = "all-on" | "all-off" | "mixed" | "group-muted" | "group-clear" | "mute-every-muted" | "mute-every-clear" | "plugin-on" | "plugin-off" | "plugin-all-on" | "plugin-all-off" | "plugin-all-mixed" | "status-on" | "status-off";
 export type Labels = { [key: string]: string };
+/** Why a mic/FX/send is silent: its mute group, or the whole-mute switch (1.4.0 / LiveMix 0.18.0), named first. */
+export type MuteCause = "group" | "all";
 export const xml = (s: string): string => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
 export const svgDocument = (size: number, body: string, viewBox = 144): string =>
   '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + viewBox + ' ' + viewBox + '">' + body + '</svg>';
@@ -56,7 +58,7 @@ const key = (body: string, size: number): string => svgDocument(size,
   rect(0, 0, 144, 144, 12, palette.background) + '<g text-anchor="middle" font-family="Segoe UI,Malgun Gothic,sans-serif" font-weight="600">' + body + '</g>');
 const bounded = (value: number, max: number): number => Number.isFinite(value) ? Math.max(0, Math.min(max, Math.trunc(value))) : 0;
 
-export function micSvg(lamp: Lamp, labels: Labels, stopped = false, unknownValue = false, size = 144, lampGlyph: "mic" | "fx" = "mic"): string {
+export function micSvg(lamp: Lamp, labels: Labels, stopped = false, unknownValue = false, size = 144, lampGlyph: "mic" | "fx" = "mic", mutedBy: MuteCause = "group"): string {
   const on = lamp === "on" || lamp === "muted-on", muted = lamp.startsWith("muted-");
   let body: string, label = unknownValue ? "—" : "";
   if (["on", "off", "muted-on", "muted-off"].includes(lamp)) {
@@ -65,7 +67,7 @@ export function micSvg(lamp: Lamp, labels: Labels, stopped = false, unknownValue
     body = '<circle cx="72" cy="39" r="30" fill="' + color + '"/>' + placed(glyph(lampGlyph), 51, 16, 42);
     if (muted) body += stroke('<path d="M49 18l46 43"/>', palette.white, 3);
     label = muted ? labels[on ? "originalOn" : "originalOff"]! : on ? labels.on! : labels.off!;
-    if (muted) body += rect(22, 72, 100, 17, 5, palette.danger) + text(labels.muted!, 85, 12, palette.background);
+    if (muted) body += rect(22, 72, 100, 17, 5, palette.danger) + text(labels[mutedBy === "all" ? "mutedAll" : "muted"]!, 85, 12, palette.background);
   } else if (lamp === "disconnected") {
     body = stroke('<path d="M32 16v19l24 24 14-14-24-24H32M112 73V54L88 30 74 44l24 24h14M45 21l8-8M88 68l-8 8"/>', palette.dimText, 4)
       + stroke('<path d="M65 17l4 9M97 16l-7 7M34 65l8-3"/>', palette.danger, 3);
@@ -114,11 +116,11 @@ export function actionSvg(lamp: ActionLamp, labels: Labels, count = 0, total = 0
   return key(body + pause(stopped, labels) + text(label, 82, 16) + text(detail, 102, 13, palette.dimText), size);
 }
 
-export function sendSvg(percent: number, badge: string, labels: Labels, muted = false, stopped = false, size = 144): string {
+export function sendSvg(percent: number, badge: string, labels: Labels, muted = false, stopped = false, size = 144, mutedBy: MuteCause = "group"): string {
   percent = Math.round(Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0)));
   const color = muted ? palette.danger : percent > 0 ? palette.lampOn : palette.lampOff;
   const body = placed(glyph("fx-send-step", color), 15, 9, 28)
-    + (muted ? text(labels.muted!, 48, 10, palette.danger, 34) : "")
+    + (muted ? text(labels[mutedBy === "all" ? "mutedAll" : "muted"]!, 48, 10, palette.danger, 34) : "")
     + rect(80, 12, 49, 25, 6, palette.card2) + text(badge, 30, 16, palette.white, 104.5)
     + text(percent + "%", 79, 34)
     + rect(18, 91, 108, 7, 3.5, palette.lampOff) + rect(18, 91, percent * 1.08, 7, 3.5, color);

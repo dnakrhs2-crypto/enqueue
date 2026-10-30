@@ -6,6 +6,8 @@ import { actionImage, displayName, keyImage, sendImage, statusTitle } from "../s
 import { strings } from "../src/ui/strings.js";
 import { setupActions, key, commands, alerts, title } from "./action-helpers.js";
 
+const svgText = (image: string): string => Buffer.from(image.slice(image.indexOf(",") + 1), "base64").toString("utf8");
+
 for (const group of ["mic", "fx"] as const) test(`${group} mute-all: two toggles, explicit mute/unmute, no-op, title and stopped audio`, async t => {
   const { server, host } = await setupActions(t), kind = `${group}-mute-all`, count = group === "mic" ? 3 : 2;
   const before = structuredClone(server.snapshot.state);
@@ -49,9 +51,9 @@ test("mute-all: unmarked mic/FX and both send controls follow either mute, keepi
   const before = structuredClone(server.snapshot.state);
   for (const group of ["mic", "fx"] as const) for (const muted of [true, false]) {
     server.mutate((s: Snapshot) => { s.state.muteAll[group] = muted; });
-    await host.wait(() => host.visual(group).image === keyImage(muted ? "muted-on" : "on", "ko", false, false, group));
-    await host.wait(() => host.visual("send").image === sendImage(35, "+5", "ko", muted));
-    await host.wait(() => host.feedback("dial").status === (muted ? strings.ko.muteApplied : ""));
+    await host.wait(() => host.visual(group).image === keyImage(muted ? "muted-on" : "on", "ko", false, false, group, muted ? "all" : "group"));
+    await host.wait(() => host.visual("send").image === sendImage(35, "+5", "ko", muted, false, "all"));
+    await host.wait(() => host.feedback("dial").status === (muted ? strings.ko.muteAllApplied : ""));
     assert.equal(host.visual("mic").state, 1); assert.equal(host.visual("fx").state, 1); assert.equal(host.visual("send").state, 0);
     const other = group === "mic" ? "fx" : "mic";
     assert.equal(host.visual(other).image, keyImage("on", "ko", false, false, other));
@@ -59,7 +61,7 @@ test("mute-all: unmarked mic/FX and both send controls follow either mute, keepi
   // Own OFF switches remain OFF while the mute overlay is shown.
   server.mutate((s: Snapshot) => { s.state.channels[1]!.on = false; s.state.fx[1]!.on = false; s.state.muteAll = { mic: true, fx: true }; });
   for (const group of ["mic", "fx"] as const) {
-    await host.wait(() => host.visual(group).image === keyImage("muted-off", "ko", false, false, group));
+    await host.wait(() => host.visual(group).image === keyImage("muted-off", "ko", false, false, group, "all"));
     assert.equal(host.visual(group).state, 0);
   }
   assert.deepEqual(server.snapshot.state.channels.map((c: any) => c.sends), before.channels.map((c: any) => c.sends));
@@ -75,18 +77,24 @@ test("mute-all and mute group are independent: releasing all-mute leaves only ma
   host.keyDown("group"); await key(host, "group", 1, "#FF5A5F"); await key(host, "marked", 1, "#FF5A5F");
   const groupImage = host.visual("group").image;
   host.keyDown("all"); await key(host, "all", 1, "#FF5A5F"); await key(host, "outside", 1, "#FF5A5F");
+  // The badge names the cause: the whole-mute switch wins over the group (LiveMix's card lamp: 전체 뮤트 중).
+  for (const name of ["marked", "outside"]) {
+    await host.wait(() => svgText(host.visual(name).image).includes("전체 뮤트"));
+    assert.doesNotMatch(svgText(host.visual(name).image), /뮤트그룹/);
+  }
   assert.equal(host.visual("group").image, groupImage);
   // Group release/re-mute must not release all-mute.
   for (const muted of [false, true]) {
     host.keyDown("group"); await key(host, "group", muted ? 1 : 0, muted ? "#FF5A5F" : "#35D07F");
     assert.equal(server.snapshot.state.muteAll.mic, true);
-    assert.equal(host.visual("marked").image, keyImage("muted-on", "ko"));
-    assert.equal(host.visual("outside").image, keyImage("muted-on", "ko"));
+    assert.equal(host.visual("marked").image, keyImage("muted-on", "ko", false, false, "mic", "all"));
+    assert.equal(host.visual("outside").image, keyImage("muted-on", "ko", false, false, "mic", "all"));
   }
   host.keyDown("all"); await key(host, "all", 0, "#35D07F");
   await host.wait(() => host.visual("outside").image === keyImage("on", "ko"));
   assert.equal(host.visual("marked").image, keyImage("muted-on", "ko"));
   assert.equal(host.visual("group").image, groupImage);
+  assert.match(svgText(host.visual("marked").image), /뮤트그룹/);
   assert.deepEqual(server.snapshot.state.muteGroups, { mic: true, fx: false }); host.assertBudget();
 });
 

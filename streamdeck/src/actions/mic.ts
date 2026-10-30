@@ -4,7 +4,8 @@ import { LiveMixConnection, ConnectionError } from "../livemix/connection.js";
 import { MicBinding, migrateSettings, type MicSettings } from "../livemix/bindings.js";
 import { CommandQueue } from "../livemix/command-queue.js";
 import { isObject } from "../livemix/protocol.js";
-import { micMuted } from "../livemix/muted.js";
+import { micMuteCause } from "../livemix/muted.js";
+import type { MuteCause } from "../ui/key-renderer.js";
 import { displayName, statusTitle, keyImage, KeyRenderer, type KeyOutput, type Lamp } from "../ui/key-renderer.js";
 import { translator, type Language } from "../ui/i18n.js";
 
@@ -94,7 +95,7 @@ export class MicrophoneAction extends SingletonAction<MicSettings> {
     this.sendOptions();
   }
   private render(context: KeyContext): void {
-    let lamp: Lamp = "disconnected", title = this.t("disconnected"), state: 0 | 1 = 0, audioStopped = false, isName = false;
+    let lamp: Lamp = "disconnected", title = this.t("disconnected"), state: 0 | 1 = 0, audioStopped = false, isName = false, mutedBy: MuteCause = "group";
     const snapshot = this.connection.store.snapshot;
     if (this.connection.ready && snapshot) {
       const binding = context.binding.resolve(snapshot);
@@ -103,7 +104,9 @@ export class MicrophoneAction extends SingletonAction<MicSettings> {
       else {
         const channel = binding.channel;
         state = channel.on ? 1 : 0;
-        lamp = micMuted(snapshot.state, channel) ? channel.on ? "muted-on" : "muted-off" : channel.on ? "on" : "off";
+        const cause = micMuteCause(snapshot.state, channel);
+        if (cause) mutedBy = cause;
+        lamp = cause ? channel.on ? "muted-on" : "muted-off" : channel.on ? "on" : "off";
         title = context.settings.shortTitle || channel.name;
         isName = true;
         audioStopped = !snapshot.state.audio.running;
@@ -116,7 +119,7 @@ export class MicrophoneAction extends SingletonAction<MicSettings> {
       lamp = this.connection.status === "connecting" ? "checking" : this.connection.status;
       title = this.t(lamp);
     }
-    context.renderer.render({ state, image: keyImage(lamp, this.language, audioStopped), title: isName ? displayName(title) : statusTitle(title) });
+    context.renderer.render({ state, image: keyImage(lamp, this.language, audioStopped, false, "mic", mutedBy), title: isName ? displayName(title) : statusTitle(title) });
   }
   override onPropertyInspectorDidAppear(ev: PropertyInspectorDidAppearEvent<MicSettings>): void {
     if (this.contexts.has(ev.action.id)) this.inspector = { context: ev.action.id, requestId: "", sequence: 0 };
