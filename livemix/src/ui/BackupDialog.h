@@ -26,6 +26,17 @@ namespace BackupDialog
 
     void show (MixDocument& document, LiveMixSettings& settings, WebDavBackup& backup, juce::Component* centreAround, Callbacks callbacks);
     void closeIfOpen();
+
+    /** A backup's file name as the list's file column shows it: without LiveMix's own extension - the kind column
+        already says session / preset, and a common 'name_PC_date_time.livemix' was cut (10/30). A dot inside a name
+        stays. */
+    inline juce::String fileColumnText (const juce::String& fileName)
+    {
+        for (const auto* extension : { ".livemixpreset", ".livemix" })
+            if (fileName.endsWithIgnoreCase (extension))
+                return fileName.dropLastCharacters (juce::String (extension).length());
+        return fileName;
+    }
 }
 
 } // namespace gocue::livemix

@@ -287,8 +287,8 @@ struct ChainDrawer::Row : public juce::Component
         number.setInterceptsMouseClicks (false, false);   // the row takes the mouse (getMouseCursor below answers for it)
         addAndMakeVisible (number);
 
-        name.setFont (juce::Font (juce::FontOptions (pt (14.5f), juce::Font::bold)));
-        name.setMinimumHorizontalScale (1.0f);
+        name.setFonts (juce::Font (juce::FontOptions (pt (14.5f), juce::Font::bold)),
+                       juce::Font (juce::FontOptions (pt (12.5f), juce::Font::bold)));   // two lines fit the row's 36 px
         name.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (name);
 
@@ -433,7 +433,8 @@ struct ChainDrawer::Row : public juce::Component
     ChainDrawer& owner;
     int index;
     bool bypassed = false, dragging = false;
-    juce::Label number, name;
+    juce::Label number;
+    TwoLineLabel name;   // a long plugin name takes two lines; '(없음)' after it stays in view
     juce::ToggleButton power;
     juce::TextButton open, remove;
 };

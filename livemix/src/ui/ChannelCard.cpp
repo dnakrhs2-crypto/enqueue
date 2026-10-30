@@ -16,6 +16,7 @@ struct ChannelCard::SendRow : public juce::Component
         badge.onDoubleClick = [this] { fxName.showEditor(); };
         addAndMakeVisible (badge);
         fxName.setNameFont (juce::Font (juce::FontOptions (pt (13.0f), juce::Font::bold)));
+        fxName.setTwoLineFont (juce::Font (juce::FontOptions (pt (12.0f), juce::Font::bold)));   // '보컬 / 리버브' at 1440
         fxName.setMinimumHorizontalScale (1.0f);
         fxName.onRenamed = [this] (const juce::String& text) { owner.document.renameFx (fxId, text); };   // every card, tab and the session follow
         fxName.onEditorShown = [this] { editingName = true; resized(); };    // the name gets room to type in
@@ -71,7 +72,10 @@ struct ChannelCard::SendRow : public juce::Component
 
     void resized() override
     {
-        auto r = getLocalBounds();
+        // the card gives the row 2 px of each gap: the 30 px line the controls sit in, and the name's full height
+        // for a second line
+        const auto full = getLocalBounds();
+        auto r = full.reduced (0, 2);
         badge.setBounds (r.removeFromLeft (34).reduced (0, 6));
         r.removeFromLeft (6);
         const int nameWidth = editingName ? juce::jmax (120, r.getWidth() / 2) : owner.sendNameWidth();
@@ -82,7 +86,8 @@ struct ChannelCard::SendRow : public juce::Component
         // Even a 300 px FX column keeps a 100 px fader; the name gives up room first - except while its editor is
         // open, when typing needs the room and the fader may shrink for that moment (review finding, 0.5.4).
         const int faderReserve = editingName ? 0 : 100;
-        fxName.setBounds (r.removeFromLeft (juce::jmin (nameWidth, juce::jmax (0, r.getWidth() - 6 - faderReserve))));
+        const auto nameArea = r.removeFromLeft (juce::jmin (nameWidth, juce::jmax (0, r.getWidth() - 6 - faderReserve)));
+        fxName.setBounds (nameArea.getX(), full.getY(), nameArea.getWidth(), full.getHeight());
         r.removeFromLeft (6);
         fader.setBounds (r);
     }
@@ -405,7 +410,8 @@ int ChannelCard::sendNameWidth() const
     int width = 56;
     for (const auto& row : sends)
         if (row != nullptr)
-            width = juce::jmax (width, juce::jlimit (56, 140, labelWidthForText (row->fxName, row->fxName.getText())));
+            width = juce::jmax (width, juce::jlimit (56, 140, juce::GlyphArrangement::getStringWidthInt (row->fxName.getLineFont(), row->fxName.getText())
+                                                           + row->fxName.getBorderSize().getLeftAndRight() + 4));   // one line's width, whatever font it shows now
     return width;
 }
 
@@ -523,13 +529,13 @@ void ChannelCard::resized()
         auto row = r.removeFromTop (34);
         number.setBounds (row.removeFromLeft (32).reduced (0, 2));
         row.removeFromLeft (10);
-        menuButton.setBounds (row.removeFromRight (34).reduced (0, 3));
-        row.removeFromRight (6);
-        name.setBounds (row);
+        name.setBounds (row);   // the whole row: 152 px holds '게스트 마이크 2', '메인 마이크 (SM7B)' (was 112 px, 10/30)
         r.removeFromTop (8);
         micButton.setBounds (r.removeFromTop (40));
         r.removeFromTop (8);
-        muteGroupChip.setBounds (r.removeFromTop (24).withWidth (100));
+        auto chipRow = r.removeFromTop (24);
+        muteGroupChip.setBounds (chipRow.withWidth (100));
+        menuButton.setBounds (chipRow.removeFromRight (34));   // the channel menu at the column's right edge, under the name
     };
 
     auto layoutInput = [this] (juce::Rectangle<int> r, bool stacked)
@@ -591,7 +597,7 @@ void ChannelCard::resized()
 
         for (auto& row : sends)
         {
-            row->setBounds (r.removeFromTop (30));
+            row->setBounds (r.removeFromTop (30).expanded (0, 2));   // 2 px of each gap: room for a name's second line
             r.removeFromTop (8);
         }
     };

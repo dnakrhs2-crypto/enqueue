@@ -385,9 +385,8 @@ namespace
             hint.setMinimumHorizontalScale (1.0f);
             addAndMakeVisible (hint);
 
-            statusLabel.setFont (bodyFont (13.0f));
+            statusLabel.setFonts (bodyFont (13.0f), std::nullopt);   // a long result: two lines broken between words
             statusLabel.setColour (juce::Label::textColourId, Palette::dimText);
-            statusLabel.setMinimumHorizontalScale (1.0f);
             addAndMakeVisible (statusLabel);
 
             setSize (820, 580);
@@ -431,7 +430,7 @@ namespace
             hint.setBounds (area.removeFromTop (34));
             area.removeFromTop (8);
 
-            auto bottom = area.removeFromBottom (30);
+            auto bottom = area.removeFromBottom (40);   // two lines: a long result's end is what to do next (10/30)
             statusLabel.setBounds (bottom);
             area.removeFromBottom (8);
             auto picked = area.removeFromBottom (30);
@@ -529,6 +528,7 @@ namespace
         {
             statusLabel.setColour (juce::Label::textColourId, error ? Palette::danger : Palette::dimText);
             statusLabel.setText (text, juce::dontSendNotification);
+            statusLabel.setTooltip (text);   // the whole text where even two lines cut it
         }
 
         /** Runs 'next' once the worker thread is really idle. A job's result is posted from inside its run(), so
@@ -1135,28 +1135,39 @@ namespace
             g.fillAll (rowIsSelected ? Palette::accent.withAlpha (0.35f) : (rowNumber % 2 == 0 ? Palette::card : Palette::card2.withAlpha (0.5f)));
         }
 
-        void paintCell (juce::Graphics& g, int rowNumber, int columnId, int width, int height, bool) override
+        juce::String cellText (int rowNumber, int columnId) const
         {
             if (rowNumber < 0 || rowNumber >= (int) entries.size())
-                return;
+                return {};
 
             const auto& entry = entries[(size_t) rowNumber];
-            juce::String text;
 
             switch (columnId)
             {
-                case columnOwner: text = entry.owner; break;
-                case columnPc:    text = entry.pc; break;
-                case columnName:  text = entry.name; break;
-                case columnDate:  text = entry.modified == juce::Time() ? juce::String() : entry.modified.formatted ("%Y-%m-%d %H:%M"); break;
-                case columnSize:  text = juce::File::descriptionOfSizeInBytes (entry.size); break;
-                case columnKind:  text = entry.isPreset ? ko ("프리셋") : ko ("세션"); break;
-                default: break;
+                case columnOwner: return entry.owner;
+                case columnPc:    return entry.pc;
+                case columnName:  return BackupDialog::fileColumnText (entry.name);
+                case columnDate:  return entry.modified == juce::Time() ? juce::String() : entry.modified.formatted ("%Y-%m-%d %H:%M");
+                case columnSize:  return juce::File::descriptionOfSizeInBytes (entry.size);
+                case columnKind:  return entry.isPreset ? ko ("프리셋") : ko ("세션");
+                default:          return {};
             }
+        }
 
+        void paintCell (juce::Graphics& g, int rowNumber, int columnId, int width, int height, bool) override
+        {
             g.setColour (Palette::text);
             g.setFont (bodyFont (13.5f));
-            g.drawText (text, 8, 0, width - 16, height, juce::Justification::centredLeft, true);
+            g.drawText (cellText (rowNumber, columnId), 8, 0, width - 16, height, juce::Justification::centredLeft, true);
+        }
+
+        /** The whole text of a cell its column cuts short (the file column: the whole file name). */
+        juce::String getCellTooltip (int rowNumber, int columnId) override
+        {
+            const auto text = cellText (rowNumber, columnId);
+            if (juce::GlyphArrangement::getStringWidthInt (bodyFont (13.5f), text) <= table.getHeader().getColumnWidth (columnId) - 16)
+                return {};
+            return columnId == columnName ? entries[(size_t) rowNumber].name : text;
         }
 
         void selectedRowsChanged (int) override
@@ -1177,7 +1188,8 @@ namespace
         std::vector<WebDavBackup::Entry> entries;
         bool everyoneMode = false;
 
-        juce::Label idCaption, passwordCaption, hint, statusLabel, nameCaption, selectedCaption;
+        juce::Label idCaption, passwordCaption, hint, nameCaption, selectedCaption;
+        TwoLineLabel statusLabel;
         juce::TextEditor idEditor, passwordEditor, nameEditor;
         juce::ToggleButton remember;
         juce::TextButton signInButton, createButton, uploadButton, uploadPresetsButton, restoreButton;

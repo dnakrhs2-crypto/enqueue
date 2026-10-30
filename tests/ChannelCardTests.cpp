@@ -211,10 +211,12 @@ public:
             for (auto* child : card.getChildren())
                 if (withText (*child, "FX1") != nullptr)
                 {
-                    rect (child, wide ? juce::Rectangle<int> { 783, 40, 335, 30 }
-                                      : narrow ? juce::Rectangle<int> { 14, 424, 392, 30 } : juce::Rectangle<int> { 14, 188, 372, 30 });
-                    rect (childOfType<juce::Slider> (*child), wide ? juce::Rectangle<int> { 101, 0, 100, 30 }   // the row keeps a 100 px fader: the name gives 1 px
-                                                                       : juce::Rectangle<int> { 102, 0, narrow ? 156 : 136, 30 });
+                    // 0.18.1: the row takes 2 px of each gap for a long name's second line; its controls stay where the
+                    // mockup has them (the fader 2 px down in the taller row)
+                    rect (child, wide ? juce::Rectangle<int> { 783, 38, 335, 34 }
+                                      : narrow ? juce::Rectangle<int> { 14, 422, 392, 34 } : juce::Rectangle<int> { 14, 186, 372, 34 });
+                    rect (childOfType<juce::Slider> (*child), wide ? juce::Rectangle<int> { 101, 2, 100, 30 }   // the row keeps a 100 px fader: the name gives 1 px
+                                                                       : juce::Rectangle<int> { 102, 2, narrow ? 156 : 136, 30 });
                 }
             if (wide)   // the direct-output pair box: the rendered pair text (up to '31-32') must fit, not just the bounds
                 for (auto* child : card.getChildren())

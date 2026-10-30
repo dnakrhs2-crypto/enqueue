@@ -6,6 +6,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <optional>
+
 namespace gocue::livemix
 {
 
@@ -364,13 +366,112 @@ public:
     }
 };
 
+/** One line at the label's font; a text too wide for that line takes two lines - at a smaller font if one is given - broken
+    between words (2026-10-30: the cards and the chain drawer cut '보컬 리버브', 'Waves Tune Real-Time Stereo' to '...', and
+    JUCE's own breaking split Korean words: '보컬 리 / 버브'). The label must be tall enough for two lines; the letters are
+    never squeezed. */
+class TwoLineLabel : public juce::Label
+{
+public:
+    TwoLineLabel() { setMinimumHorizontalScale (1.0f); }
+
+    void setFonts (const juce::Font& oneLine, std::optional<juce::Font> twoLines)
+    {
+        lineFont = oneLine;
+        smallFont = std::move (twoLines);
+        fitFont();
+    }
+
+    /** The one-line font: what the width of the whole text is measured with. */
+    const juce::Font& getLineFont() const noexcept { return lineFont; }
+
+    /** Two lines broken between words ('보컬 / 리버브'), the second ending in '…' if it is still too wide. Empty when the
+        text fits one line, is one word, or starts with a word wider than a line (JUCE's own breaking then). */
+    static juce::String wordLines (const juce::Font& font, const juce::String& text, int width)
+    {
+        if (juce::GlyphArrangement::getStringWidthInt (font, text) <= width)
+            return {};
+
+        auto words = juce::StringArray::fromTokens (text, " ", {});
+        words.removeEmptyStrings();
+        juce::String first;
+        int next = 0;
+        for (; next < words.size(); ++next)
+        {
+            const auto longer = first.isEmpty() ? words[next] : first + " " + words[next];
+            if (juce::GlyphArrangement::getStringWidthInt (font, longer) > width)
+                break;
+            first = longer;
+        }
+
+        if (first.isEmpty() || next >= words.size())
+            return {};
+        return first + "\n" + ellipsisedText (font, words.joinIntoString (" ", next), width);
+    }
+
+    /** What the label draws: its text, or the two word lines where the text takes two. */
+    juce::String getShownText() const
+    {
+        const auto area = getBorderSize().subtractedFrom (getLocalBounds());
+        if (isBeingEdited() || (float) area.getHeight() < 2.0f * getFont().getHeight())
+            return getText();
+        const auto lines = wordLines (getFont(), getText(), area.getWidth());
+        return lines.isEmpty() ? getText() : lines;
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto shown = getShownText();
+        if (shown == getText())
+        {
+            juce::Label::paint (g);
+            return;
+        }
+
+        // the look-and-feel's label (LookAndFeel_V2::drawLabel), with the lines broken where getShownText() breaks them
+        g.fillAll (findColour (backgroundColourId));
+        const auto alpha = isEnabled() ? 1.0f : 0.5f;
+        g.setColour (findColour (textColourId).withMultipliedAlpha (alpha));
+        g.setFont (getFont());
+        g.drawFittedText (shown, getBorderSize().subtractedFrom (getLocalBounds()), getJustificationType(), 2, 1.0f);
+        g.setColour (findColour (outlineColourId).withMultipliedAlpha (alpha));
+        g.drawRect (getLocalBounds());
+    }
+
+    void resized() override
+    {
+        juce::Label::resized();
+        fitFont();
+    }
+
+protected:
+    void textWasChanged() override
+    {
+        juce::Label::textWasChanged();
+        fitFont();
+    }
+
+private:
+    void fitFont()
+    {
+        const auto width = getBorderSize().subtractedFrom (getLocalBounds()).getWidth();
+        const bool twoLines = smallFont.has_value() && juce::GlyphArrangement::getStringWidthInt (lineFont, getText()) > width;
+        const auto& wanted = twoLines ? *smallFont : lineFont;
+        if (! (getFont() == wanted))
+            setFont (wanted);
+    }
+
+    juce::Font lineFont { bodyFont() };
+    std::optional<juce::Font> smallFont;
+};
+
 /** A name that edits itself on a double click (Enter commits, Esc cancels). */
-class NameLabel : public juce::Label
+class NameLabel : public TwoLineLabel
 {
 public:
     NameLabel()
     {
-        setFont (font);
+        setFonts (font, std::nullopt);
         setEditable (false, true, false);
         setMinimumHorizontalScale (1.0f);
         setColour (juce::Label::textColourId, Palette::text);
@@ -385,7 +486,15 @@ public:
     void setNameFont (const juce::Font& f)
     {
         font = f;
-        setFont (f);
+        setFonts (f, twoLineFont);
+    }
+
+    /** A long name may take two lines at this smaller font (a send row: its label is tall enough). The editor keeps
+        the one-line font. */
+    void setTwoLineFont (const juce::Font& f)
+    {
+        twoLineFont = f;
+        setFonts (font, f);
     }
 
     void textWasEdited() override
@@ -420,6 +529,7 @@ public:
 
 private:
     juce::Font font { titleFont() };
+    std::optional<juce::Font> twoLineFont;
 };
 
 /** A button that also tells of a double-click (an FX tab: a click selects, a double-click renames). It is reported
