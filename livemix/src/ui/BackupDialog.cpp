@@ -389,7 +389,7 @@ namespace
             statusLabel.setColour (juce::Label::textColourId, Palette::dimText);
             addAndMakeVisible (statusLabel);
 
-            setSize (820, 580);
+            setSize (900, 580);   // 820 cut a common '세션_PC' and 'name_PC_date_time' (10/30); fits 1280x688 (1080p at 150%)
 
             if (! BackupServer::isConfigured())
                 setStatus (ko ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);

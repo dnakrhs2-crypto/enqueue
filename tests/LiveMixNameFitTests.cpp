@@ -111,6 +111,28 @@ public:
                 }
                 expectEquals (cards, 2, where);
             }
+
+            // what Vercel measured still cut at 1440 (10/30): a name without a space, a long one with a note, a mic with its
+            // model - the wide layout's fader gives a long name room down to 84 px, a long card name gets smaller first
+            const auto& s = f.document.getSession();
+            f.document.renameFx (s.fx[0].id, ko ("보컬리버브"));
+            f.document.renameFx (s.fx[1].id, ko ("룸 리버브 (짧게)"));
+            f.document.renameChannel (s.channels[1].id, ko ("진행자 마이크 (SM7B)"));
+            for (const int width : { 1440, 1280, 1920 })
+            {
+                main.setSize (width, 900);
+                main.resized();
+                const auto where = " @" + juce::String (width);
+                for (const auto* text : { "보컬리버브", "룸 리버브 (짧게)", "진행자 마이크 (SM7B)" })
+                {
+                    const auto labels = labelsWithText (main, ko (text));
+                    expect (! labels.empty(), ko (text) + where);
+                    for (auto* label : labels)
+                        expect (drawsWhole (*label), ko (text) + where + " " + label->getBounds().toString());
+                }
+                for (auto* label : labelsWithText (main, ko ("보컬리버브")))
+                    expectEquals (drawnLines (*label), 1, ko ("보컬리버브") + where);   // one word: never broken inside
+            }
         }
 
         beginTest ("the chain drawer at 1440 and 1280: long plugin names and a missing plugin's '(없음)' read in full");
@@ -155,7 +177,12 @@ public:
                     const auto labels = labelsWithText (*drawers.front(), plugin + ko (" (없음)"));
                     expectEquals ((int) labels.size(), 1, plugin + where);
                     for (auto* label : labels)
+                    {
                         expect (drawsWhole (*label), plugin + where + " " + label->getBounds().toString());
+                        // the row takes the mouse, so the whole name is the row's tip (the name's own never showed)
+                        auto* row = dynamic_cast<juce::SettableTooltipClient*> (label->getParentComponent());
+                        expect (row != nullptr && row->getTooltip() == label->getText(), plugin + where);
+                    }
                 }
             }
         }
@@ -177,6 +204,8 @@ public:
                             status = label;
 
             expect (status != nullptr, "the status line of a build without a backup server");
+            if (status != nullptr && status->getParentComponent() != nullptr)
+                expectGreaterOrEqual (status->getParentComponent()->getWidth(), 900);   // 820 cut a common '세션_PC'
             if (status != nullptr)
             {
                 expectGreaterOrEqual (status->getHeight(), 40);

@@ -215,7 +215,9 @@ public:
                     // mockup has them (the fader 2 px down in the taller row)
                     rect (child, wide ? juce::Rectangle<int> { 783, 38, 335, 34 }
                                       : narrow ? juce::Rectangle<int> { 14, 422, 392, 34 } : juce::Rectangle<int> { 14, 186, 372, 34 });
-                    rect (childOfType<juce::Slider> (*child), wide ? juce::Rectangle<int> { 101, 2, 100, 30 }   // the row keeps a 100 px fader: the name gives 1 px
+                    // the wide layout lets a long name take its fader down to 84 px (0.18.1): here the name keeps its 1 px
+                    // and the fader is 99 (it was the name that gave the 1 px for a 100 px fader)
+                    rect (childOfType<juce::Slider> (*child), wide ? juce::Rectangle<int> { 102, 2, 99, 30 }
                                                                        : juce::Rectangle<int> { 102, 2, narrow ? 156 : 136, 30 });
                 }
             if (wide)   // the direct-output pair box: the rendered pair text (up to '31-32') must fit, not just the bounds

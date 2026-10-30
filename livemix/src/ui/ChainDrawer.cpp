@@ -275,7 +275,7 @@ void ChainDrawer::FooterButton::paintButton (juce::Graphics& g, bool highlighted
 }
 
 /** One plugin in the list. Dragging its number reorders the chain (the row follows the mouse). */
-struct ChainDrawer::Row : public juce::Component
+struct ChainDrawer::Row : public juce::Component, public juce::SettableTooltipClient
 {
     Row (ChainDrawer& o, int idx) : owner (o), index (idx)
     {
@@ -342,7 +342,7 @@ struct ChainDrawer::Row : public juce::Component
         number.setText (juce::String (index + 1), juce::dontSendNotification);
         const bool missing = slot.plugin == nullptr;
         name.setText (missing ? slot.state.name + ko (" (없음)") : slot.plugin->getName(), juce::dontSendNotification);
-        name.setTooltip (name.getText());   // a narrow drawer cuts the name short
+        setTooltip (name.getText());   // the row takes the mouse (the name lets it through): the tip is the row's (10/30)
         bypassed = slot.bypassed.load() || missing;
         name.setColour (juce::Label::textColourId, bypassed ? Palette::dimText : Palette::text);
         power.setToggleState (! bypassed, juce::dontSendNotification);

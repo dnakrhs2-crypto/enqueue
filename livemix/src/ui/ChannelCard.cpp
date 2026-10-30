@@ -84,8 +84,10 @@ struct ChannelCard::SendRow : public juce::Component
         value.setBounds (r.removeFromRight (labelWidthForText (value, "100%")));
         r.removeFromRight (6);
         // Even a 300 px FX column keeps a 100 px fader; the name gives up room first - except while its editor is
-        // open, when typing needs the room and the fader may shrink for that moment (review finding, 0.5.4).
-        const int faderReserve = editingName ? 0 : 100;
+        // open, when typing needs the room and the fader may shrink for that moment (review finding, 0.5.4). In the
+        // wide layout a long name may take the fader down to 84 px, what that layout's least width was planned with
+        // (ChannelCard.h wideMinWidth): a 1440 window's name gets 72 px, not 56 - '보컬리버브' on one line (10/30).
+        const int faderReserve = editingName ? 0 : owner.layout == CardLayout::wide ? 84 : 100;
         const auto nameArea = r.removeFromLeft (juce::jmin (nameWidth, juce::jmax (0, r.getWidth() - 6 - faderReserve)));
         fxName.setBounds (nameArea.getX(), full.getY(), nameArea.getWidth(), full.getHeight());
         r.removeFromLeft (6);
@@ -148,6 +150,7 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     addAndMakeVisible (number);
 
     name.onRenamed = [this] (const juce::String& text) { document.renameChannel (channelId, text); };
+    name.setTwoLineFont (juce::Font (juce::FontOptions (pt (13.0f), juce::Font::bold)));   // '진행자 마이크 (SM7B)': smaller, then two lines
     addAndMakeVisible (name);
 
     menuButton.setWantsKeyboardFocus (false);
