@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <atomic>
+#include <utility>
 
 namespace gocue::livemix
 {
@@ -1156,6 +1157,103 @@ juce::File MainComponent::defaultSessionFolder() const
     auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("LiveMix");
     folder.createDirectory();
     return folder;
+}
+
+void MainComponent::askSaveBeforeUpdate (std::function<void (bool)> reply)
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    if (updateSavePending)
+    {
+        if (updateSaveDialog != nullptr)
+            updateSaveDialog->toFront (true);
+        reply (false);
+        return;
+    }
+
+    discardForUpdate = false;
+    if (isUploadingBackup())
+    {
+        reply (false);
+        return;
+    }
+
+    document.pollPluginEdits();
+    std::optional<MixSession> captured;
+    document.checkPluginStates (&captured);
+    if (! document.isDirty())
+    {
+        reply (true);
+        return;
+    }
+
+    // The session may be hidden in the tray or minimised when WinSparkle asks.
+    if (auto* window = dynamic_cast<juce::ResizableWindow*> (getTopLevelComponent()))
+    {
+        window->setVisible (true);
+        window->setMinimised (false);
+        window->toFront (true);
+    }
+
+    const auto message = document.hasFile()
+        ? "\"" + document.getDisplayName() + "\"" + ko ("에 저장하지 않은 변경이 있습니다. 저장하시겠습니까?")
+        : ko ("이 세션은 아직 파일로 저장되지 않았습니다. 저장하시겠습니까?");
+    auto* alert = new juce::AlertWindow (ko ("업데이트 설치"),
+        message + ko ("\n\n예·아니오 어느 쪽을 눌러도 LiveMix를 닫고 업데이트를 설치합니다."),
+        juce::MessageBoxIconType::QuestionIcon, this);
+    alert->addButton (ko ("예"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("아니오"), 2);
+    alert->setVisible (true);
+    updateSaveDialog = alert;
+    updateSavePending = true;
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    auto finish = [safeThis, reply = std::move (reply)] (bool proceed)
+    {
+        if (safeThis != nullptr)
+            safeThis->updateSavePending = false;
+        reply (safeThis != nullptr && proceed);
+    };
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, finish, captured = std::move (captured)] (int result)
+    {
+        if (safeThis == nullptr)
+        {
+            finish (false);
+            return;
+        }
+
+        safeThis->updateSaveDialog = nullptr;
+        if (result != 1)
+        {
+            safeThis->discardForUpdate = result == 2;
+            finish (result == 2);
+            return;
+        }
+
+        if (! safeThis->document.hasFile())
+        {
+            safeThis->saveSessionAs (finish);
+            return;
+        }
+
+        const auto saved = safeThis->document.saveIfPossible (captured ? &*captured : nullptr);
+        if (saved.wasOk())
+        {
+            safeThis->setSaveError ({});
+            safeThis->topBar.refresh();
+        }
+        else
+            safeThis->setSaveError (saved.getErrorMessage());
+        finish (saved.wasOk());
+    }), true);
+    alert->toFront (true);
+}
+
+void MainComponent::applyUpdateDecisionBeforeQuit()
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    // A failed installer launch must leave the ordinary save/quit path intact.
+    if (std::exchange (discardForUpdate, false))
+        document.discardUnsavedChanges();
 }
 
 void MainComponent::withSessionSecured (std::function<void()> action)

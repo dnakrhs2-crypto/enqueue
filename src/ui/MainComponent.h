@@ -87,6 +87,9 @@ public:
     /** Replacing the whole project while cues play is asked about first (a double-clicked file must not end a
         running show by accident), then confirmDiscardChangesThen() runs 'action'. */
     void confirmReplaceProjectThen (std::function<void()> action, const juce::String& question = {});
+    /** Message thread: ask once before the installer runs; discarding waits for its shutdown request. */
+    void askSaveBeforeUpdate (std::function<void (bool proceed)> reply);
+    void applyUpdateDecisionBeforeQuit();
     /** Nothing plays and show mode is off: the moment for anything that may put a window up (update checks). */
     bool isIdleForInterruptions() const noexcept
     {
@@ -101,7 +104,7 @@ public:
     /** Fires the "start on close" cue (if configured) and runs 'then' once it has finished (or after 2 minutes). */
     void fireCloseCueThen (std::function<void()> then);
 
-    /** Thread-safe snapshot of the dirty flag (the updater asks from a background thread). */
+    /** Thread-safe snapshot of the dirty flag. */
     bool hasUnsavedChanges() const noexcept { return unsavedChanges.load (std::memory_order_relaxed); }
 
     std::function<void (const juce::String& title)> onWindowTitleChanged;
@@ -277,6 +280,8 @@ private:
     juce::Uuid closeCueId = juce::Uuid::null();
     juce::Uuid autoLoadedId = juce::Uuid::null();   // the standby cue we loaded automatically (dropped when the playhead moves)
     juce::Component::SafePointer<juce::AlertWindow> discardDialog;
+    juce::Component::SafePointer<juce::AlertWindow> updateSaveDialog;
+    bool updateSavePending = false, discardForUpdate = false;
     std::unique_ptr<juce::AlertWindow> reopenDialog;
     std::optional<juce::String> notifiedFailedSession;
 

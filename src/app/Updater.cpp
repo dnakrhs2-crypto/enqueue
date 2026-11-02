@@ -51,6 +51,38 @@ juce::String Updater::getAppcastUrl()
     return GOCUE_APPCAST_URL;
 }
 
+bool Updater::askOnMessageThread (std::function<void (std::function<void (bool)> reply)> question)
+{
+    struct Answer
+    {
+        juce::WaitableEvent ready;
+        bool proceed = false;
+    };
+    auto answer = std::make_shared<Answer>();
+    auto ask = [answer, question = std::move (question)]
+    {
+        question ([answer] (bool proceed)
+        {
+            answer->proceed = proceed;
+            answer->ready.signal();
+        });
+    };
+
+    if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        ask();
+        const bool answered = answer->ready.wait (0);
+        jassert (answered);
+        return answered && answer->proceed;
+    }
+
+    if (! juce::MessageManager::callAsync (std::move (ask)))
+        return false;
+
+    answer->ready.wait();
+    return answer->proceed;
+}
+
 void Updater::initialise (const juce::String& companyName, const juce::String& appName,
                           const juce::String& version, Callbacks callbacks, const juce::String& registryPath)
 {

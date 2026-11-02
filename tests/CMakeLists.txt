@@ -41,6 +41,7 @@ target_sources(EnqueueTests PRIVATE
     TestMain.cpp
     AppVersionTests.cpp
     StartupAnnouncementTests.cpp
+    UpdateSavePromptTests.cpp
     ManualWindowTests.cpp
     AutoLevelTests.cpp
     AutoLevelRenderTests.cpp

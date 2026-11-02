@@ -24,6 +24,7 @@
 #include "ui/WorkspaceSettingsDialog.h"
 
 #include <set>
+#include <utility>
 
 namespace gocue
 {
@@ -3258,6 +3259,84 @@ void MainComponent::confirmReplaceProjectThen (std::function<void()> action, con
                                       if (safeThis != nullptr && result == 1)
                                           safeThis->confirmDiscardChangesThen (action);
                                   });
+}
+
+void MainComponent::askSaveBeforeUpdate (std::function<void (bool)> reply)
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    if (updateSavePending)
+    {
+        if (updateSaveDialog != nullptr)
+            updateSaveDialog->toFront (true);
+        reply (false);
+        return;
+    }
+
+    discardForUpdate = false;
+    if (! isIdleForInterruptions())
+    {
+        reply (false);
+        return;
+    }
+
+    table.finishEditing();
+    inspector.finishEditing();
+    if (! document.isDirty())
+    {
+        reply (true);
+        return;
+    }
+
+    if (auto* window = dynamic_cast<juce::ResizableWindow*> (getTopLevelComponent()))
+    {
+        window->setVisible (true);
+        window->setMinimised (false);
+        window->toFront (true);
+    }
+
+    auto* alert = new juce::AlertWindow (ko ("업데이트 설치"),
+        "\"" + document.getDisplayName() + "\"" + ko ("에 저장하지 않은 변경 사항이 있습니다. 저장하시겠습니까?\n\n예·아니오 어느 쪽을 눌러도 Enqueue를 닫고 업데이트를 설치합니다."),
+        juce::MessageBoxIconType::QuestionIcon, this);
+    alert->addButton (ko ("예"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (ko ("아니오"), 2);
+    alert->setVisible (true);
+    updateSaveDialog = alert;
+    updateSavePending = true;
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    auto finish = [safeThis, reply = std::move (reply)] (bool proceed)
+    {
+        if (safeThis != nullptr)
+            safeThis->updateSavePending = false;
+        reply (safeThis != nullptr && proceed);
+    };
+    ShortcutRouter::watchWindow (alert);
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, finish] (int result)
+    {
+        if (safeThis == nullptr)
+        {
+            finish (false);
+            return;
+        }
+
+        safeThis->updateSaveDialog = nullptr;
+        if (result == 1)
+            safeThis->saveProject (false, finish);
+        else
+        {
+            safeThis->discardForUpdate = result == 2;
+            finish (result == 2);
+        }
+    }), true);
+    alert->toFront (true);
+}
+
+void MainComponent::applyUpdateDecisionBeforeQuit()
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    // Only the installer's shutdown request consumes this, never a manual close.
+    if (std::exchange (discardForUpdate, false))
+        document.markClean();
 }
 
 void MainComponent::confirmDiscardChangesThen (std::function<void()> action)

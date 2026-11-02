@@ -141,14 +141,20 @@ public:
         Updater::Callbacks updaterCallbacks;
         updaterCallbacks.canShutdown = [this]
         {
-            // the installer must never close a running show or unsaved work
-            return mainWindow == nullptr
-                || (! mainWindow->getMainComponent().hasUnsavedChanges() && mainWindow->getMainComponent().isIdleForInterruptions());
+            return Updater::askOnMessageThread ([this] (auto reply)
+            {
+                if (mainWindow == nullptr)
+                    reply (true);
+                else
+                    mainWindow->getMainComponent().askSaveBeforeUpdate (std::move (reply));
+            });
         };
         updaterCallbacks.requestShutdown = [this]
         {
             juce::MessageManager::callAsync ([this]
             {
+                if (mainWindow != nullptr)
+                    mainWindow->getMainComponent().applyUpdateDecisionBeforeQuit();
                 if (mainWindow != nullptr && settings != nullptr)
                     settings->setReopenProjectAfterUpdate (mainWindow->getMainComponent().getProjectFile());   // back after the update
 

@@ -16,7 +16,7 @@ class Updater
 public:
     struct Callbacks
     {
-        /** May the app close right now (no unsaved work)? Called from a WinSparkle thread. */
+        /** May the app close after securing unsaved work? Called from a WinSparkle thread. */
         std::function<bool()> canShutdown;
         /** Close the app so the installer can run. Called from a WinSparkle thread. */
         std::function<void()> requestShutdown;
@@ -24,6 +24,10 @@ public:
 
     static bool isAvailable();
     static juce::String getAppcastUrl();
+
+    /** Runs question on the message thread and waits for its single reply on the calling WinSparkle thread.
+        A message-thread caller runs inline and must reply synchronously; it cannot wait on its own UI. */
+    static bool askOnMessageThread (std::function<void (std::function<void (bool)> reply)> question);
 
     /** Call once the main window is visible. Starts the automatic (daily) background check. */
     static void initialise (const juce::String& companyName, const juce::String& appName,

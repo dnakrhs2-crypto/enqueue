@@ -264,14 +264,20 @@ public:
         Updater::Callbacks callbacks;
         callbacks.canShutdown = [this]
         {
-            // the installer must not close unsaved work or cut a backup upload
-            return document == nullptr
-                || (! document->isDirty() && (mainWindow == nullptr || ! mainWindow->getMainComponent().isUploadingBackup()));
+            return Updater::askOnMessageThread ([this] (auto reply)
+            {
+                if (mainWindow == nullptr)
+                    reply (document == nullptr || ! document->isDirty());
+                else
+                    mainWindow->getMainComponent().askSaveBeforeUpdate (std::move (reply));
+            });
         };
         callbacks.requestShutdown = [this]
         {
             juce::MessageManager::callAsync ([this]
             {
+                if (mainWindow != nullptr)
+                    mainWindow->getMainComponent().applyUpdateDecisionBeforeQuit();
                 if (auto* app = juce::JUCEApplication::getInstance())
                     app->systemRequestedQuit();
             });

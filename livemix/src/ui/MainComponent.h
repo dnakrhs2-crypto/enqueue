@@ -65,6 +65,9 @@ public:
     /** Runs 'action' once the open session is safe to leave: a dirty session with a file is saved first (a failed save
         asks whether to go on without it), a dirty session without a file asks to save it, drop it, or stay. */
     void withSessionSecured (std::function<void()> action);
+    /** Message thread: ask once before the installer runs; discarding waits for its shutdown request. */
+    void askSaveBeforeUpdate (std::function<void (bool proceed)> reply);
+    void applyUpdateDecisionBeforeQuit();
     /** A backup job (an upload, a listing, a download) is running: a quit would cut it. */
     bool isUploadingBackup() const noexcept { return backup.isBusy(); }
     /** Safe mode (Shift / --safe-mode): a session's device is not opened and plugins are not loaded. */
@@ -244,6 +247,8 @@ private:
     juce::String obsInstallNote;
     bool obsInstallError = false;
     std::unique_ptr<juce::FileChooser> chooser;
+    juce::Component::SafePointer<juce::AlertWindow> updateSaveDialog;
+    bool updateSavePending = false, discardForUpdate = false;
     // LiveMix has no app-wide TooltipWindow: each window owns one (it shows only its own window's tips), so every
     // setTooltip() of the main window - top bar, cards, drawers - shows through this
     juce::TooltipWindow tooltips { this, 700 };
