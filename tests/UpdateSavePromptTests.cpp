@@ -208,7 +208,7 @@ private:
             auto reply = ask (*f.main);
             expectEquals (reply->calls, 0);
             checkPrompt ("\"" + f.document().getDisplayName() + "\""
-                + ko ("에 저장하지 않은 변경 사항이 있습니다. 저장하시겠습니까?\n\n예·아니오 어느 쪽을 눌러도 Enqueue를 닫고 업데이트를 설치합니다."));
+                + ko ("에 저장하지 않은 변경 사항이 있습니다. 저장하시겠습니까?"));
             auto* original = currentAlert();
             checkReply (ask (*f.main), false);
             expect (currentAlert() == original);
@@ -348,7 +348,7 @@ private:
             f.document.setSessionName (ko ("저장하지 않은 세션"));
             auto reply = ask (*f.main);
             expectEquals (reply->calls, 0);
-            checkPrompt (ko ("이 세션은 아직 파일로 저장되지 않았습니다. 저장하시겠습니까?\n\n예·아니오 어느 쪽을 눌러도 LiveMix를 닫고 업데이트를 설치합니다."));
+            checkPrompt (ko ("이 세션은 아직 파일로 저장되지 않았습니다. 저장하시겠습니까?"));
             auto* original = currentAlert();
             checkReply (ask (*f.main), false);
             expect (currentAlert() == original);
@@ -404,7 +404,7 @@ private:
             checkReply (reply, false);
         }
 
-        beginTest ("LiveMix: Yes captures silent plugin edits, reuses the capture and rewrites the temporary session");
+        beginTest ("LiveMix: Yes rereads silent plugin edits and rewrites the temporary session");
         {
             LiveMixFixture f;
             auto plugin = std::make_unique<TestGainPlugin> (1.0f);
@@ -418,12 +418,41 @@ private:
             auto reply = ask (*f.main);
             expect (f.document.isDirty());
             checkPrompt ("\"" + f.document.getDisplayName() + "\""
-                + ko ("에 저장하지 않은 변경이 있습니다. 저장하시겠습니까?\n\n예·아니오 어느 쪽을 눌러도 LiveMix를 닫고 업데이트를 설치합니다."));
+                + ko ("에 저장하지 않은 변경이 있습니다. 저장하시겠습니까?"));
             dismiss (1);
             checkReply (reply, true);
             expect (! f.document.isDirty());
-            expectEquals (gain.stateReads, reads + 1);
+            expectEquals (gain.stateReads, reads + 2);
             expect (f.file.loadFileAsString() != original);
+        }
+
+        beginTest ("LiveMix: Yes saves plugin edits made while the update question is open");
+        {
+            LiveMixFixture f;
+            auto plugin = std::make_unique<TestGainPlugin> (1.0f);
+            auto& gain = *plugin;
+            f.engine.getMasterChain().addPlugin (std::move (plugin));
+            expect (f.document.save (f.file).wasOk());
+            f.document.setSessionName (ko ("업데이트 전 편집"));
+            auto reply = ask (*f.main);
+            expect (currentAlert() != nullptr);
+            gain.gain = 0.375f;
+            expect (! f.document.pollPluginEdits()); // no notification to invalidate the pre-dialog capture
+            dismiss (1);
+            checkReply (reply, true);
+            expect (! f.document.isDirty());
+
+            livemix::MixSession saved;
+            expect (livemix::MixSession::load (f.file, saved).wasOk());
+            expectEquals ((int) saved.master.chain.size(), 1);
+            if (! saved.master.chain.empty())
+            {
+                juce::MemoryOutputStream state;
+                expect (juce::Base64::convertFromBase64 (state, saved.master.chain[0].stateBase64));
+                TestGainPlugin restored (0.0f);
+                restored.setStateInformation (state.getData(), (int) state.getDataSize());
+                expectWithinAbsoluteError (restored.gain, 0.375f, 0.000001f);
+            }
         }
 
         for (int cancel : { 0, 1, 2 })

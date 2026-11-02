@@ -1178,8 +1178,7 @@ void MainComponent::askSaveBeforeUpdate (std::function<void (bool)> reply)
     }
 
     document.pollPluginEdits();
-    std::optional<MixSession> captured;
-    document.checkPluginStates (&captured);
+    document.checkPluginStates();
     if (! document.isDirty())
     {
         reply (true);
@@ -1197,8 +1196,7 @@ void MainComponent::askSaveBeforeUpdate (std::function<void (bool)> reply)
     const auto message = document.hasFile()
         ? "\"" + document.getDisplayName() + "\"" + ko ("에 저장하지 않은 변경이 있습니다. 저장하시겠습니까?")
         : ko ("이 세션은 아직 파일로 저장되지 않았습니다. 저장하시겠습니까?");
-    auto* alert = new juce::AlertWindow (ko ("업데이트 설치"),
-        message + ko ("\n\n예·아니오 어느 쪽을 눌러도 LiveMix를 닫고 업데이트를 설치합니다."),
+    auto* alert = new juce::AlertWindow (ko ("업데이트 설치"), message,
         juce::MessageBoxIconType::QuestionIcon, this);
     alert->addButton (ko ("예"), 1, juce::KeyPress (juce::KeyPress::returnKey));
     alert->addButton (ko ("아니오"), 2);
@@ -1213,7 +1211,7 @@ void MainComponent::askSaveBeforeUpdate (std::function<void (bool)> reply)
             safeThis->updateSavePending = false;
         reply (safeThis != nullptr && proceed);
     };
-    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, finish, captured = std::move (captured)] (int result)
+    alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, finish] (int result)
     {
         if (safeThis == nullptr)
         {
@@ -1235,7 +1233,7 @@ void MainComponent::askSaveBeforeUpdate (std::function<void (bool)> reply)
             return;
         }
 
-        const auto saved = safeThis->document.saveIfPossible (captured ? &*captured : nullptr);
+        const auto saved = safeThis->document.saveIfPossible();
         if (saved.wasOk())
         {
             safeThis->setSaveError ({});

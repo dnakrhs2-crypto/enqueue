@@ -3295,7 +3295,7 @@ void MainComponent::askSaveBeforeUpdate (std::function<void (bool)> reply)
     }
 
     auto* alert = new juce::AlertWindow (ko ("업데이트 설치"),
-        "\"" + document.getDisplayName() + "\"" + ko ("에 저장하지 않은 변경 사항이 있습니다. 저장하시겠습니까?\n\n예·아니오 어느 쪽을 눌러도 Enqueue를 닫고 업데이트를 설치합니다."),
+        "\"" + document.getDisplayName() + "\"" + ko ("에 저장하지 않은 변경 사항이 있습니다. 저장하시겠습니까?"),
         juce::MessageBoxIconType::QuestionIcon, this);
     alert->addButton (ko ("예"), 1, juce::KeyPress (juce::KeyPress::returnKey));
     alert->addButton (ko ("아니오"), 2);
