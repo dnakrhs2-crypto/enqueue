@@ -63,7 +63,10 @@ class PluginManagerWindow::Content : public juce::Component,
                                      private juce::Timer
 {
 public:
-    Content (PluginHost& h, AppSettings& s) : host (h), settings (s), model (*this)
+    Content (PluginHost& h, AppSettings& s, const PluginRuntimeHint::Options& runtimeOptions)
+        : host (h), settings (s), model (*this),
+          runtimeHint ({ Palette::missing, Palette::text, Palette::dimText, Palette::accent, Palette::accentInk,
+                         Palette::font (13.5f), Palette::font (13.5f, true), Palette::fieldRadius, false }, runtimeOptions)
     {
         styleCaption (caption, ko ("VST3 플러그인"), 16.0f, true);
         addAndMakeVisible (caption);
@@ -118,7 +121,9 @@ public:
 
         PluginScanCoordinator::Options scanOptions;
         scanOptions.executable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+        if (runtimeOptions.scanExecutable != juce::File()) scanOptions.executable = runtimeOptions.scanExecutable;
         scanOptions.logFile = settings.getPluginScanLogFile();
+        scanOptions.runtimeCheck = runtimeOptions.runtimeCheck;
         auto isolatedScanner = std::make_unique<PluginScanCoordinator> (scanOptions);
         scanCoordinator = isolatedScanner.get();
         host.getKnownPlugins().setCustomScanner (std::move (isolatedScanner));
@@ -131,10 +136,13 @@ public:
 
         styleCaption (status, "", 13.5f);
         addAndMakeVisible (status);
+        addChildComponent (runtimeHint);
+        runtimeHint.onChanged = [this] { resized(); };
 
         host.getKnownPlugins().addChangeListener (this);
         refreshPlugins();
         setSize (900, 600);
+        runtimeHint.checkBlacklisted (scanCoordinator->getRuntimeCheckFiles (host.getKnownPlugins().getBlacklistedFiles()));
     }
 
     ~Content() override
@@ -159,6 +167,14 @@ public:
 
         status.setBounds (area.removeFromBottom (24));
         area.removeFromBottom (6);
+
+        if (runtimeHint.isVisible())
+        {
+            const int height = juce::jmin (runtimeHint.preferredHeight (area.getWidth()),
+                                           juce::jmax (80, area.getHeight() - 112));
+            runtimeHint.setBounds (area.removeFromBottom (height));
+            area.removeFromBottom (10);
+        }
 
         auto buttons = area.removeFromBottom (32);
         scanButton.setBounds (buttons.removeFromLeft (120));
@@ -282,6 +298,7 @@ private:
         setStatus (skipped.isNotEmpty() ? skipped : ko ("스캔 끝: 플러그인 ") + juce::String (all.size()) + ko ("개"),
                    skipped.isNotEmpty());
         status.setTooltip (skipped);
+        runtimeHint.showResults (scanCoordinator->getRuntimeResults());
     }
 
     void refreshPlugins()
@@ -368,6 +385,7 @@ private:
             return;
         }
 
+        runtimeHint.clear();
         scanCoordinator->prepareForScan (host.getKnownPlugins(), settings.getDeadMansPedalFile());
         status.setTooltip ({});
         setStatus (ko ("VST3 플러그인을 찾는 중... (폴더를 고르는 창이 뜹니다)"), false);
@@ -401,8 +419,10 @@ private:
                 return;
 
             auto& list = safe->host.getKnownPlugins();
+            safe->runtimeHint.clear();
             list.clear();
             list.clearBlacklistedFiles();
+            safe->scanCoordinator->clearRuntimeMissingFiles();
             safe->settings.getDeadMansPedalFile().deleteFile();
             safe->status.setTooltip ({});
             safe->setStatus (ko ("플러그인 목록을 비웠습니다 - [VST3 스캔]으로 다시 찾으세요."), false);
@@ -427,6 +447,7 @@ private:
     juce::Array<juce::PluginDescription> all, shown;   // every known effect plugin; the ones the search shows (the table's rows)
     Model model;
     std::unique_ptr<PluginScanListComponent> scanner;
+    PluginRuntimeHint runtimeHint;
 
     juce::Label caption, note, count, status;
     juce::TextEditor search;
@@ -436,12 +457,12 @@ private:
 };
 
 //==============================================================================
-PluginManagerWindow::PluginManagerWindow (PluginHost& host, AppSettings& settings)
+PluginManagerWindow::PluginManagerWindow (PluginHost& host, AppSettings& settings, PluginRuntimeHint::Options runtimeOptions)
     : DocumentWindow (ko ("플러그인 관리"), Palette::background, DocumentWindow::allButtons)
 {
     ShortcutRouter::setWindowScope (*this, ShortcutKeyContext::Window::auxiliary);
     setUsingNativeTitleBar (true);
-    auto* c = new Content (host, settings);
+    auto* c = new Content (host, settings, runtimeOptions);
     content = c;
     setContentOwned (c, true);
     setResizable (true, false);

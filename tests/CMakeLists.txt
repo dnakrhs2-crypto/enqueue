@@ -130,6 +130,8 @@ target_sources(EnqueueTests PRIVATE
     LiveMixObsInstallerTests.cpp
     LiveMixShellPluginTests.cpp
     EnqueuePluginScanTests.cpp
+    PluginRuntimeCheckTests.cpp
+    PluginRuntimeHintTests.cpp
     LiveMixRealPluginScanTests.cpp
     WebDavBackupTests.cpp
     MixDocumentTests.cpp

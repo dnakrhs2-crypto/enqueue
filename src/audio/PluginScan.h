@@ -1,7 +1,9 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "PluginRuntimeCheck.h"
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <vector>
 
@@ -16,6 +18,7 @@ public:
         juce::File executable;
         juce::File logFile;
         int timeoutMs = 60 * 60 * 1000;   // Waves 17's WaveShell (718 plugins) took about 6 minutes on 2026-09-30; the scan window cancels
+        PluginRuntimeCheck::Options runtimeCheck;
     };
     enum class Outcome { completed, crashed, timedOut, cancelled, workerFailed };
     struct Result
@@ -26,6 +29,7 @@ public:
         juce::uint32 exitCode = 0, workerPid = 0;
         juce::int64 elapsedMs = 0;
         bool onMessageThread = false;
+        std::optional<PluginRuntimeResult> runtime;
     };
 
     explicit PluginScanCoordinator (Options);
@@ -37,12 +41,18 @@ public:
     /** Before constructing the directory scanner: a stale crash marker can re-blacklist files. */
     void prepareForScan (juce::KnownPluginList&, const juce::File& crashMarker = {});
     std::vector<Result> getResults() const;
+    std::vector<PluginRuntimeResult> getRuntimeResults() const;
+    /** Paths are kept separately from the blacklist, including completed scans with zero types. */
+    juce::File getRuntimeMissingFile() const;
+    juce::StringArray getRuntimeCheckFiles (const juce::StringArray& blacklistedFiles) const;
+    void clearRuntimeMissingFiles();
     juce::String getSkippedMessage() const;
 
 private:
     class Connection;
     void record (const Result&);
     Options options;
+    PluginRuntimeCheck runtimeCheck;
     std::unique_ptr<Connection> connection;
     mutable std::mutex resultsMutex;
     std::vector<Result> results;

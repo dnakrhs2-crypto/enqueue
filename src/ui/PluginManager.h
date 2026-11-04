@@ -2,6 +2,7 @@
 
 #include "app/AppSettings.h"
 #include "audio/PluginHost.h"
+#include "ui/PluginRuntimeHint.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -15,7 +16,7 @@ namespace gocue
 class PluginManagerWindow : public juce::DocumentWindow
 {
 public:
-    PluginManagerWindow (PluginHost& host, AppSettings& settings);
+    PluginManagerWindow (PluginHost& host, AppSettings& settings, PluginRuntimeHint::Options = {});
     ~PluginManagerWindow() override;
 
     /** Brings the window up; typing starts the search at once. */
@@ -28,6 +29,7 @@ public:
 private:
     class Content;
     Content* content = nullptr;
+    juce::TooltipWindow tooltips { this, 700 };
     bool fitting = false;   // UiScale::fitOnResized re-entrancy guard
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginManagerWindow)

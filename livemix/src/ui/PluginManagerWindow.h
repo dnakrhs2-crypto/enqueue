@@ -3,6 +3,7 @@
 #include "LiveMixSettings.h"
 #include "PluginPreset.h"
 #include "audio/PluginHost.h"
+#include "ui/PluginRuntimeHint.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -18,7 +19,8 @@ namespace gocue::livemix
 class PluginManagerWindow : public juce::DocumentWindow
 {
 public:
-    PluginManagerWindow (PluginHost& host, LiveMixSettings& settings, const juce::File& presetsFolder);
+    PluginManagerWindow (PluginHost& host, LiveMixSettings& settings, const juce::File& presetsFolder,
+                         PluginRuntimeHint::Options = {});
     ~PluginManagerWindow() override;
 
     void open();

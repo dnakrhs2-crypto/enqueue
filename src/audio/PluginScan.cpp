@@ -1,5 +1,6 @@
 #include "PluginScan.h"
 #include <condition_variable>
+#include <cstring>
 #include <windows.h>
 #include <werapi.h>
 
@@ -9,6 +10,26 @@ namespace
 {
     constexpr auto workerId = "plugin-scan-worker";
     constexpr auto workerPrefix = "--plugin-scan-worker:"; // JUCE appends the pipe name after ':'
+
+    juce::StringArray readRuntimeMissingFiles (const juce::File& file)
+    {
+        if (file == juce::File()) return {};
+        juce::FileInputStream input (file);
+        const auto size = input.getTotalLength();
+        // This is a short path list, not the rotating scan log. Ignore damaged/oversized data.
+        if (input.failedToOpen() || size <= 0 || size > 1024 * 1024) return {};
+        juce::MemoryBlock data ((size_t) size);
+        if (input.read (data.getData(), (int) size) != size) return {};
+        const auto* bytes = static_cast<const char*> (data.getData());
+        if (std::memchr (bytes, 0, (size_t) size) != nullptr
+            || ! juce::CharPointer_UTF8::isValidString (bytes, (int) size)) return {};
+        auto paths = juce::StringArray::fromLines (juce::String::fromUTF8 (bytes, (int) size));
+        paths.removeEmptyStrings();
+        for (const auto& path : paths)
+            if (! juce::File::isAbsolutePath (path) || path.containsChar ('\t')) return {};
+        paths.removeDuplicates (true);
+        return paths;
+    }
 
     juce::String outcomeText (const PluginScanCoordinator::Result& r)
     {
@@ -141,7 +162,7 @@ private:
     bool lost = false;
 };
 
-PluginScanCoordinator::PluginScanCoordinator (Options o) : options (std::move (o)) {}
+PluginScanCoordinator::PluginScanCoordinator (Options o) : options (std::move (o)), runtimeCheck (options.runtimeCheck) {}
 PluginScanCoordinator::~PluginScanCoordinator() = default;
 
 bool PluginScanCoordinator::findPluginTypesFor (juce::AudioPluginFormat& format,
@@ -158,6 +179,9 @@ bool PluginScanCoordinator::findPluginTypesFor (juce::AudioPluginFormat& format,
         if (connection != nullptr) result.workerPid = connection->pid;
         if (outcome != Outcome::completed) connection.reset();
         result.elapsedMs = (juce::int64) (juce::Time::getMillisecondCounterHiRes() - started);
+        if (outcome == Outcome::crashed || outcome == Outcome::timedOut
+            || (outcome == Outcome::completed && result.numTypes == 0))
+            result.runtime = runtimeCheck.check (file, result.format, [this] { return shouldExit() || cancelRequested; });
         record (result);
         // Cancellation must not permanently blacklist an innocent file.
         return outcome == Outcome::completed || outcome == Outcome::cancelled;
@@ -215,14 +239,40 @@ void PluginScanCoordinator::prepareForScan (juce::KnownPluginList& list, const j
 {
     cancelRequested = false;
     list.clearBlacklistedFiles();
+    clearRuntimeMissingFiles();
     if (crashMarker != juce::File()) crashMarker.deleteFile();
     const std::lock_guard<std::mutex> lock (resultsMutex);
     results.clear();
+    runtimeCheck = PluginRuntimeCheck (options.runtimeCheck);
 }
 std::vector<PluginScanCoordinator::Result> PluginScanCoordinator::getResults() const
 {
     const std::lock_guard<std::mutex> lock (resultsMutex);
     return results;
+}
+std::vector<PluginRuntimeResult> PluginScanCoordinator::getRuntimeResults() const
+{
+    std::vector<PluginRuntimeResult> diagnostics;
+    for (const auto& result : getResults())
+        if (result.runtime) diagnostics.push_back (*result.runtime);
+    return diagnostics;
+}
+juce::File PluginScanCoordinator::getRuntimeMissingFile() const
+{
+    return options.logFile == juce::File() ? juce::File()
+                                         : options.logFile.getSiblingFile ("plugin-scan-runtime-missing.txt");
+}
+juce::StringArray PluginScanCoordinator::getRuntimeCheckFiles (const juce::StringArray& blacklistedFiles) const
+{
+    auto files = blacklistedFiles;
+    files.addArray (readRuntimeMissingFiles (getRuntimeMissingFile()));
+    files.removeDuplicates (true);
+    return files;
+}
+void PluginScanCoordinator::clearRuntimeMissingFiles()
+{
+    const auto file = getRuntimeMissingFile();
+    if (file != juce::File()) file.deleteFile();
 }
 juce::String PluginScanCoordinator::getSkippedMessage() const
 {
@@ -247,6 +297,24 @@ void PluginScanCoordinator::record (const Result& result)
                     + result.file.replaceCharacters ("\r\n\t", "   ") + "\t" + outcomeText (result)
                     + "\t" + juce::String (result.elapsedMs) + " ms\n";
     options.logFile.appendText (line, false, false, "\n");
+    // Only a missing runtime adds a line: every attempted file keeps exactly one record otherwise.
+    if (result.runtime && ! result.runtime->packages.empty())
+    {
+        const auto stateFile = getRuntimeMissingFile();
+        auto files = readRuntimeMissingFiles (stateFile);
+        files.addIfNotAlreadyThere (result.file, true);
+        stateFile.replaceWithText (files.joinIntoString ("\n") + "\n", false, false, "\n");
+
+        juce::StringArray missing;
+        for (const auto& package : result.runtime->packages)
+            for (const auto& evidence : package.evidence)
+                missing.add (package.name + " (" + evidence.dll + juce::String::fromUTF8 (" ← ")
+                             + evidence.importedBy.getFullPathName().replaceCharacters ("\r\n\t", "   ") + ")");
+        const auto description = juce::String::fromUTF8 ("런타임 없음: ") + missing.joinIntoString ("; ");
+        options.logFile.appendText (juce::Time::getCurrentTime().toISO8601 (true) + "\t" + result.format + "\t"
+                                   + result.file.replaceCharacters ("\r\n\t", "   ") + "\t" + description + "\t"
+                                   + juce::String (result.runtime->elapsedMs) + " ms\n", false, false, "\n");
+    }
 }
 
 bool PluginScanWorker::isWorkerCommandLine (const juce::String& line)

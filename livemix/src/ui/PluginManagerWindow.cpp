@@ -342,8 +342,15 @@ class PluginManagerWindow::Content : public juce::Component,
                                      private juce::Timer
 {
 public:
-    Content (PluginManagerWindow& w, PluginHost& h, LiveMixSettings& s, juce::File folder)
-        : owner (w), host (h), settings (s), presetsFolder (std::move (folder)), pluginModel (*this), presetModel (*this)
+    Content (PluginManagerWindow& w, PluginHost& h, LiveMixSettings& s, juce::File folder,
+             const PluginRuntimeHint::Options& runtimeOptions)
+        : owner (w), host (h),
+          crashMarker (runtimeOptions.scanStateDirectory != juce::File()
+                       ? runtimeOptions.scanStateDirectory.getChildFile ("scan.crashed")
+                       : juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("LiveMix/scan.crashed")),
+          settings (s), presetsFolder (std::move (folder)), pluginModel (*this), presetModel (*this),
+          runtimeHint ({ Palette::danger, Palette::text, Palette::dimText, Palette::accent, juce::Colours::white,
+                         bodyFont (12.5f), bodyFont (13.0f).boldened(), Palette::controlRadius, true }, runtimeOptions)
     {
         styleCaption (pluginsCaption, ko ("플러그인"));
         addAndMakeVisible (pluginsCaption);
@@ -398,8 +405,12 @@ public:
 
         PluginScanCoordinator::Options scanOptions;
         scanOptions.executable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+        if (runtimeOptions.scanExecutable != juce::File()) scanOptions.executable = runtimeOptions.scanExecutable;
         scanOptions.logFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                                   .getChildFile ("LiveMix/logs/plugin-scan.log");
+        if (runtimeOptions.scanStateDirectory != juce::File())
+            scanOptions.logFile = runtimeOptions.scanStateDirectory.getChildFile ("logs/plugin-scan.log");
+        scanOptions.runtimeCheck = runtimeOptions.runtimeCheck;
         auto isolatedScanner = std::make_unique<PluginScanCoordinator> (scanOptions);
         scanCoordinator = isolatedScanner.get();
         host.getKnownPlugins().setCustomScanner (std::move (isolatedScanner));
@@ -437,10 +448,23 @@ public:
         statusLabel.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (statusLabel);
 
+        addChildComponent (runtimeHint);
+        runtimeHint.onChanged = [this] { resized(); };
+        presetsViewport.setViewedComponent (&presetsContent, false);
+        presetsViewport.setScrollBarsShown (true, false);
+        presetsViewport.setScrollBarThickness (8);
+        presetsViewport.setWantsKeyboardFocus (false);   // Tab goes from the plugin table straight to the preset table, as before
+        addAndMakeVisible (presetsViewport);
+        for (juce::Component* component : std::initializer_list<juce::Component*> { &presetsCaption, &presetsNote,
+                                           &presetTable, &newPresetButton, &renamePresetButton, &deletePresetButton,
+                                           &exportPresetButton, &importPresetButton, &openFolderButton })
+            presetsContent.addAndMakeVisible (component);
+
         host.getKnownPlugins().addChangeListener (this);
         refreshPlugins();
         refreshPresets();
         setSize (960, 760);
+        runtimeHint.checkBlacklisted (scanCoordinator->getRuntimeCheckFiles (host.getKnownPlugins().getBlacklistedFiles()));
     }
 
     ~Content() override
@@ -469,9 +493,34 @@ public:
         statusLabel.setBounds (bottom);
         area.removeFromBottom (6);
 
-        const int presetsH = juce::jmax (150, area.getHeight() * 2 / 5);
+        int hintHeight = 0;
+        int presetsH = juce::jmax (150, area.getHeight() * 2 / 5);
+        if (runtimeHint.isVisible())
+        {
+            // Reserve actual rows first, then the hint, then the scrollable preset section.
+            const int gapsAndButtons = 10 + 14 + 40;
+            const int minimumPresets = 64, minimumHint = 80;
+            const int rows = getHeight() >= 700 ? 6 : 3;
+            const int tableHeight = juce::jmin (pluginTable.getHeaderHeight() + pluginTable.getRowHeight() * rows
+                                                + 2 * pluginTable.getOutlineThickness(),
+                                               area.getHeight() - gapsAndButtons - minimumPresets - minimumHint);
+            const int remaining = area.getHeight() - gapsAndButtons - tableHeight;
+            hintHeight = juce::jmin (runtimeHint.preferredHeight (area.getWidth()), remaining - minimumPresets);
+            presetsH = juce::jlimit (minimumPresets, presetsH, remaining - hintHeight);
+        }
         auto presetsArea = area.removeFromBottom (presetsH);
         area.removeFromBottom (14);
+
+        presetsViewport.setBounds (presetsArea);
+        const int presetContentHeight = hintHeight > 0 ? juce::jmax (presetsH, presetsArea.getWidth() < 720 ? 194 : 156) : presetsH;
+        const int presetContentWidth = presetsArea.getWidth() - (presetContentHeight > presetsH ? presetsViewport.getScrollBarThickness() : 0);
+        presetsContent.setSize (presetContentWidth, presetContentHeight);
+        presetsArea = presetsContent.getLocalBounds();
+        if (hintHeight > 0)
+        {
+            runtimeHint.setBounds (area.removeFromBottom (hintHeight));
+            area.removeFromBottom (10);
+        }
 
         auto pluginButtons = area.removeFromBottom (32);
         scanVst3Button.setBounds (pluginButtons.removeFromLeft (100));
@@ -672,6 +721,7 @@ private:
                                        : ko ("스캔 끝: 플러그인 ") + juce::String (allTypes.size()) + ko ("개 (스캔 창에서 고른 폴더 기준)"),
                    skipped.isNotEmpty());
         statusLabel.setTooltip (skipped);
+        runtimeHint.showResults (scanCoordinator->getRuntimeResults());
     }
 
     void refreshPlugins()
@@ -771,6 +821,7 @@ private:
             return;
         }
 
+        runtimeHint.clear();
         scanCoordinator->prepareForScan (host.getKnownPlugins(), crashMarker);
         statusLabel.setTooltip ({});
         setStatus (formatLabel (formatName) + ko (" 플러그인을 찾는 중... (창이 뜹니다)"), false);
@@ -803,8 +854,10 @@ private:
                 return;
 
             auto& list = safe->host.getKnownPlugins();
+            safe->runtimeHint.clear();
             list.clear();
             list.clearBlacklistedFiles();
+            safe->scanCoordinator->clearRuntimeMissingFiles();
             safe->crashMarker.deleteFile();
             safe->statusLabel.setTooltip ({});
             safe->setStatus (ko ("플러그인 목록을 비웠습니다 - [VST3 스캔]으로 다시 찾으세요."), false);
@@ -1095,8 +1148,7 @@ private:
     PluginManagerWindow& owner;
     PluginHost& host;
     PluginScanCoordinator* scanCoordinator = nullptr; // owned by host's KnownPluginList
-    const juce::File crashMarker = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                                      .getChildFile ("LiveMix/scan.crashed");
+    const juce::File crashMarker;
     LiveMixSettings& settings;
     juce::File presetsFolder;
     juce::Array<juce::PluginDescription> allTypes, types;   // every known effect plugin; the ones the search shows (the table's rows)
@@ -1104,6 +1156,9 @@ private:
     PluginModel pluginModel;
     PresetModel presetModel;
     std::unique_ptr<PluginScanListComponent> scanner;
+    PluginRuntimeHint runtimeHint;
+    juce::Viewport presetsViewport;
+    juce::Component presetsContent;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Component::SafePointer<juce::DialogWindow> builderWindow;
 
@@ -1116,11 +1171,12 @@ private:
 };
 
 //==============================================================================
-PluginManagerWindow::PluginManagerWindow (PluginHost& host, LiveMixSettings& settings, const juce::File& presetsFolder)
+PluginManagerWindow::PluginManagerWindow (PluginHost& host, LiveMixSettings& settings, const juce::File& presetsFolder,
+                                         PluginRuntimeHint::Options runtimeOptions)
     : DocumentWindow (ko ("플러그인 관리"), Palette::background, DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar (true);
-    auto* c = new Content (*this, host, settings, presetsFolder);
+    auto* c = new Content (*this, host, settings, presetsFolder, runtimeOptions);
     content = c;
     setContentOwned (c, true);
     setResizable (true, false);
