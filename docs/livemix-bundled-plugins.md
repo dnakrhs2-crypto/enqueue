@@ -20,4 +20,6 @@ python tools/gplugins_stage.py --manifest C:/Users/claude/plugin_studio/build/in
 
 배포 도구는 구성품 목록과 잠금 파일의 id·버전·묶음·파일 수·총 크기가 다르거나, 파일 누락·크기 변경·SHA-256 변경·목록 밖 파일이 있으면 멈춘다. 설치기 컴파일도 `GPluginsDir` 또는 그 안의 `bundled_plugins.json`이 없으면 실패한다.
 
-0.18.x에서 `/SILENT /SP- /NORESTART /AUTOUPDATE=1`로 업데이트할 때 새 `gplugins`는 켜진다. [UsePreviousTasks](https://jrsoftware.org/ishelp/topic_setup_useprevioustasks.htm)는 기본값이 yes이고, [Inno Setup 원본의 CreateTaskButtons](https://github.com/jrsoftware/issrc/blob/main/Projects/Src/Setup.WizardForm.pas#L1422)는 먼저 기본 체크 상태를 만든 뒤 이전 Selected/Deselected Tasks에 있는 항목만 덮어쓴다. 새 항목은 양쪽에 없으므로 기본 체크가 유지된다. [SILENT](https://jrsoftware.org/ishelp/topic_setupcmdline.htm)는 작업 선택을 바꾸지 않는다. 실제 덮어 설치 확인은 별도로 진행한다.
+0.18.x에서 `/SILENT /SP- /NORESTART /AUTOUPDATE=1`로 업데이트할 때 새 `gplugins`는 켜진다. [UsePreviousTasks](https://jrsoftware.org/ishelp/topic_setup_useprevioustasks.htm)는 기본값이 yes이고, [Inno Setup 원본의 CreateTaskButtons](https://github.com/jrsoftware/issrc/blob/main/Projects/Src/Setup.WizardForm.pas#L1422)는 먼저 기본 체크 상태를 만든 뒤 이전 Selected/Deselected Tasks에 있는 항목만 덮어쓴다. 새 항목은 양쪽에 없으므로 기본 체크가 유지된다. [SILENT](https://jrsoftware.org/ishelp/topic_setupcmdline.htm)는 작업 선택을 바꾸지 않는다. 2026-11-11 실물 확인(0.19.0 시험판 설치 파일): 0.18.3 위에 이 인자로 덮어 설치하면 `gplugins`가 켜진 채 처리되어 파일 31개가 구성품과 같고 등록 명령이 0으로 끝나며, 항목을 끄고 설치한 뒤의 업데이트는 끈 선택을 유지한다.
+
+바깥 사본의 경로로 저장한 세션(다른 PC에서 저장한 세션 포함)은 든 사본으로 올라간다. 올라온 경로가 저장된 경로와 달라 변경으로 취급되므로, 옮겨진 플러그인과 마찬가지로 세션을 떠날 때의 저장에서 든 사본의 경로가 기록된다(파일이 있는 세션은 묻지 않고 저장된다). 2026-11-11 깔린 0.19.0에서 확인: 이 PC에 없는 바깥 경로 11개를 적은 세션이 평소 시작으로 모두 든 사본에서 올라왔다.
