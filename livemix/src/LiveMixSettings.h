@@ -92,6 +92,10 @@ public:
         on across every mic channel that has one. */
     juce::String getPluginGroupHotkey (int group) const;
     void setPluginGroupHotkey (int group, const juce::String& description);
+    /** The hotkey that opens / closes the plugin windows of plugin group 'group' (1..MixSession::maxPluginGroups):
+        the editors of that numbered group's members on every mic channel that has one. */
+    juce::String getPluginGroupWindowHotkey (int group) const;
+    void setPluginGroupWindowHotkey (int group, const juce::String& description);
     /** The ON/OFF hotkey of mic 'number' (1..MixSession::maxChannels) / FX 'number' (1..maxFx): it switches the
         track at that number in whichever session is open (see TrackHotkeys). */
     juce::String getMicOnHotkey (int number) const;

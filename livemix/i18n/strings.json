@@ -3756,6 +3756,36 @@
     "where": "livemix/src/ui/SettingsDialog.cpp:188"
   },
   {
+    "ko": "플러그인 그룹 화면 핫키는 그 번호의 그룹에 넣은 플러그인의 화면을 열고 닫습니다.",
+    "en": "Plugin group window hotkeys open or close the windows of the plugins in the numbered group.",
+    "ja": "プラグイングループ画面のホットキーは、その番号のグループに入れたプラグインの画面を開閉します。",
+    "where": "livemix/src/ui/SettingsDialog.cpp:204"
+  },
+  {
+    "ko": "플러그인 그룹 {0} 화면 열림",
+    "en": "Plugin group {0} windows opened",
+    "ja": "プラグイングループ{0}の画面を開きました",
+    "where": "livemix/src/ui/MainComponent.cpp"
+  },
+  {
+    "ko": "플러그인 그룹 {0} 화면 닫힘",
+    "en": "Plugin group {0} windows closed",
+    "ja": "プラグイングループ{0}の画面を閉じました",
+    "where": "livemix/src/ui/MainComponent.cpp"
+  },
+  {
+    "ko": "플러그인 그룹 {0}에 넣은 플러그인이 없습니다",
+    "en": "Plugin group {0} has no plugins",
+    "ja": "プラグイングループ{0}にプラグインがありません",
+    "where": "livemix/src/ui/MainComponent.cpp"
+  },
+  {
+    "ko": "플러그인 그룹 {0} 화면",
+    "en": "Plugin group {0} windows",
+    "ja": "プラグイングループ {0} 画面",
+    "where": "livemix/src/ui/SettingsDialog.cpp:226"
+  },
+  {
     "ko": "외부 제어 (Stream Deck)",
     "en": "External control (Stream Deck)",
     "ja": "外部コントロール (Stream Deck)",

@@ -8,6 +8,7 @@
 #include "app/Updater.h"
 
 #include <cmath>
+#include <algorithm>
 #include <atomic>
 #include <utility>
 
@@ -123,6 +124,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
 
     windows.onChainChanged = [this] (PluginChain&) { document.markDirty(); };
     windows.onWindowClosed = [this] (juce::AudioPluginInstance& plugin) { document.checkPluginState (plugin); };
+    windows.setRememberWindowPositions (true);
     document.onChainRuntimeChanged = [this] (PluginChain& chain)
     {
         if (chainDrawer.getChain() == &chain)
@@ -1736,8 +1738,12 @@ void MainComponent::registerHotkeys()
     setHotkey (fixedKeyFailures, allFxHotkeyId, settings.getFxAllMuteHotkey(), tr ("FX 전체 뮤트"));
 
     for (int group = 1; group <= MixSession::maxPluginGroups; ++group)
+    {
         setHotkey (fixedKeyFailures, firstPluginGroupHotkeyId + group - 1, settings.getPluginGroupHotkey (group),
                    trf ("플러그인 그룹 {0}", juce::String (group)));
+        setHotkey (fixedKeyFailures, firstPluginGroupWindowHotkeyId + group - 1, settings.getPluginGroupWindowHotkey (group),
+                   trf ("플러그인 그룹 {0} 화면", juce::String (group)));
+    }
 
     trackKeyFailures = applyTrackHotkeys();
     showHotkeyFailures();
@@ -1790,6 +1796,50 @@ void MainComponent::togglePluginGroupEverywhere (int group)
     showStatus (trf ("플러그인 그룹 {0}{1}  (마이크 {2}개)", juce::String (group + 1), (switchedOff ? tr (" 끔") : tr (" 켬")), juce::String (channels)));
 }
 
+void MainComponent::togglePluginGroupWindows (int group)
+{
+    struct Target { juce::AudioPluginInstance* plugin; juce::String title; };
+    std::vector<Target> targets;
+    bool hasGroup = false;
+    for (const auto& channel : document.getSession().channels)
+    {
+        if (group >= (int) channel.pluginGroups.size())
+            continue;
+        hasGroup = true;
+        if (auto* chain = engine.getChannelChain (channel.id))
+        {
+            const auto& members = channel.pluginGroups[(size_t) group].slots;
+            for (int i = 0; i < chain->getNumSlots(); ++i)
+            {
+                const auto& slot = chain->getSlot (i);
+                if (slot.plugin != nullptr && std::find (members.begin(), members.end(), slot.state.slotId) != members.end())
+                    targets.push_back ({ slot.plugin.get(), channel.name + " - " + slot.plugin->getName() });
+            }
+        }
+    }
+
+    if (! hasGroup)
+    {
+        showStatus (trf ("플러그인 그룹 {0}이(가) 있는 마이크가 없습니다 (체인 열기 아래 '플러그인 그룹'에서 만듭니다)", juce::String (group + 1)), true);
+        return;
+    }
+    if (targets.empty())
+    {
+        showStatus (trf ("플러그인 그룹 {0}에 넣은 플러그인이 없습니다", juce::String (group + 1)), true);
+        return;
+    }
+
+    const bool close = std::any_of (targets.begin(), targets.end(), [this] (const Target& target) { return windows.isInUse (*target.plugin); });
+    for (const auto& target : targets)
+        if (close)
+            windows.closeByUser (*target.plugin);
+        else
+            windows.openInForeground (*target.plugin, target.title);
+
+    showStatus (close ? trf ("플러그인 그룹 {0} 화면 닫힘", juce::String (group + 1))
+                      : trf ("플러그인 그룹 {0} 화면 열림", juce::String (group + 1)));
+}
+
 void MainComponent::layoutFxDrawer()
 {
     // the drawer is as tall as its content (a long chain, many mics): the viewport scrolls it
@@ -1837,6 +1887,10 @@ void MainComponent::hotkeyPressed (int id)
             if (id >= firstPluginGroupHotkeyId && id < firstPluginGroupHotkeyId + MixSession::maxPluginGroups)
             {
                 togglePluginGroupEverywhere (id - firstPluginGroupHotkeyId);
+            }
+            else if (id >= firstPluginGroupWindowHotkeyId && id <= lastHotkeyId)
+            {
+                togglePluginGroupWindows (id - firstPluginGroupWindowHotkeyId);
             }
             else
             {

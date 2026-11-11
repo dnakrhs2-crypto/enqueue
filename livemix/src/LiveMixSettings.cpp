@@ -50,6 +50,7 @@ namespace Keys
     constexpr const char* micAllMuteHotkey = "micAllMuteHotkey";
     constexpr const char* fxAllMuteHotkey = "fxAllMuteHotkey";
     constexpr const char* pluginGroupHotkey = "pluginGroupHotkey";   // + the group number (1..5)
+    constexpr const char* pluginGroupWindowHotkey = "pluginGroupWindowHotkey";   // + the group number (1..5)
     constexpr const char* micOnHotkey = "micOnHotkey";               // + the mic number (1..8)
     constexpr const char* fxOnHotkey = "fxOnHotkey";                 // + the FX number (1..4)
     constexpr const char* vst2Enabled = "vst2Enabled";
@@ -285,6 +286,16 @@ juce::String LiveMixSettings::getPluginGroupHotkey (int group) const
 void LiveMixSettings::setPluginGroupHotkey (int group, const juce::String& description)
 {
     settings->setValue (juce::String (Keys::pluginGroupHotkey) + juce::String (group), description.trim());
+}
+
+juce::String LiveMixSettings::getPluginGroupWindowHotkey (int group) const
+{
+    return settings->getValue (juce::String (Keys::pluginGroupWindowHotkey) + juce::String (group));
+}
+
+void LiveMixSettings::setPluginGroupWindowHotkey (int group, const juce::String& description)
+{
+    settings->setValue (juce::String (Keys::pluginGroupWindowHotkey) + juce::String (group), description.trim());
 }
 
 juce::String LiveMixSettings::getMicOnHotkey (int number) const

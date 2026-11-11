@@ -6,6 +6,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -17,10 +18,13 @@ class PluginEditorWindow : public juce::DocumentWindow
 {
 public:
     PluginEditorWindow (juce::AudioPluginInstance& plugin, const juce::String& title,
-                        std::function<void (PluginEditorWindow&)> onClose);
+                        std::function<void (PluginEditorWindow&)> onClose,
+                        bool activateFromHotkey = false,
+                        std::function<void (PluginEditorWindow&)> placeWindow = {});
     ~PluginEditorWindow() override;
 
     juce::AudioPluginInstance& getPlugin() noexcept { return plugin; }
+    const juce::AudioPluginInstance& getPlugin() const noexcept { return plugin; }
     void closeButtonPressed() override;
 
 private:
@@ -39,6 +43,14 @@ public:
     ~PluginWindowManager() override;
 
     void open (juce::AudioPluginInstance& plugin, const juce::String& title);
+    /** Called synchronously from a global hotkey: claim the foreground before creating a slow editor. */
+    void openInForeground (juce::AudioPluginInstance& plugin, const juce::String& title);
+    bool isOpen (const juce::AudioPluginInstance& plugin) const;
+    bool isInUse (const juce::AudioPluginInstance& plugin) const;
+    /** Same notification and lifetime as the window's close button; false if already closed. */
+    bool closeByUser (juce::AudioPluginInstance& plugin);
+    /** In-memory positions only. Off by default (Enqueue); disabling forgets any stored positions. */
+    void setRememberWindowPositions (bool remember);
     void closeFor (juce::AudioPluginInstance* plugin);
     void closeAll();
     int getNumOpenWindows() const noexcept { return (int) windows.size(); }
@@ -47,14 +59,21 @@ public:
     std::function<void (PluginChain&)> onChainChanged;
     /** User closed an editor, before it is destroyed. Optional; Enqueue leaves this unset. */
     std::function<void (juce::AudioPluginInstance&)> onWindowClosed;
+    /** Optional foreground predicate for desktops without an OS foreground window (unit tests). */
+    std::function<bool (const PluginEditorWindow&)> isWindowInUse;
 
     void pluginAboutToBeRemoved (PluginChain&, juce::AudioPluginInstance& plugin) override;
     void chainChanged (PluginChain& chain) override;
 
 private:
+    PluginEditorWindow* findWindow (const juce::AudioPluginInstance& plugin) const;
+    void openWindow (juce::AudioPluginInstance& plugin, const juce::String& title, bool activateFromHotkey);
+    void placeWindow (PluginEditorWindow& window);
     void closeWindow (PluginEditorWindow& window);
 
     std::vector<std::unique_ptr<PluginEditorWindow>> windows;
+    bool rememberWindowPositions = false;
+    std::map<const juce::AudioPluginInstance*, juce::Point<int>> positions;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginWindowManager)
 };

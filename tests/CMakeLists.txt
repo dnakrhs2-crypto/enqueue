@@ -155,6 +155,7 @@ target_sources(EnqueueTests PRIVATE
     LiveMixPluginTransitionTests.cpp
     LiveMixTransportTests.cpp
     LiveMixSilentPluginEditsTests.cpp
+    LiveMixPluginGroupWindowsTests.cpp
     LiveMixTransportProbeTests.cpp
     PluginPresetTests.cpp
     PluginSetTests.cpp

@@ -88,7 +88,8 @@ public:
 
     static constexpr int allMicsHotkeyId = TrackHotkeys::lastId + 1;   // 마이크 전체 뮤트 (the top bar's 마이크 뮤트)
     static constexpr int allFxHotkeyId = TrackHotkeys::lastId + 2;     // FX 전체 뮤트
-    static constexpr int lastHotkeyId = allFxHotkeyId;
+    static constexpr int firstPluginGroupWindowHotkeyId = allFxHotkeyId + 1;
+    static constexpr int lastHotkeyId = firstPluginGroupWindowHotkeyId + MixSession::maxPluginGroups - 1;
     /** The app owns the server. Detach stops it before this component's mute groups can be destroyed. */
     void attachControlServer (ControlServer*);
     void detachControlServer();
@@ -159,6 +160,7 @@ private:
     };
     /** The global hotkey of plugin group 'group' (0-based): that numbered group off / on across every mic channel. */
     void togglePluginGroupEverywhere (int group);
+    void togglePluginGroupWindows (int group);   // 0-based; editors only, including OFF groups
     static constexpr int firstPluginGroupHotkeyId = 4;   // 1 the mic mute group, 2 the FX mute group, 3 the window
     static_assert (TrackHotkeys::firstId == firstPluginGroupHotkeyId + MixSession::maxPluginGroups,
                    "the mic / FX ON/OFF hotkeys come right after the plugin groups'");

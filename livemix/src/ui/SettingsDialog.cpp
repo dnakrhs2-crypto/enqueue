@@ -199,6 +199,9 @@ namespace
             styleCaption (hotkeyCaption, tr ("전역 핫키"));
             addAndMakeVisible (hotkeyCaption);
             styleCaption (hotkeyNote, tr ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. '전체 뮤트'는 위쪽 막대의 '마이크 뮤트'·'FX 뮤트' 버튼과 같이 모든 마이크·FX를 뮤트합니다. 뮤트그룹의 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다. ON/OFF 핫키는 그 번호의 마이크·FX 하나만 켜고 끕니다 (다른 세션에서도 같은 번호). '창 숨기기/불러오기'는 창을 트레이로 숨기거나 다시 불러옵니다. 플러그인 그룹 핫키는 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (그룹은 채널의 '체인 열기' 옆에서 만듭니다)."));
+            // a sentence of its own: the long note above keeps its row in the translation table
+            hotkeyNote.setText (hotkeyNote.getText() + " " + tr ("플러그인 그룹 화면 핫키는 그 번호의 그룹에 넣은 플러그인의 화면을 열고 닫습니다."),
+                                juce::dontSendNotification);
             hotkeyNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (hotkeyNote);
 
@@ -216,6 +219,16 @@ namespace
                 addFixedRow (groupHotkeyLabel[i], trf ("플러그인 그룹 {0}", juce::String (group)), groupHotkey[i], groupHotkeyClear[i],
                              [&prefs, group] { return prefs.getPluginGroupHotkey (group); },
                              [&prefs, group] (const juce::String& d) { prefs.setPluginGroupHotkey (group, d); });
+            }
+
+            // the same groups' plugin windows (their editors), opened / closed: a block of its own after the ON/OFF keys
+            for (int i = 0; i < MixSession::maxPluginGroups; ++i)
+            {
+                const int group = i + 1;
+                addFixedRow (groupWindowHotkeyLabel[i], trf ("플러그인 그룹 {0} 화면", juce::String (group)), groupWindowHotkey[i], groupWindowHotkeyClear[i],
+                             [&prefs, group] { return prefs.getPluginGroupWindowHotkey (group); },
+                             [&prefs, group] (const juce::String& d) { prefs.setPluginGroupWindowHotkey (group, d); });
+                groupWindowHotkey[i].setComponentID ("hotkey-group-window-" + juce::String (group));
             }
 
             // the top bar's 마이크 뮤트 / FX 뮤트: drawn above their kind's mute group (arrangeRows)
@@ -852,7 +865,7 @@ namespace
             Row row;
         };
 
-        std::vector<std::unique_ptr<Row>> fixedRows;           // the mute groups, the window, plugin groups 1..5, all mics / FX
+        std::vector<std::unique_ptr<Row>> fixedRows;           // the mute groups, the window, plugin groups 1..5, their windows 1..5, all mics / FX
         Row* micAllRow = nullptr;   // among fixedRows, drawn first of the mics
         Row* fxAllRow = nullptr;    // first of the FX
         std::vector<std::unique_ptr<TrackRow>> trackRows;      // the session's mics, then its FX
@@ -961,7 +974,8 @@ namespace
         }
 
         /** Each kind under its mute switches (gom, 2026-10-15; every mic / every FX 2026-10-30): all mics, the mic
-            group, each mic, all FX, the FX group, each FX, then the window and the plugin groups. */
+            group, each mic, all FX, the FX group, each FX, then the window, the plugin groups and the plugin groups'
+            windows (2026-11-12: a block after the ON/OFF keys, each block reads 1..5). */
         void arrangeRows()
         {
             order.clear();
@@ -990,12 +1004,15 @@ namespace
         juce::Label languageCaption, typeCaption, outputCaption, rateCaption, sharedBufferNote;
         juce::Label bitDepthCaption, bitDepthDetail, bitDepthHint, bitDepthWarning;
         juce::Label groupHotkeyLabel[MixSession::maxPluginGroups];
+        juce::Label groupWindowHotkeyLabel[MixSession::maxPluginGroups];
         juce::Label controlCaption, controlNote, controlAddress, controlState;
         juce::HyperlinkButton controlHelp;
         HotkeyButton micHotkey, fxHotkey, windowHotkey, micAllHotkey, fxAllHotkey;
         HotkeyButton groupHotkey[MixSession::maxPluginGroups];
+        HotkeyButton groupWindowHotkey[MixSession::maxPluginGroups];
         juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" }, windowHotkeyClear { "x" }, micAllHotkeyClear { "x" }, fxAllHotkeyClear { "x" };
         juce::TextButton groupHotkeyClear[MixSession::maxPluginGroups];
+        juce::TextButton groupWindowHotkeyClear[MixSession::maxPluginGroups];
         RepickComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo, bitDepthCombo;
         juce::ComboBox languageCombo;
         juce::TextButton panelButton, soundSettingsButton;
