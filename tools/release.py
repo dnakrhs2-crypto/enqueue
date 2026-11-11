@@ -573,7 +573,8 @@ def make_installer(iscc, version, source_dir, output_dir, tools_dir="", gplugins
     output_dir.mkdir(parents=True, exist_ok=True)
     defines = ["/DAppVersion=" + version, "/DSourceDir=" + str(source_dir), "/DOutputDir=" + str(output_dir)]
     if APP["name"] == "LiveMix":
-        defines.append("/DGPluginsDir=" + str(pathlib.Path(gplugins_dir) / "VST3"))
+        # absolute: ISCC resolves a relative /D path against installer/, check_gplugins against the working folder
+        defines.append("/DGPluginsDir=" + str(pathlib.Path(gplugins_dir).resolve() / "VST3"))
     if tools_dir and os.path.isdir(tools_dir):
         defines.append("/DToolsDir=" + str(tools_dir))   # Enqueue: the YouTube download tools go into {app}\tools
     run([iscc, "/Q"] + defines + [str(ROOT / "installer" / APP["iss"])])
