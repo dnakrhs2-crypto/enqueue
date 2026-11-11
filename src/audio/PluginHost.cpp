@@ -100,12 +100,33 @@ juce::AudioPluginFormat* PluginHost::getVST3Format() const
     return nullptr;
 }
 
+bool PluginHost::isBundledPluginFile (const juce::String& file) const
+{
+    return bundledPluginsDirectory != juce::File() && juce::File::isAbsolutePath (file)
+        && juce::File (file).isAChildOf (bundledPluginsDirectory);
+}
+
+juce::StringArray PluginHost::getBundledPluginKeys() const
+{
+    juce::StringArray keys;
+    if (bundledPluginsDirectory != juce::File())
+        for (const auto& type : knownPlugins.getTypes())
+            if (isBundledPluginFile (type.fileOrIdentifier)) keys.add (keyFor (type));
+    return keys;
+}
+
+bool PluginHost::isShadowedByBundledPlugin (const juce::PluginDescription& description, const juce::StringArray& keys) const
+{
+    return ! keys.isEmpty() && ! isBundledPluginFile (description.fileOrIdentifier) && keys.contains (keyFor (description));
+}
+
 juce::Array<juce::PluginDescription> PluginHost::getEffectTypes() const
 {
     juce::Array<juce::PluginDescription> result;
+    const auto bundledKeys = getBundledPluginKeys();
 
     for (const auto& type : knownPlugins.getTypes())
-        if (! type.isInstrument && isPluginEnabled (type))
+        if (! type.isInstrument && isPluginEnabled (type) && ! isShadowedByBundledPlugin (type, bundledKeys))
             result.add (type);
 
     NameComparator comparator;
@@ -116,9 +137,10 @@ juce::Array<juce::PluginDescription> PluginHost::getEffectTypes() const
 juce::Array<juce::PluginDescription> PluginHost::getAllEffectTypes() const
 {
     juce::Array<juce::PluginDescription> result;
+    const auto bundledKeys = getBundledPluginKeys();
 
     for (const auto& type : knownPlugins.getTypes())
-        if (! type.isInstrument)
+        if (! type.isInstrument && ! isShadowedByBundledPlugin (type, bundledKeys))
             result.add (type);
 
     NameComparator comparator;
@@ -177,7 +199,17 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::createInstance (const Plu
         description.uniqueId = state.uniqueId;
     }
 
-    if (description.uniqueId != 0)
+    bool choseBundled = false;
+    if (bundledPluginsDirectory != juce::File())
+        for (const auto& type : knownPlugins.getTypes())
+            if (keyFor (type) == keyFor (description) && isBundledPluginFile (type.fileOrIdentifier))
+            {
+                description = type;
+                choseBundled = true;
+                break;
+            }
+
+    if (description.uniqueId != 0 && ! choseBundled)
     {
         // the known list wins (a plugin may have moved) - but by the saved file, or the saved name, before a bare id:
         // two plugins of one format may share an id (the list allows it when their files differ), and the first one

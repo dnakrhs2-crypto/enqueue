@@ -61,10 +61,14 @@ namespace Keys
 
 LiveMixSettings::LiveMixSettings (const juce::File& directory)
 {
+    // 시험 전용: headless executable tests use the same directory injection as in-process tests.
+    const auto testDirectory = juce::SystemStats::getEnvironmentVariable ("LIVEMIX_SETTINGS_DIR", {});
+    const auto settingsDirectory = directory != juce::File() ? directory
+        : testDirectory.isNotEmpty() ? juce::File (testDirectory) : juce::File();
     juce::PropertiesFile::Options options;
     options.applicationName = "LiveMix";
     options.filenameSuffix = "settings";
-    options.folderName = directory == juce::File() ? juce::String ("LiveMix") : directory.getFullPathName();
+    options.folderName = settingsDirectory == juce::File() ? juce::String ("LiveMix") : settingsDirectory.getFullPathName();
     options.osxLibrarySubFolder = "Application Support";
     options.commonToAllUsers = false;
     options.storageFormat = juce::PropertiesFile::storeAsXML;
@@ -114,6 +118,9 @@ void LiveMixSettings::setLastDevice (const MixDevice& device)
 }
 
 std::unique_ptr<juce::XmlElement> LiveMixSettings::getPluginList() const { return settings->getXmlValue (Keys::pluginList); }
+juce::String LiveMixSettings::getBundledPluginsStamp() const { return settings->getValue ("bundledPluginsStamp"); }
+void LiveMixSettings::setBundledPluginsStamp (const juce::String& stamp) { settings->setValue ("bundledPluginsStamp", stamp); }
+juce::File LiveMixSettings::getSettingsDirectory() const { return settings->getFile().getParentDirectory(); }
 void LiveMixSettings::setPluginList (const juce::XmlElement* xml)
 {
     if (xml != nullptr) settings->setValue (Keys::pluginList, xml); else settings->removeValue (Keys::pluginList);

@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "id": "674164c93138b404687e3c5a5653a32e3618d6d78153b7b0a240a73eda121a5e",
+  "version": "0.1.0-qa5",
+  "bundles": [
+    "G-1176AE.vst3",
+    "G-Atlas.vst3",
+    "G-BBTubes.vst3",
+    "G-Denoise.vst3",
+    "G-EQP1A.vst3",
+    "G-LA2A.vst3",
+    "G-Limiter.vst3",
+    "G-ProC3.vst3",
+    "G-ProDS.vst3",
+    "G-ProQ4.vst3",
+    "G-Timeless3.vst3"
+  ],
+  "file_count": 31,
+  "total_bytes": 118880384
+}

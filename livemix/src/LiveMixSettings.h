@@ -23,6 +23,9 @@ public:
     void setLastDevice (const MixDevice& device);
     std::unique_ptr<juce::XmlElement> getPluginList() const;
     void setPluginList (const juce::XmlElement* xml);
+    juce::String getBundledPluginsStamp() const;
+    void setBundledPluginsStamp (const juce::String& stamp);
+    juce::File getSettingsDirectory() const;
 
     juce::File getLastSessionFile() const;
     void setLastSessionFile (const juce::File& file);

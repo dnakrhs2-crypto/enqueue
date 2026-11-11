@@ -45,7 +45,7 @@ public:
     /** Paths are kept separately from the blacklist, including completed scans with zero types. */
     juce::File getRuntimeMissingFile() const;
     juce::StringArray getRuntimeCheckFiles (const juce::StringArray& blacklistedFiles) const;
-    void clearRuntimeMissingFiles();
+    void clearRuntimeMissingFiles (const juce::File& directory = {});
     juce::String getSkippedMessage() const;
 
 private:

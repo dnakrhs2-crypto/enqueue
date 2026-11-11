@@ -11,6 +11,12 @@
 #ifndef OutputDir
   #define OutputDir "output"
 #endif
+#ifndef GPluginsDir
+  #define GPluginsDir "C:\Users\claude\SDKs\gocue_release\gplugins\VST3"
+#endif
+#if !DirExists(GPluginsDir) || !FileExists(GPluginsDir + "\bundled_plugins.json")
+  #error GPluginsDir must contain the default plugins and bundled_plugins.json
+#endif
 
 #define AppName "LiveMix"
 #define AppExe "LiveMix.exe"
@@ -29,7 +35,8 @@ UninstallDisplayIcon={app}\{#AppExe}
 OutputDir={#OutputDir}
 OutputBaseFilename=LiveMix-Setup-{#AppVersion}
 SetupIconFile=..\livemix\assets\LiveMix.ico
-Compression=lzma2
+; ultra64 (64 MB dictionary): the default plugins share most of their code, so 41.6 MB becomes 32.2 MB (2026-11-11)
+Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
@@ -60,6 +67,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Checked by default; the shortcut file is written by [Code] so a silent auto-update never recreates one the user deleted.
 Name: "coupang"; Description: "{cm:CoupangTask}"; GroupDescription: "{cm:CoupangGroup}"
 Name: "obsplugin"; Description: "{cm:ObsPluginTask}"; GroupDescription: "{cm:ObsPluginGroup}"
+Name: "gplugins"; Description: "{cm:GPluginsTask}"; GroupDescription: "{cm:GPluginsGroup}"
+
+[InstallDelete]
+; Also with the task off: the folder follows the checkbox (LiveMix drops the leftover list entries at its next start).
+Type: filesandordirs; Name: "{app}\VST3"
 
 [Files]
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -68,6 +80,7 @@ Source: "..\third_party\miniupnpc\LICENSE"; DestDir: "{app}\licenses\miniupnpc";
 Source: "{#SourceDir}\obs-plugin\livemix-obs\livemix-obs.dll"; DestDir: "{app}\obs-plugin\livemix-obs"; Flags: ignoreversion
 Source: "{#SourceDir}\obs-plugin\livemix-obs\data\locale\*.ini"; DestDir: "{app}\obs-plugin\livemix-obs\data\locale"; Flags: ignoreversion recursesubdirs
 Source: "coupang.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#GPluginsDir}\*"; DestDir: "{app}\VST3"; Flags: ignoreversion recursesubdirs createallsubdirs; Tasks: gplugins
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -81,6 +94,7 @@ Root: HKA; Subkey: "Software\Classes\LiveMix.Session\DefaultIcon"; ValueType: st
 Root: HKA; Subkey: "Software\Classes\LiveMix.Session\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 
 [Run]
+Filename: "{app}\{#AppExe}"; Parameters: "--register-bundled-plugins"; Flags: runhidden waituntilterminated; Tasks: gplugins
 ; Install/update the plugin during silent updates too, independently of /NORUN.
 Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin --allow-elevation"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin; Check: InteractiveObsInstall
 Filename: "{app}\{#AppExe}"; Parameters: "--install-obs-plugin"; StatusMsg: "{cm:ObsPluginInstalling}"; Flags: runhidden waituntilterminated; Tasks: obsplugin; Check: SilentObsInstall
@@ -94,6 +108,7 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppN
 Filename: "reg.exe"; Parameters: "delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v LiveMix /f"; Flags: runhidden; RunOnceId: "LiveMixRunKey"
 
 [UninstallDelete]
+Type: filesandordirs; Name: "{app}\VST3"
 Type: filesandordirs; Name: "{commonappdata}\obs-studio\plugins\livemix-obs"
 
 [Code]

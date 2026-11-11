@@ -26,6 +26,9 @@ public:
     juce::AudioPluginFormatManager& getFormatManager() noexcept { return formatManager; }
     juce::KnownPluginList& getKnownPlugins() noexcept { return knownPlugins; }
     juce::AudioPluginFormat* getVST3Format() const;
+    /** LiveMix only: prefer the copies shipped beside its executable. Unset keeps the original host behaviour. */
+    void setBundledPluginsDirectory (const juce::File& directory) { bundledPluginsDirectory = directory; }
+    bool isBundledPluginFile (const juce::String& file) const;
     /** A format by JUCE's name ("VST3", "VST"), or null. */
     juce::AudioPluginFormat* getFormat (const juce::String& name) const;
 
@@ -73,9 +76,12 @@ private:
     static inline bool safeMode = false;
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    juce::StringArray getBundledPluginKeys() const;
+    bool isShadowedByBundledPlugin (const juce::PluginDescription&, const juce::StringArray& bundledKeys) const;
 
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPlugins;
+    juce::File bundledPluginsDirectory;
     bool vst2Enabled = false;
     juce::StringArray disabledPlugins;
 

@@ -1,4 +1,5 @@
 #include "ui/PluginManagerWindow.h"
+#include "BundledPlugins.h"
 #include "audio/PluginScan.h"
 #include "ui/PluginScanListComponent.h"
 
@@ -347,7 +348,7 @@ public:
         : owner (w), host (h),
           crashMarker (runtimeOptions.scanStateDirectory != juce::File()
                        ? runtimeOptions.scanStateDirectory.getChildFile ("scan.crashed")
-                       : juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("LiveMix/scan.crashed")),
+                       : s.getSettingsDirectory().getChildFile ("scan.crashed")),
           settings (s), presetsFolder (std::move (folder)), pluginModel (*this), presetModel (*this),
           runtimeHint ({ Palette::danger, Palette::text, Palette::dimText, Palette::accent, juce::Colours::white,
                          bodyFont (12.5f), bodyFont (13.0f).boldened(), Palette::controlRadius, true }, runtimeOptions)
@@ -406,8 +407,7 @@ public:
         PluginScanCoordinator::Options scanOptions;
         scanOptions.executable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
         if (runtimeOptions.scanExecutable != juce::File()) scanOptions.executable = runtimeOptions.scanExecutable;
-        scanOptions.logFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                                  .getChildFile ("LiveMix/logs/plugin-scan.log");
+        scanOptions.logFile = settings.getSettingsDirectory().getChildFile ("logs/plugin-scan.log");
         if (runtimeOptions.scanStateDirectory != juce::File())
             scanOptions.logFile = runtimeOptions.scanStateDirectory.getChildFile ("logs/plugin-scan.log");
         scanOptions.runtimeCheck = runtimeOptions.runtimeCheck;
@@ -829,7 +829,7 @@ private:
         startTimer (250);
     }
 
-    /** '목록 초기화': the scanned list, the files a crash put on the skip list and the crash marker all go, so the next
+    /** '목록 초기화': bundled entries remain; other entries, the skip list and the crash marker go, so the next
         scan looks at every file afresh (a rescan alone skips files already in the list). The '사용' switches and every
         chain stay as they are: a chain keeps its own description of each plugin. */
     void resetList()
@@ -853,10 +853,8 @@ private:
             if (safe == nullptr || result != 1 || safe->scanner->isScanning())
                 return;
 
-            auto& list = safe->host.getKnownPlugins();
             safe->runtimeHint.clear();
-            list.clear();
-            list.clearBlacklistedFiles();
+            resetPluginListKeepingBundled (safe->host);
             safe->scanCoordinator->clearRuntimeMissingFiles();
             safe->crashMarker.deleteFile();
             safe->statusLabel.setTooltip ({});

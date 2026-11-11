@@ -63,6 +63,26 @@ SITE_REPO = "dnakrhs2-crypto/enqueue"   # 곰튀김.com lives on this repo's gh-
 APP = APPS["enqueue"]
 # CMakeLists.txt builds the LiveMix online backup's server account in from this file (LIVEMIX_BACKUP_ACCOUNT_FILE)
 LIVEMIX_BACKUP_ACCOUNT_FILE = "C:/Users/claude/SDKs/gocue_release/livemix_backup.json"
+GPLUGINS_DIR = "C:/Users/claude/SDKs/gocue_release/gplugins"
+
+
+def check_gplugins(directory):
+    if APP["name"] != "LiveMix":
+        return
+    from gplugins_stage import content_id, lock_for, verify_files
+    try:
+        vst3 = pathlib.Path(directory) / "VST3"
+        payload = json.loads((vst3 / "bundled_plugins.json").read_text(encoding="utf-8-sig"))
+        lock = json.loads((ROOT / "installer/gplugins.lock.json").read_text(encoding="utf-8-sig"))
+        if payload["schema"] != 1 or content_id(payload["files"]) != payload["id"]:
+            raise ValueError("bundled_plugins.json schema or content id mismatch")
+        if lock_for(payload) != lock:
+            raise ValueError("gplugins.lock.json mismatch (id/version/bundles/count/bytes)")
+        verify_files(vst3, payload["files"], ("bundled_plugins.json",))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        sys.exit(f"GPLUGINS: {directory}: {error}")
+    print(f"GPLUGINS: {len(payload['bundles'])} plugins, {payload['version']}, "
+          f"id {payload['id'][:12]}, {directory}")
 
 
 def check_backup_account(exe, account_file=LIVEMIX_BACKUP_ACCOUNT_FILE):
@@ -547,11 +567,13 @@ def stage_obs_plugin(source_dir):
         print("staged OBS plugin:", original, "->", copied, flush=True)
 
 
-def make_installer(iscc, version, source_dir, output_dir, tools_dir=""):
+def make_installer(iscc, version, source_dir, output_dir, tools_dir="", gplugins_dir=GPLUGINS_DIR):
     if APP["name"] == "LiveMix":
         stage_obs_plugin(source_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     defines = ["/DAppVersion=" + version, "/DSourceDir=" + str(source_dir), "/DOutputDir=" + str(output_dir)]
+    if APP["name"] == "LiveMix":
+        defines.append("/DGPluginsDir=" + str(pathlib.Path(gplugins_dir) / "VST3"))
     if tools_dir and os.path.isdir(tools_dir):
         defines.append("/DToolsDir=" + str(tools_dir))   # Enqueue: the YouTube download tools go into {app}\tools
     run([iscc, "/Q"] + defines + [str(ROOT / "installer" / APP["iss"])])
@@ -796,6 +818,7 @@ def package_legacy(args, version):
         if not (source / name).is_file():
             sys.exit("missing package input: " + str(source / name))
     check_backup_account(source / APP["exe"])
+    check_gplugins(args.gplugins_dir)
     output = ROOT / "out/release" / args.app
     output.mkdir(parents=True, exist_ok=True)
     output = pathlib.Path(tempfile.mkdtemp(prefix=version + "-", dir=output))
@@ -806,7 +829,7 @@ def package_legacy(args, version):
         for name in ("yt-dlp.exe", "qjs.exe", "lame.exe", "libsndfile-1.dll", "LICENSES.txt"):
             if not (pathlib.Path(args.tools_dir) / name).is_file():
                 sys.exit("missing Enqueue tools: " + name)
-    installer = make_installer(iscc, version, source, output, args.tools_dir if args.app == "enqueue" else "")
+    installer = make_installer(iscc, version, source, output, args.tools_dir if args.app == "enqueue" else "", args.gplugins_dir)
     signature = sign(tool, args.key, installer)
     notes_path = pathlib.Path(args.notes) if args.notes else ROOT / APP["notes_dir"] / (version + ".html")
     notes = notes_path.read_text(encoding="utf-8") if notes_path.is_file() else "<p>%s %s</p>" % (APP["name"], version)
@@ -1112,6 +1135,8 @@ def main():
     parser.add_argument("--tools-dir", default=os.environ.get("ENQUEUE_TOOLS_DIR", "C:/Users/claude/SDKs/gocue_release/enqueue_tools"),
                         help="folder with yt-dlp.exe, qjs.exe, lame.exe (+ libsndfile-1.dll) bundled into the Enqueue installer (default: ENQUEUE_TOOLS_DIR)")
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--gplugins-dir", default=os.environ.get("LIVEMIX_GPLUGINS_DIR", GPLUGINS_DIR),
+                        help="LiveMix default plugin payload directory (default: LIVEMIX_GPLUGINS_DIR)")
     parser.add_argument("--builder", choices=("local", "roomc", "auto"), default="auto",
                         help="Enqueue/LiveMix build + test gate (default auto, gom 2026-10-18): local = this PC, roomc = the studio build server, "
                              "auto = roomc when it answers, else this PC (installer, signature and upload stay here)")
@@ -1211,6 +1236,7 @@ def main():
         if not (source_dir / required).is_file():
             sys.exit("missing %s in %s (build Release with WINSPARKLE_DIR set)" % (required, source_dir))
     check_backup_account(source_dir / APP["exe"])
+    check_gplugins(args.gplugins_dir)
 
     iscc = find_iscc()
     if iscc is None:
@@ -1222,7 +1248,7 @@ def main():
         if missing:
             sys.exit("Enqueue needs the YouTube download tools in --tools-dir (%s): missing %s" % (args.tools_dir, ", ".join(missing)))
 
-    installer = make_installer(iscc, version, source_dir, output_dir, args.tools_dir if APP["name"] == "Enqueue" else "")
+    installer = make_installer(iscc, version, source_dir, output_dir, args.tools_dir if APP["name"] == "Enqueue" else "", args.gplugins_dir)
 
     tool = find_winsparkle_tool(args.winsparkle_dir)
     if tool is None:

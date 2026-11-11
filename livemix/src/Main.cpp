@@ -1,4 +1,5 @@
 #include "LiveMixSettings.h"
+#include "BundledPlugins.h"
 #include "CollabSession.h"
 #include "ControlServer.h"
 #include "MixDocument.h"
@@ -148,6 +149,7 @@ public:
     bool moreThanOneInstanceAllowed() override
     {
         return PluginScanWorker::isWorkerCommandLine (getCommandLineParameters())
+            || isRegisterBundledPluginsCommand (getCommandLineParameters())
             || juce::SystemStats::getEnvironmentVariable ("LIVEMIX_ALLOW_MULTI", {}) == "1"
             || ObsPluginInstaller::isInstallCommandLine (getCommandLineParameters());
     }
@@ -178,6 +180,18 @@ public:
             return; // no window, audio device, settings, session, tray or updater in this process
         }
 
+        if (isRegisterBundledPluginsCommand (commandLine))
+        {
+            LiveMixSettings registrationSettings;
+            PluginHost host;
+            host.loadKnownPluginsFromXml (registrationSettings.getPluginList().get());
+            const auto result = syncBundledPlugins (host, registrationSettings);
+            registrationSettings.saveIfNeeded();
+            setApplicationReturnValue (result.allRegistered ? 0 : 1);
+            quit();
+            return;
+        }
+
         lookAndFeel = std::make_unique<LiveMixLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
@@ -203,6 +217,8 @@ public:
         safeMode = juce::ArgumentList ("LiveMix", commandLine).containsOption ("--safe-mode")
                    || juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown();
         PluginHost::setSafeMode (safeMode);
+        host.setBundledPluginsDirectory (bundledPluginsDirectory());
+        if (! safeMode) syncBundledPlugins (host, *settings);
 
         const auto savedDevice = settings->getLastDevice();
         const auto deviceError = safeMode ? juce::String() : engine->initialise (savedDevice ? &*savedDevice : nullptr);

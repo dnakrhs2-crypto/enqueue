@@ -269,10 +269,20 @@ juce::StringArray PluginScanCoordinator::getRuntimeCheckFiles (const juce::Strin
     files.removeDuplicates (true);
     return files;
 }
-void PluginScanCoordinator::clearRuntimeMissingFiles()
+void PluginScanCoordinator::clearRuntimeMissingFiles (const juce::File& directory)
 {
     const auto file = getRuntimeMissingFile();
-    if (file != juce::File()) file.deleteFile();
+    if (file == juce::File()) return;
+    if (directory == juce::File())
+        file.deleteFile();
+    else if (file.existsAsFile())
+    {
+        auto paths = readRuntimeMissingFiles (file);
+        for (int i = paths.size(); --i >= 0;)
+            if (juce::File (paths[i]).isAChildOf (directory)) paths.remove (i);
+        if (paths.isEmpty()) file.deleteFile();
+        else file.replaceWithText (paths.joinIntoString ("\n") + "\n", false, false, "\n");
+    }
 }
 juce::String PluginScanCoordinator::getSkippedMessage() const
 {
