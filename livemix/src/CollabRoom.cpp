@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "CollabRoom.h"
 #include "ui/UiUtils.h"
 #include <algorithm>
@@ -124,14 +125,14 @@ CollabRoom::Response CollabRoom::httpRequest (const Request& request)
 
 juce::String CollabRoom::errorMessage (int status)
 {
-    if (status <= 0) return ko ("합방 서버에 연결하지 못했습니다");
+    if (status <= 0) return tr ("합방 서버에 연결하지 못했습니다");
     switch (status)
     {
-        case 404: return ko ("없는 방 코드입니다");
-        case 410: return ko ("닫힌 방입니다");
-        case 425: return ko ("방장이 아직 확인 중입니다. 잠시 뒤 다시 참가하세요");
-        case 409: return ko ("이미 다른 사람이 들어와 있습니다");
-        default: return ko ("합방 서버 오류 (") + juce::String (status) + ")";
+        case 404: return tr ("없는 방 코드입니다");
+        case 410: return tr ("닫힌 방입니다");
+        case 425: return tr ("방장이 아직 확인 중입니다. 잠시 뒤 다시 참가하세요");
+        case 409: return tr ("이미 다른 사람이 들어와 있습니다");
+        default: return trf ("합방 서버 오류 ({0})", juce::String (status));
     }
 }
 

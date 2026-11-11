@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "ObsSender.h"
 #include "lm_obs_protocol.h"
 
@@ -60,7 +61,7 @@ namespace
         const auto error = GetLastError();
         if (handle != nullptr) CloseHandle (handle);
         handle = nullptr;
-        reason = juce::String::fromUTF8 ("공유 메모리를 열지 못했습니다: ") + name + " (Win32 " + juce::String ((int) error) + ")";
+        reason = trf ("공유 메모리를 열지 못했습니다: {0} (Win32 {1})", name, juce::String ((int) error));
         juce::Logger::writeToLog ("OBS sender: " + reason);
         return false;
     }
@@ -90,7 +91,7 @@ bool ObsSender::openMappings()
     MappingSecurity security;
     if (security.descriptor == nullptr)
     {
-        lastError = juce::String::fromUTF8 ("공유 메모리의 접근 권한을 만들지 못했습니다.");
+        lastError = tr ("공유 메모리의 접근 권한을 만들지 못했습니다.");
         juce::Logger::writeToLog ("OBS sender: " + lastError);
         return false; // do not fall back to an ACL which breaks cross-integrity OBS connections
     }

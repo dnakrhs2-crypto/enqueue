@@ -1,4 +1,5 @@
 #include "PluginSet.h"
+#include "Localisation.h"
 #include "MixDocument.h"
 #include "TestGainPlugin.h"
 
@@ -358,6 +359,94 @@ public:
             expect (names.sends[0].fx == fx[0].id && names.sends[1].fx == fx[1].id);
             const auto exactCase = matchPluginSetSends ({ { juce::Uuid(), "reverb", 0.5, false } }, fx);
             expect (exactCase.sends.empty() && exactCase.warnings.size() == 1);
+        }
+
+        beginTest ("saved default FX sends survive every language change without rewriting saved names");
+        {
+            struct Restore
+            {
+                Language language = currentLanguage();
+                UiTranslator translator = uiTranslator.load();
+                ~Restore() { initialiseLanguage (language); uiTranslator.store (translator); }
+            } restore;
+            const char* names[] { "리버브", "Reverb", "リバーブ" };
+            for (int from = 0; from < 3; ++from)
+                for (int to = 0; to < 3; ++to)
+                {
+                    if (from == to) continue;
+                    initialiseLanguage ((Language) from);
+                    const std::vector<MixFx> source { fxNamed (tr ("리버브")) };
+                    MixChannel channel;
+                    channel.sends = { { source[0].id, 0.5, true } };
+                    const auto saved = capturePluginSet (1, "Mic", "2026-11-11", sampleSet().plugins,
+                                                        &channel, source, true, false);
+                    PluginSet loaded;
+                    expect (PluginSet::fromJson (saved.toJson(), loaded).wasOk());
+                    expect (loaded.sends.has_value() && loaded.sends->size() == 1);
+                    if (! loaded.sends || loaded.sends->size() != 1) continue;
+                    expectEquals (loaded.sends->front().name, k (names[from]));
+                    initialiseLanguage ((Language) to);
+                    const std::vector<MixFx> destination { fxNamed (tr ("리버브")) };
+                    expectEquals (destination[0].name, k (names[to]));
+                    expect (destination[0].id != source[0].id);
+                    const auto result = matchPluginSetSends (*loaded.sends, destination);
+                    expectEquals ((int) result.sends.size(), 1);
+                    expect (result.warnings.isEmpty());
+                    if (result.sends.size() == 1)
+                    {
+                        expect (result.sends[0].fx == destination[0].id && result.sends[0].pre);
+                        expectWithinAbsoluteError (result.sends[0].amount, 0.5, 1e-12);
+                    }
+                    expectEquals (loaded.sends->front().name, k (names[from]));
+                }
+        }
+
+        beginTest ("all exact FX names are reserved before default-language aliases");
+        {
+            const std::vector<MixFx> fx { fxNamed ("Reverb"), fxNamed (k ("리버브")) };
+            for (int i = 0; i < 2; ++i)
+            {
+                const auto exact = matchPluginSetSends ({ { juce::Uuid(), fx[(size_t) i].name, 0.5, false } }, fx);
+                expectEquals ((int) exact.sends.size(), 1);
+                expect (exact.warnings.isEmpty());
+                if (exact.sends.size() == 1) expect (exact.sends[0].fx == fx[(size_t) i].id);
+            }
+            const auto mixed = matchPluginSetSends ({ { juce::Uuid(), k ("リバーブ"), 0.4, true },
+                                                       { juce::Uuid(), "Reverb", 0.6, false } }, fx);
+            expectEquals ((int) mixed.sends.size(), 2);
+            expect (mixed.warnings.isEmpty());
+            if (mixed.sends.size() == 2)
+            {
+                expect (mixed.sends[0].fx == fx[1].id && mixed.sends[0].pre && mixed.sends[0].amount == 0.4);
+                expect (mixed.sends[1].fx == fx[0].id && ! mixed.sends[1].pre && mixed.sends[1].amount == 0.6);
+            }
+        }
+
+        beginTest ("custom FX names stay distinct and each default alias consumes one destination");
+        {
+            for (const auto& name : { k ("보컬 리버브"), k ("리버브") })
+            {
+                const auto custom = matchPluginSetSends ({ { juce::Uuid(), name, 0.5, false } }, { fxNamed ("Vocal Reverb") });
+                expect (custom.sends.empty());
+                expectEquals (custom.warnings.size(), 1);
+            }
+            const std::vector<MixFx> fx { fxNamed (k ("리버브")) };
+            std::vector<PluginSetSend> sends { { juce::Uuid(), "Reverb", 0.5, true },
+                                               { juce::Uuid(), k ("リバーブ"), 0.6, false },
+                                               { juce::Uuid(), "Missing FX", 0.7, false } };
+            const auto limited = matchPluginSetSends (sends, fx);
+            expectEquals ((int) limited.sends.size(), 1);
+            if (limited.sends.size() == 1) expect (limited.sends[0].fx == fx[0].id && limited.sends[0].amount == 0.5);
+            expectEquals (limited.warnings.size(), 2);
+            if (limited.warnings.size() == 2)
+            {
+                expectEquals (limited.warnings[0], trf ("센드: '{0}' FX 채널이 이 세션에 없어 건너뛰었습니다", k ("リバーブ")));
+                expectEquals (limited.warnings[1], trf ("센드: '{0}' FX 채널이 이 세션에 없어 건너뛰었습니다", "Missing FX"));
+            }
+            sends.resize (2); sends[1].amount = 0;
+            const auto silent = matchPluginSetSends (sends, fx);
+            expectEquals ((int) silent.sends.size(), 1);
+            expect (silent.warnings.isEmpty());
         }
 
         beginTest ("pure group plans replace only when present, filter members, cap at five and bypass before publication");

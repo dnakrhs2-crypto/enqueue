@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "WebDavBackup.h"
 
 #include <juce_cryptography/juce_cryptography.h>
@@ -63,17 +64,17 @@ namespace
 
     juce::String serverRefused()
     {
-        return juce::String::fromUTF8 ("백업 서버가 프로그램의 접속을 거부했습니다. 프로그램을 업데이트하거나 관리자에게 알리세요.");
+        return tr ("백업 서버가 프로그램의 접속을 거부했습니다. 프로그램을 업데이트하거나 관리자에게 알리세요.");
     }
 
     juce::String httpRefused (int status, const juce::String& path)
     {
-        return juce::String::fromUTF8 ("서버가 거부했습니다 (HTTP ") + juce::String (status) + "): " + path;
+        return trf ("서버가 거부했습니다 (HTTP {0}): {1}", juce::String (status), path);
     }
 
     juce::String unreadableAnswer (const juce::String& path)
     {
-        return juce::String::fromUTF8 ("서버의 목록 응답을 읽을 수 없습니다: ") + path;
+        return trf ("서버의 목록 응답을 읽을 수 없습니다: {0}", path);
     }
 
     bool nothingThere (int status)
@@ -204,14 +205,14 @@ juce::String WebDavBackup::validateAccountId (const juce::String& idIn)
     const auto id = idIn.trim();
 
     if (id.length() < 2 || id.length() > 20)
-        return juce::String::fromUTF8 ("아이디는 2~20자입니다");
+        return tr ("아이디는 2~20자입니다");
 
     for (auto c : id)
         if (! (juce::CharacterFunctions::isLetterOrDigit (c) && c < 128) && ! isKoreanSyllable (c) && c != '_' && c != '-')
-            return juce::String::fromUTF8 ("아이디에는 영문, 숫자, 한글, '_', '-'만 쓸 수 있습니다");
+            return tr ("아이디에는 영문, 숫자, 한글, '_', '-'만 쓸 수 있습니다");
 
     if (id.equalsIgnoreCase ("accounts") || id.startsWithChar ('-') || id.startsWithChar ('_'))
-        return juce::String::fromUTF8 ("그 아이디는 쓸 수 없습니다");
+        return tr ("그 아이디는 쓸 수 없습니다");
 
     return {};
 }
@@ -383,15 +384,15 @@ juce::String WebDavBackup::validateBaseUrl (const juce::String& baseUrl)
     const auto base = trimmedBase (baseUrl);
 
     if (! base.startsWithIgnoreCase ("https://"))
-        return juce::String::fromUTF8 ("백업 주소는 https:// 로 시작해야 합니다 (비밀번호가 암호화 없이 나가지 않도록 http는 쓰지 않습니다)");
+        return tr ("백업 주소는 https:// 로 시작해야 합니다 (비밀번호가 암호화 없이 나가지 않도록 http는 쓰지 않습니다)");
 
     const auto rest = base.substring (8);
 
     if (rest.isEmpty() || rest.startsWithChar ('/') || rest.startsWithChar (':'))
-        return juce::String::fromUTF8 ("백업 주소에 서버 이름이 없습니다 (예: https://서버:5006)");
+        return tr ("백업 주소에 서버 이름이 없습니다 (예: https://서버:5006)");
 
     if (rest.containsChar ('/') || rest.containsChar ('\\') || rest.containsAnyOf ("?#@ \t\r\n"))
-        return juce::String::fromUTF8 ("백업 주소는 https://서버:포트 까지만 적습니다");
+        return tr ("백업 주소는 https://서버:포트 까지만 적습니다");
 
     // host[:port]: a name / IPv4, or a bracketed IPv6; the port numeric, 1..65535
     juce::String host = rest, port;
@@ -401,13 +402,13 @@ juce::String WebDavBackup::validateBaseUrl (const juce::String& baseUrl)
         const int close = rest.indexOfChar (']');
 
         if (close < 0)
-            return juce::String::fromUTF8 ("백업 주소의 IPv6 주소는 [ ] 로 감쌉니다");
+            return tr ("백업 주소의 IPv6 주소는 [ ] 로 감쌉니다");
 
         host = rest.substring (1, close);
         port = rest.substring (close + 1);
 
         if (! looksLikeIPv6 (host))
-            return juce::String::fromUTF8 ("백업 주소의 IPv6 주소가 올바르지 않습니다");
+            return tr ("백업 주소의 IPv6 주소가 올바르지 않습니다");
     }
     else
     {
@@ -419,21 +420,21 @@ juce::String WebDavBackup::validateBaseUrl (const juce::String& baseUrl)
 
         for (auto c : host)
             if (! (juce::CharacterFunctions::isLetterOrDigit (c) || c == '-' || c == '.'))
-                return juce::String::fromUTF8 ("백업 주소의 서버 이름에 쓸 수 없는 글자가 있습니다: ") + juce::String::charToString (c);
+                return trf ("백업 주소의 서버 이름에 쓸 수 없는 글자가 있습니다: {0}", juce::String::charToString (c));
 
         if (host.isEmpty() || host.startsWithChar ('.') || host.endsWithChar ('.') || host.contains (".."))
-            return juce::String::fromUTF8 ("백업 주소의 서버 이름이 올바르지 않습니다");
+            return tr ("백업 주소의 서버 이름이 올바르지 않습니다");
     }
 
     if (port.isNotEmpty())
     {
         if (! port.startsWithChar (':'))
-            return juce::String::fromUTF8 ("백업 주소는 https://서버:포트 형식입니다");
+            return tr ("백업 주소는 https://서버:포트 형식입니다");
 
         const auto digits = port.substring (1);
 
         if (digits.isEmpty() || ! digits.containsOnly ("0123456789") || digits.length() > 5 || digits.getIntValue() < 1 || digits.getIntValue() > 65535)
-            return juce::String::fromUTF8 ("백업 주소의 포트는 1~65535 사이의 숫자여야 합니다 (예: 5006)");
+            return tr ("백업 주소의 포트는 1~65535 사이의 숫자여야 합니다 (예: 5006)");
     }
 
     return {};
@@ -540,13 +541,13 @@ std::vector<WebDavBackup::DavItem> WebDavBackup::parseMultistatus (const juce::S
 juce::Result WebDavBackup::begin (const Target& t, Job which, bool needsAccount)
 {
     if (isThreadRunning())
-        return juce::Result::fail (juce::String::fromUTF8 ("백업 작업이 이미 진행 중입니다"));
+        return juce::Result::fail (tr ("백업 작업이 이미 진행 중입니다"));
 
     if (const auto bad = validateBaseUrl (t.baseUrl); bad.isNotEmpty())
         return juce::Result::fail (bad);
 
     if (normalisedShare (t.share).isEmpty() || t.user.trim().isEmpty() || t.password.isEmpty())
-        return juce::Result::fail (juce::String::fromUTF8 ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"));
+        return juce::Result::fail (tr ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"));
 
     if (needsAccount)
     {
@@ -554,7 +555,7 @@ juce::Result WebDavBackup::begin (const Target& t, Job which, bool needsAccount)
             return juce::Result::fail (bad);
 
         if (t.accountPassword.isEmpty())
-            return juce::Result::fail (juce::String::fromUTF8 ("비밀번호를 넣으세요"));
+            return juce::Result::fail (tr ("비밀번호를 넣으세요"));
     }
 
     target = t;
@@ -579,14 +580,14 @@ juce::Result WebDavBackup::createAccount (const Target& t, Done onDone)
         return result;
 
     if (t.accountPassword.length() < 4)
-        return juce::Result::fail (juce::String::fromUTF8 ("비밀번호는 4자 이상입니다"));
+        return juce::Result::fail (tr ("비밀번호는 4자 이상입니다"));
 
     done = std::move (onDone);
 
     if (! startThread())
     {
         done = nullptr;
-        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+        return juce::Result::fail (tr ("백업 스레드를 시작하지 못했습니다"));
     }
 
     return juce::Result::ok();
@@ -602,7 +603,7 @@ juce::Result WebDavBackup::signIn (const Target& t, SignInDone onDone)
     if (! startThread())
     {
         signInDone = nullptr;
-        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+        return juce::Result::fail (tr ("백업 스레드를 시작하지 못했습니다"));
     }
 
     return juce::Result::ok();
@@ -616,7 +617,7 @@ juce::Result WebDavBackup::start (const Target& t, const juce::File& file, const
     juce::MemoryBlock bytes;
 
     if (! file.loadFileAsData (bytes))
-        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일을 읽지 못했습니다: ") + file.getFullPathName());
+        return juce::Result::fail (trf ("세션 파일을 읽지 못했습니다: {0}", file.getFullPathName()));
 
     remotePath = path;
     data = std::move (bytes);
@@ -626,7 +627,7 @@ juce::Result WebDavBackup::start (const Target& t, const juce::File& file, const
     {
         done = nullptr;
         data.reset();
-        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+        return juce::Result::fail (tr ("백업 스레드를 시작하지 못했습니다"));
     }
 
     return juce::Result::ok();
@@ -638,11 +639,11 @@ juce::Result WebDavBackup::startUploads (const Target& t, std::vector<std::pair<
         return result;
 
     if (files.empty())
-        return juce::Result::fail (juce::String::fromUTF8 ("올릴 파일이 없습니다"));
+        return juce::Result::fail (tr ("올릴 파일이 없습니다"));
 
     for (const auto& f : files)
         if (! f.first.existsAsFile())
-            return juce::Result::fail (juce::String::fromUTF8 ("파일이 없습니다: ") + f.first.getFullPathName());
+            return juce::Result::fail (trf ("파일이 없습니다: {0}", f.first.getFullPathName()));
 
     uploads = std::move (files);
     done = std::move (onDone);
@@ -651,7 +652,7 @@ juce::Result WebDavBackup::startUploads (const Target& t, std::vector<std::pair<
     {
         done = nullptr;
         uploads.clear();
-        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+        return juce::Result::fail (tr ("백업 스레드를 시작하지 못했습니다"));
     }
 
     return juce::Result::ok();
@@ -669,7 +670,7 @@ juce::Result WebDavBackup::startDownload (const Target& t, const juce::String& p
     if (! startThread())
     {
         done = nullptr;
-        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+        return juce::Result::fail (tr ("백업 스레드를 시작하지 못했습니다"));
     }
 
     return juce::Result::ok();
@@ -686,7 +687,7 @@ juce::Result WebDavBackup::startDelete (const Target& t, const juce::String& pat
     if (! startThread())
     {
         done = nullptr;
-        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+        return juce::Result::fail (tr ("백업 스레드를 시작하지 못했습니다"));
     }
 
     return juce::Result::ok();
@@ -698,7 +699,7 @@ juce::Result WebDavBackup::startRename (const Target& t, const juce::String& pat
         return result;
 
     if (newName.trim().isEmpty() || newName.containsChar ('/'))
-        return juce::Result::fail (juce::String::fromUTF8 ("바꿀 이름이 올바르지 않습니다"));
+        return juce::Result::fail (tr ("바꿀 이름이 올바르지 않습니다"));
 
     remotePath = path;
     renameTo = newName.trim();
@@ -707,7 +708,7 @@ juce::Result WebDavBackup::startRename (const Target& t, const juce::String& pat
     if (! startThread())
     {
         done = nullptr;
-        return juce::Result::fail (juce::String::fromUTF8 ("백업 스레드를 시작하지 못했습니다"));
+        return juce::Result::fail (tr ("백업 스레드를 시작하지 못했습니다"));
     }
 
     return juce::Result::ok();
@@ -775,7 +776,7 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
 
         if (threadShouldExit())
         {
-            error = juce::String::fromUTF8 ("백업 작업이 취소되었습니다");
+            error = tr ("백업 작업이 취소되었습니다");
             return 0;
         }
 
@@ -800,7 +801,7 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
                     active = nullptr;
                 }
 
-                error = juce::String::fromUTF8 ("서버의 응답이 너무 큽니다: ") + path;
+                error = trf ("서버의 응답이 너무 큽니다: {0}", path);
                 return 0;
             }
 
@@ -813,7 +814,7 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
                     active = nullptr;
                 }
 
-                error = juce::String::fromUTF8 ("서버의 응답이 너무 큽니다: ") + path;
+                error = trf ("서버의 응답이 너무 큽니다: {0}", path);
                 return 0;
             }
 
@@ -833,15 +834,15 @@ int WebDavBackup::request (const juce::String& method, const juce::String& path,
 
     if (status == 0)
     {
-        error = threadShouldExit() ? juce::String::fromUTF8 ("백업 작업이 취소되었습니다")
-                                   : juce::String::fromUTF8 ("서버에 연결하지 못했습니다: ") + base;
+        error = threadShouldExit() ? tr ("백업 작업이 취소되었습니다")
+                                   : trf ("서버에 연결하지 못했습니다: {0}", base);
         return 0;
     }
 
     if (truncated)
     {
-        error = threadShouldExit() ? juce::String::fromUTF8 ("백업 작업이 취소되었습니다")
-                                   : juce::String::fromUTF8 ("서버의 응답이 중간에 끊겼습니다: ") + path;
+        error = threadShouldExit() ? tr ("백업 작업이 취소되었습니다")
+                                   : trf ("서버의 응답이 중간에 끊겼습니다: {0}", path);
         return 0;
     }
 
@@ -868,7 +869,7 @@ bool WebDavBackup::verifyAccount (juce::String& message)
 
     if (status == 404)
     {
-        message = juce::String::fromUTF8 ("없는 아이디입니다. '계정 만들기'로 먼저 만드세요.");
+        message = tr ("없는 아이디입니다. '계정 만들기'로 먼저 만드세요.");
         return false;
     }
 
@@ -882,13 +883,13 @@ bool WebDavBackup::verifyAccount (juce::String& message)
 
     if (! parseAccount (body.toString(), salt, hash))
     {
-        message = juce::String::fromUTF8 ("서버의 계정 정보를 읽을 수 없습니다: ") + target.accountId;
+        message = trf ("서버의 계정 정보를 읽을 수 없습니다: {0}", target.accountId);
         return false;
     }
 
     if (hashPassword (target.accountPassword, salt) != hash)
     {
-        message = juce::String::fromUTF8 ("비밀번호가 맞지 않습니다.");
+        message = tr ("비밀번호가 맞지 않습니다.");
         return false;
     }
 
@@ -941,7 +942,7 @@ bool WebDavBackup::makeFolder (const juce::String& path, juce::String& message)
         return false;
     }
 
-    message = juce::String::fromUTF8 ("서버가 폴더 만들기를 거부했습니다 (HTTP ") + juce::String (status) + "): " + path;
+    message = trf ("서버가 폴더 만들기를 거부했습니다 (HTTP {0}): {1}", juce::String (status), path);
     return false;
 }
 
@@ -1070,7 +1071,7 @@ void WebDavBackup::runCreateAccount (bool& ok, juce::String& message)
 
     if (status == 412)
     {
-        message = juce::String::fromUTF8 ("이미 있는 아이디입니다: ") + target.accountId;
+        message = trf ("이미 있는 아이디입니다: {0}", target.accountId);
         return;
     }
 
@@ -1091,7 +1092,7 @@ void WebDavBackup::runCreateAccount (bool& ok, juce::String& message)
     makeFolder (accountFolder (target.share, target.accountId), folderMessage);
 
     ok = true;
-    message = juce::String::fromUTF8 ("계정을 만들었습니다: ") + target.accountId;
+    message = trf ("계정을 만들었습니다: {0}", target.accountId);
 }
 
 void WebDavBackup::runSignIn (bool& ok, juce::String& message, std::vector<Entry>& entries, bool& everyone)
@@ -1151,8 +1152,8 @@ void WebDavBackup::runSignIn (bool& ok, juce::String& message, std::vector<Entry
 
     std::stable_sort (entries.begin(), entries.end(), [] (const Entry& a, const Entry& b) { return a.modified > b.modified; });
     ok = true;
-    message = entries.empty() ? juce::String::fromUTF8 ("백업이 아직 없습니다")
-                              : juce::String::fromUTF8 ("백업 ") + juce::String ((int) entries.size()) + juce::String::fromUTF8 ("개");
+    message = entries.empty() ? tr ("백업이 아직 없습니다")
+                              : trf ("백업 {0}개", juce::String ((int) entries.size()));
 }
 
 bool WebDavBackup::putFile (const juce::MemoryBlock& bytes, const juce::String& path, juce::String& message)
@@ -1179,12 +1180,12 @@ bool WebDavBackup::putFile (const juce::MemoryBlock& bytes, const juce::String& 
         const int removed = request ("DELETE", partPath, nullptr, {}, ignored);
         const auto leftBehind = (removed == 200 || removed == 202 || removed == 204 || removed == 404)
                                     ? juce::String()
-                                    : juce::String::fromUTF8 (" (올리던 파일이 ") + partPath + juce::String::fromUTF8 (" 로 남았습니다)");
+                                    : trf (" (올리던 파일이 {0} 로 남았습니다)", partPath);
 
         if (moved == 0)
             message = error + leftBehind;
         else
-            message = juce::String::fromUTF8 ("서버가 이름 바꾸기를 거부했습니다 (HTTP ") + juce::String (moved) + ")" + leftBehind;
+            message = trf ("서버가 이름 바꾸기를 거부했습니다 (HTTP {0}){1}", juce::String (moved), leftBehind);
     }
     else if (put == 401 || put == 403)
         message = serverRefused();
@@ -1207,7 +1208,7 @@ void WebDavBackup::runUpload (bool& ok, juce::String& message)
     if (putFile (data, remotePath, message))
     {
         ok = true;
-        message = juce::String::fromUTF8 ("백업 완료: ") + remotePath.fromLastOccurrenceOf ("/", false, false);
+        message = trf ("백업 완료: {0}", remotePath.fromLastOccurrenceOf ("/", false, false));
     }
 }
 
@@ -1234,13 +1235,13 @@ void WebDavBackup::runUploadMany (bool& ok, juce::String& message)
 
         if (! item.first.loadFileAsData (bytes))
         {
-            message = juce::String::fromUTF8 ("파일을 읽지 못했습니다: ") + item.first.getFullPathName();
+            message = trf ("파일을 읽지 못했습니다: {0}", item.first.getFullPathName());
             return;
         }
 
         if (! putFile (bytes, item.second, message))
         {
-            message = item.first.getFileName() + ": " + message + (sent > 0 ? juce::String::fromUTF8 (" (앞의 ") + juce::String (sent) + juce::String::fromUTF8 ("개는 올라갔습니다)") : juce::String());
+            message = item.first.getFileName() + ": " + message + (sent > 0 ? trf (" (앞의 {0}개는 올라갔습니다)", juce::String (sent)) : juce::String());
             return;
         }
 
@@ -1248,7 +1249,7 @@ void WebDavBackup::runUploadMany (bool& ok, juce::String& message)
     }
 
     ok = true;
-    message = juce::String::fromUTF8 ("플러그인 프리셋 백업 완료: ") + juce::String (sent) + juce::String::fromUTF8 ("개");
+    message = trf ("플러그인 프리셋 백업 완료: {0}개", juce::String (sent));
 }
 
 bool WebDavBackup::ownsPath (const juce::String& path, juce::String& message)
@@ -1259,7 +1260,7 @@ bool WebDavBackup::ownsPath (const juce::String& path, juce::String& message)
 
     if (! parseBackupPath (target.share, path, owner))
     {
-        message = juce::String::fromUTF8 ("백업 경로가 올바르지 않습니다: ") + path;
+        message = trf ("백업 경로가 올바르지 않습니다: {0}", path);
         return false;
     }
 
@@ -1274,7 +1275,7 @@ bool WebDavBackup::ownsPath (const juce::String& path, juce::String& message)
 
     if (! admin)
     {
-        message = juce::String::fromUTF8 ("다른 계정의 백업입니다.");
+        message = tr ("다른 계정의 백업입니다.");
         return false;
     }
 
@@ -1328,8 +1329,8 @@ void WebDavBackup::runDelete (bool& ok, juce::String& message)
     ok = true;
     const auto name = remotePath.fromLastOccurrenceOf ("/", false, false);
     // 202: the server took the request but has not finished - it may still be in the list for a moment
-    message = status == 202 ? juce::String::fromUTF8 ("삭제를 서버가 접수했습니다 (목록에 잠시 더 보일 수 있습니다): ") + name
-                            : juce::String::fromUTF8 ("지웠습니다: ") + name;
+    message = status == 202 ? trf ("삭제를 서버가 접수했습니다 (목록에 잠시 더 보일 수 있습니다): {0}", name)
+                            : trf ("지웠습니다: {0}", name);
 }
 
 void WebDavBackup::runRename (bool& ok, juce::String& message)
@@ -1342,7 +1343,7 @@ void WebDavBackup::runRename (bool& ok, juce::String& message)
 
     if (renameTo.isEmpty() || renameTo.containsChar ('/') || newPath == remotePath)
     {
-        message = juce::String::fromUTF8 ("바꿀 이름이 올바르지 않습니다");
+        message = tr ("바꿀 이름이 올바르지 않습니다");
         return;
     }
 
@@ -1368,13 +1369,13 @@ void WebDavBackup::runRename (bool& ok, juce::String& message)
 
     if (status == 412)
     {
-        message = juce::String::fromUTF8 ("같은 이름의 백업이 이미 있습니다: ") + renameTo;
+        message = trf ("같은 이름의 백업이 이미 있습니다: {0}", renameTo);
         return;
     }
 
     if (status == 404)
     {
-        message = juce::String::fromUTF8 ("서버에 그 백업이 없습니다: ") + remotePath;
+        message = trf ("서버에 그 백업이 없습니다: {0}", remotePath);
         return;
     }
 
@@ -1385,7 +1386,7 @@ void WebDavBackup::runRename (bool& ok, juce::String& message)
     }
 
     ok = true;
-    message = juce::String::fromUTF8 ("이름을 바꿨습니다: ") + renameTo;
+    message = trf ("이름을 바꿨습니다: {0}", renameTo);
 }
 
 void WebDavBackup::runDownload (bool& ok, juce::String& message)
@@ -1411,7 +1412,7 @@ void WebDavBackup::runDownload (bool& ok, juce::String& message)
 
     if (status == 404)
     {
-        message = juce::String::fromUTF8 ("서버에 그 백업이 없습니다: ") + remotePath;
+        message = trf ("서버에 그 백업이 없습니다: {0}", remotePath);
         return;
     }
 
@@ -1423,7 +1424,7 @@ void WebDavBackup::runDownload (bool& ok, juce::String& message)
 
     if (bytes.getSize() == 0)
     {
-        message = juce::String::fromUTF8 ("서버가 빈 파일을 보냈습니다: ") + remotePath;
+        message = trf ("서버가 빈 파일을 보냈습니다: {0}", remotePath);
         return;
     }
 
@@ -1432,12 +1433,12 @@ void WebDavBackup::runDownload (bool& ok, juce::String& message)
 
     if (! temp.getFile().replaceWithData (bytes.getData(), bytes.getSize()) || ! temp.overwriteTargetFileWithTemporary())
     {
-        message = juce::String::fromUTF8 ("파일을 쓰지 못했습니다: ") + localFile.getFullPathName();
+        message = trf ("파일을 쓰지 못했습니다: {0}", localFile.getFullPathName());
         return;
     }
 
     ok = true;
-    message = juce::String::fromUTF8 ("불러옴: ") + localFile.getFileName();
+    message = trf ("불러옴: {0}", localFile.getFileName());
 }
 
 } // namespace gocue::livemix

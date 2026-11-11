@@ -1,4 +1,5 @@
 #include "Recorder.h"
+#include "Localisation.h"
 #include "RecordingQueue.h"
 #include "WavSink.h"
 #include "MfMp3Sink.h"
@@ -25,8 +26,7 @@ juce::String cleanNickname(const std::string& name, unsigned track)
     for (auto c : juce::String("<>:\"/\\|?*")) result = result.replaceCharacter(c, '_');
     result = result.trimCharactersAtEnd(" .");
     if (result.isEmpty())
-        result = track == 0 ? juce::String::fromUTF8("내소리")
-                            : juce::String::fromUTF8(track == 1 ? "합방상대1" : "합방상대2");
+        result = defaultRecordingTrackName ((int) track);
     return result;
 }
 std::uint64_t threadCpuTicks()
@@ -112,7 +112,7 @@ struct Recorder::Impl
     bool choosePaths()
     {
         juce::File parent = request.options.directoryUtf8.empty()
-            ? juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile(juce::String::fromUTF8("LiveMix 녹음"))
+            ? defaultRecordingDirectory()
             : juce::File(juce::String::fromUTF8(request.options.directoryUtf8.c_str()));
         const auto created = parent.createDirectory();
         if (created.failed()) { fail(Error::openFailed, created.getErrorMessage()); return false; }
@@ -125,7 +125,7 @@ struct Recorder::Impl
             for (unsigned i = 0; i < 3; ++i)
                 bases[i] = juce::String::charToString(static_cast<juce::juce_wchar>('A' + i)) + "_"
                     + cleanNickname(request.people[i].participantId || i == 0 ? request.people[i].nicknameUtf8 : "", i);
-            bases[3] = juce::String::fromUTF8("D_전체");
+            bases[3] = defaultRecordingTrackName (3);
         }
         else
         {

@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "TopBar.h"
 #include "AudioBackends.h"
 #include "DeviceFormatText.h"
@@ -33,7 +34,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     sessionName.setMinimumHorizontalScale (1.0f);
     sessionName.setColour (juce::Label::backgroundColourId, Palette::card2);
     sessionName.setColour (juce::Label::outlineColourId, Palette::line);
-    sessionName.setTooltip (ko ("열린 세션. 세션 메뉴에서 저장·열기"));
+    sessionName.setTooltip (tr ("열린 세션. 세션 메뉴에서 저장·열기"));
     addAndMakeVisible (sessionName);
     styleCaption (sessionState, "");
     sessionState.setComponentID ("session-state");
@@ -43,7 +44,7 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     deviceLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (deviceLabel);
     deviceCombo.setWantsKeyboardFocus (false);
-    deviceCombo.setTextWhenNothingSelected (ko ("오디오 장치 없음"));
+    deviceCombo.setTextWhenNothingSelected (tr ("오디오 장치 없음"));
     deviceCombo.onChange = [this]
     {
         deviceCombo.settle();
@@ -76,10 +77,10 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     addAndMakeVisible (micMuteButton);
     addAndMakeVisible (fxMuteButton);
 
-    micMuteButton.setButtonText (ko ("마이크 뮤트"));
+    micMuteButton.setButtonText (tr ("마이크 뮤트"));
     micMuteButton.setComponentID ("mic-mute-group");
     micMuteButton.onClick = [this] { if (onMicMuteGroup) onMicMuteGroup(); };
-    fxMuteButton.setButtonText (ko ("FX 뮤트"));
+    fxMuteButton.setButtonText (tr ("FX 뮤트"));
     fxMuteButton.setComponentID ("fx-mute-group");
     fxMuteButton.onClick = [this] { if (onFxMuteGroup) onFxMuteGroup(); };
     addAndMakeVisible (dspLabel);
@@ -93,9 +94,9 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
         addAndMakeVisible (b);
     };
 
-    button (fxButton, ko ("FX 채널"), [this] { if (onFxPanel) onFxPanel(); });
-    button (pluginsButton, ko ("플러그인 관리"), [this] { if (onPluginManager) onPluginManager(); });
-    pluginsButton.setTooltip (ko ("스캔한 플러그인의 사용 여부, VST2 스위치, 플러그인 프리셋"));
+    button (fxButton, tr ("FX 채널"), [this] { if (onFxPanel) onFxPanel(); });
+    button (pluginsButton, tr ("플러그인 관리"), [this] { if (onPluginManager) onPluginManager(); });
+    pluginsButton.setTooltip (tr ("스캔한 플러그인의 사용 여부, VST2 스위치, 플러그인 프리셋"));
 
     refresh();
 }
@@ -103,8 +104,8 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
 void TopBar::refresh()
 {
     sessionName.setText (document.getDisplayName(), juce::dontSendNotification);
-    sessionName.setTooltip (ko ("열린 세션. 세션 메뉴에서 저장·열기") + "\n" + document.getDisplayName());
-    sessionState.setText (document.isDirty() ? ko ("저장 안 됨") : document.hasFile() ? ko ("저장됨") : ko ("아직 파일 없음"), juce::dontSendNotification);
+    sessionName.setTooltip (trf ("열린 세션. 세션 메뉴에서 저장·열기\n{0}", document.getDisplayName()));
+    sessionState.setText (document.isDirty() ? tr ("저장 안 됨") : document.hasFile() ? tr ("저장됨") : tr ("아직 파일 없음"), juce::dontSendNotification);
     sessionState.setColour (juce::Label::textColourId, document.isDirty() ? Palette::meterYellow : Palette::dimText);
     resized();
 }
@@ -136,10 +137,10 @@ void TopBar::setDevices (const juce::StringArray& names, const juce::String& cur
 juce::String TopBar::buildStatusText (double sampleRate, int bufferSize, double latencyMs, bool running,
                                      const MixEngine::DeviceFormat& format, bool showSampleWord)
 {
-    if (! running) return ko ("오디오 멈춤");
+    if (! running) return tr ("오디오 멈춤");
     return juce::String (sampleRate / 1000.0, 1) + ko (" kHz · ")
         + (format.inputBits > 0 ? DeviceFormatText::bitDepth (format.inputBits, false) + ko (" · ") : juce::String())
-        + juce::String (bufferSize) + (showSampleWord ? ko (" 샘플") : juce::String()) + "  " + juce::String (latencyMs, 1) + " ms";
+        + (showSampleWord ? trf ("{0} 샘플", bufferSize) : juce::String (bufferSize)) + "  " + juce::String (latencyMs, 1) + " ms";
 }
 
 void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, double dspLoad, bool running, const MixEngine::DeviceFormat& format)
@@ -160,7 +161,7 @@ void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, dou
     {
         const bool shared = format.kind == MixEngine::DeviceFormat::Kind::windowsShared;
         tooltip += "\n" + DeviceFormatText::directions (format, true, document.getEngine().isMonitorRunning(), shared)
-            + (shared ? ko (" (윈도우 설정)") : format.kind == MixEngine::DeviceFormat::Kind::asio ? ko (" (ASIO 드라이버)") : ko (" (독점)"));
+            + (shared ? tr (" (윈도우 설정)") : format.kind == MixEngine::DeviceFormat::Kind::asio ? tr (" (ASIO 드라이버)") : tr (" (독점)"));
     }
     statusLabel.setTooltip (tooltip);
 
@@ -173,7 +174,7 @@ void TopBar::setStatus (double sampleRate, int bufferSize, double latencyMs, dou
 
 void TopBar::setFxCount (int count)
 {
-    fxButton.setButtonText (ko ("FX 채널") + (count > 0 ? "  " + juce::String (count) : juce::String()));
+    fxButton.setButtonText (trf ("FX 채널{0}", (count > 0 ? "  " + juce::String (count) : juce::String())));
     resized();
 }
 

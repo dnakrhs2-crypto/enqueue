@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Localisation.h"
 #include "MixDocument.h"
 #include "Widgets.h"
 
@@ -65,7 +66,7 @@ private:
     std::vector<std::unique_ptr<juce::TextButton>> chips;
     juce::TextButton openChainButton, addPluginButton;
     juce::Slider returnSlider;
-    Chip masterChip, directChip, monoChip, muteGroupChip { ko ("뮤트그룹") };
+    Chip masterChip, directChip, monoChip, muteGroupChip { tr ("뮤트그룹") };
     bool allMuted = false, groupMuted = false;   // every FX muted / the FX mute group muted
     juce::ComboBox directCombo;
     MeterBar meter_ { true };

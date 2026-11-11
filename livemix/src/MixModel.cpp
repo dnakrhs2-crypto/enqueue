@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "MixModel.h"
 
 #include "model/ProjectSerializer.h"
@@ -92,7 +93,7 @@ int MixSession::addChannel (const juce::String& newName)
         return -1;
 
     MixChannel c;
-    c.name = newName.isNotEmpty() ? newName : juce::String::fromUTF8 ("마이크 ") + juce::String ((int) channels.size() + 1);
+    c.name = newName.isNotEmpty() ? newName : newMicName ((int) channels.size() + 1);
 
     // the next free input after the last channel's
     if (! channels.empty())
@@ -206,7 +207,7 @@ void MixSession::sanitise()
         uniqueId (c.id);
 
         if (c.name.isEmpty())
-            c.name = juce::String::fromUTF8 ("마이크 ") + juce::String ((int) i + 1);
+            c.name = newMicName ((int) i + 1);
 
         if ((int) c.pluginGroups.size() > maxPluginGroups)
             c.pluginGroups.resize ((size_t) maxPluginGroups);
@@ -350,32 +351,31 @@ juce::String MixSession::toJson() const
 juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, juce::StringArray* warnings)
 {
     if (json.trim().isEmpty())
-        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일이 비어 있습니다"));
+        return juce::Result::fail (tr ("세션 파일이 비어 있습니다"));
 
     // JUCE's parser stops after the first object: corruption behind it would be read as a good file and then written over
     if (! json.trimEnd().endsWithChar ('}') || ProjectSerializer::hasTrailingJsonData (json))
-        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일이 손상됐습니다 (세션이 끝난 뒤에 데이터가 더 있습니다)"));
+        return juce::Result::fail (tr ("세션 파일이 손상됐습니다 (세션이 끝난 뒤에 데이터가 더 있습니다)"));
 
     juce::var root;
     const auto parsed = juce::JSON::parse (json, root);
 
     if (parsed.failed())
-        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일을 읽을 수 없습니다 (JSON): ") + parsed.getErrorMessage());
+        return juce::Result::fail (trf ("세션 파일을 읽을 수 없습니다 (JSON): {0}", parsed.getErrorMessage()));
 
     if (root.getDynamicObject() == nullptr)
-        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일 형식이 아닙니다 (최상위가 객체가 아닙니다)"));
+        return juce::Result::fail (tr ("세션 파일 형식이 아닙니다 (최상위가 객체가 아닙니다)"));
 
     const auto app = root.getProperty ("app", "").toString();
 
     if (app != "LiveMix")
-        return juce::Result::fail (app.isEmpty() ? juce::String::fromUTF8 ("LiveMix 세션 파일이 아닙니다")
-                                                 : juce::String::fromUTF8 ("다른 프로그램(\"") + app + juce::String::fromUTF8 ("\")이 쓴 파일입니다. LiveMix 세션이 아닙니다"));
+        return juce::Result::fail (app.isEmpty() ? tr ("LiveMix 세션 파일이 아닙니다")
+                                                 : trf ("다른 프로그램(\"{0}\")이 쓴 파일입니다. LiveMix 세션이 아닙니다", app));
 
     const int version = (int) root.getProperty ("version", 1);
 
     if (version > currentVersion)
-        return juce::Result::fail (juce::String::fromUTF8 ("더 새로운 LiveMix로 저장한 세션입니다 (파일 버전 ") + juce::String (version)
-                                   + juce::String::fromUTF8 (", 이 버전은 ") + juce::String (currentVersion) + juce::String::fromUTF8 ("까지 읽습니다). LiveMix를 업데이트하세요."));
+        return juce::Result::fail (trf ("더 새로운 LiveMix로 저장한 세션입니다 (파일 버전 {0}, 이 버전은 {1}까지 읽습니다). LiveMix를 업데이트하세요.", juce::String (version), juce::String (currentVersion)));
 
     MixSession s;
     s.name = root.getProperty ("name", "").toString();
@@ -513,7 +513,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
         }
 
     if (warnings != nullptr && chainOverLimit)
-        warnings->add (juce::String::fromUTF8 ("체인에 플러그인이 16개보다 많아 뒤의 것은 뺐습니다"));
+        warnings->add (tr ("체인에 플러그인이 16개보다 많아 뒤의 것은 뺐습니다"));
 
     if (warnings != nullptr && (s.channels.size() != channelsBefore || s.fx.size() != fxBefore))
         warnings->add ("The session had more channels than LiveMix supports: the extra ones were dropped");
@@ -528,8 +528,7 @@ juce::Result MixSession::save (const juce::File& file) const
     const auto bytes = (juce::int64) json.getNumBytesAsUTF8();
 
     if (bytes > maxFileBytes)   // what load() refuses must not be written: the file would never open again
-        return juce::Result::fail (juce::String::fromUTF8 ("세션이 너무 커서 저장하지 않았습니다 (") + juce::File::descriptionOfSizeInBytes (bytes)
-                                   + juce::String::fromUTF8 ("): 플러그인 설정이 LiveMix가 다시 열 수 있는 크기(32 MB)를 넘습니다"));
+        return juce::Result::fail (trf ("세션이 너무 커서 저장하지 않았습니다 ({0}): 플러그인 설정이 LiveMix가 다시 열 수 있는 크기(32 MB)를 넘습니다", juce::File::descriptionOfSizeInBytes (bytes)));
 
     return SafeFileWrite::writeTextVerified (file, json, [] (const juce::String& readBack) -> juce::Result
     {
@@ -541,8 +540,7 @@ juce::Result MixSession::save (const juce::File& file) const
 juce::Result MixSession::checkFileSize (juce::int64 bytes)
 {
     if (bytes > maxFileBytes)
-        return juce::Result::fail (juce::String::fromUTF8 ("세션 파일이 너무 큽니다 (") + juce::File::descriptionOfSizeInBytes (bytes)
-                                   + juce::String::fromUTF8 ("): 세션 파일이 아닙니다"));
+        return juce::Result::fail (trf ("세션 파일이 너무 큽니다 ({0}): 세션 파일이 아닙니다", juce::File::descriptionOfSizeInBytes (bytes)));
 
     return juce::Result::ok();
 }
@@ -550,7 +548,7 @@ juce::Result MixSession::checkFileSize (juce::int64 bytes)
 juce::Result MixSession::load (const juce::File& file, MixSession& out, juce::StringArray* warnings)
 {
     if (! file.existsAsFile())
-        return juce::Result::fail (juce::String::fromUTF8 ("파일이 없습니다: ") + file.getFullPathName());
+        return juce::Result::fail (trf ("파일이 없습니다: {0}", file.getFullPathName()));
 
     if (const auto size = checkFileSize (file.getSize()); size.failed())
         return size;   // not read into memory at all

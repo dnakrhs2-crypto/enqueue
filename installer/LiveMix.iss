@@ -56,8 +56,10 @@ UsePreviousGroup=no
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
 
 ; localised strings of our own (UTF-8 with BOM); this file itself stays ASCII apart from the publisher
+#define LiveMixJapanese
 #include "Enqueue.messages.iss"
 #include "LiveMix.messages.iss"
 

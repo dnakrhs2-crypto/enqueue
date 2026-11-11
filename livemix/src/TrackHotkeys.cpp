@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "TrackHotkeys.h"
 
 namespace gocue::livemix::TrackHotkeys
@@ -74,7 +75,7 @@ std::vector<Track> settingsRows (const MixSession& session, const LiveMixSetting
             if (number <= present)
                 list.push_back ({ kind, number, labelFor (session, kind, number), true });
             else if (getKey (settings, kind, number).isNotEmpty())
-                list.push_back ({ kind, number, juce::String::fromUTF8 (kind == Kind::mic ? "마이크 " : "FX ") + juce::String (number) + " ON/OFF", false });
+                list.push_back ({ kind, number, (kind == Kind::mic ? trf ("마이크 {0} ON/OFF", number) : trf ("FX {0} ON/OFF", number)), false });
         }
     }
 

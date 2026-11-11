@@ -1,5 +1,7 @@
 #include "audio/LoudnessMeter.h"
 #include "MixEngine.h"
+#include "Localisation.h"
+#include "ui/LoudnessWindow.h"
 
 #include <juce_core/juce_core.h>
 
@@ -51,6 +53,57 @@ public:
 
     void runTest() override
     {
+        beginTest ("target menu follows language while item IDs and stored LUFS remain unchanged");
+        {
+            struct Scope
+            {
+                Language language = currentLanguage();
+                UiTranslator translator = uiTranslator.load();
+                juce::File directory = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                    .getChildFile ("LiveMixLufsLanguage-" + juce::Uuid().toString());
+                ~Scope() { initialiseLanguage (language); uiTranslator.store (translator); directory.deleteRecursively(); }
+            } scope;
+            expect (scope.directory.createDirectory().wasOk());
+            const char* labels[][6] {
+                { "-14 LUFS   유튜브 · 스포티파이", "-16 LUFS   애플 뮤직 · 팟캐스트", "-18 LUFS", "-20 LUFS",
+                  "-23 LUFS   방송 (EBU R128)", "-24 LUFS   방송 (ATSC A/85)" },
+                { "-14 LUFS   YouTube · Spotify", "-16 LUFS   Apple Music · Podcasts", "-18 LUFS", "-20 LUFS",
+                  "-23 LUFS   Broadcast (EBU R128)", "-24 LUFS   Broadcast (ATSC A/85)" },
+                { "-14 LUFS   YouTube · Spotify", "-16 LUFS   Apple Music · ポッドキャスト", "-18 LUFS", "-20 LUFS",
+                  "-23 LUFS   放送 (EBU R128)", "-24 LUFS   放送 (ATSC A/85)" }
+            };
+            const double values[] { -14, -16, -18, -20, -23, -24 };
+            MixEngine engine;
+            for (int language = 0; language < 3; ++language)
+            {
+                initialiseLanguage ((Language) language);
+                LiveMixSettings settings (scope.directory.getChildFile (languageCode ((Language) language)));
+                LoudnessWindow window (engine, settings);
+                juce::ComboBox* target = nullptr;
+                for (auto* child : window.getContentComponent()->getChildren())
+                    if (auto* combo = dynamic_cast<juce::ComboBox*> (child)) target = combo;
+                expect (target != nullptr);
+                if (target == nullptr) continue;
+                expectEquals (target->getNumItems(), 6);
+                for (int i = 0; i < 6; ++i)
+                {
+                    const auto text = target->getItemText (i);
+                    expectEquals (text, juce::String::fromUTF8 (labels[language][i]));
+                    if (language != 0)
+                    {
+                        bool korean = false;
+                        for (auto ch : text)
+                            korean = korean || (ch >= 0xac00 && ch <= 0xd7a3) || (ch >= 0x1100 && ch <= 0x11ff)
+                                            || (ch >= 0x3130 && ch <= 0x318f);
+                        expect (! korean, text);
+                    }
+                    expectEquals (target->getItemId (i), i + 1);
+                    target->setSelectedId (i + 1, juce::sendNotificationSync);
+                    expectEquals (settings.getLufsTarget(), values[i]);
+                }
+            }
+        }
+
         beginTest ("the K-weighting at 48 kHz is the standard's table");
         {
             const auto s = KWeightingFilter::shelf (48000.0);

@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "MixDocument.h"
 
 #include "PluginSet.h"
@@ -32,7 +33,7 @@ namespace
     MixSession defaultSession()
     {
         MixSession fresh;   // no name: an unsaved session is "새 세션", and once saved it goes by its file
-        fresh.addFx (juce::String::fromUTF8 ("리버브"));
+        fresh.addFx (tr ("리버브"));
         fresh.addChannel();
         return fresh;
     }
@@ -80,7 +81,7 @@ juce::String MixDocument::getDisplayName() const
     if (session.name.isNotEmpty())
         return session.name;
 
-    return hasFile() ? file.getFileNameWithoutExtension() : juce::String::fromUTF8 ("새 세션");
+    return hasFile() ? file.getFileNameWithoutExtension() : tr ("새 세션");
 }
 
 void MixDocument::newSession()
@@ -159,7 +160,7 @@ juce::Result MixDocument::save (const juce::File& newFile, const MixSession* cap
             session.master.chain = captureForSave->master.chain;
         }
         else if (! engine.captureLivePluginStates (session))
-            return juce::Result::fail (juce::String::fromUTF8 ("플러그인 설정을 읽지 못해 저장하지 않았습니다 (플러그인이 오류를 냈습니다). 다시 시도하거나 그 플러그인을 체인에서 빼세요."));
+            return juce::Result::fail (tr ("플러그인 설정을 읽지 못해 저장하지 않았습니다 (플러그인이 오류를 냈습니다). 다시 시도하거나 그 플러그인을 체인에서 빼세요."));
 
         session.sanitise();
         const auto result = session.save (newFile);
@@ -182,7 +183,7 @@ juce::Result MixDocument::save (const juce::File& newFile, const MixSession* cap
             // three writes and a knob is still moving: the file is a moment behind, and the document says so
             dirty = true;
             notifyValue();
-            return juce::Result::fail (juce::String::fromUTF8 ("저장하는 동안 플러그인 값이 계속 바뀌어 마지막 변경이 파일에 없습니다. 잠시 뒤 다시 저장해 주세요."));
+            return juce::Result::fail (tr ("저장하는 동안 플러그인 값이 계속 바뀌어 마지막 변경이 파일에 없습니다. 잠시 뒤 다시 저장해 주세요."));
         }
     }
 
@@ -193,7 +194,7 @@ juce::Result MixDocument::save (const juce::File& newFile, const MixSession* cap
 juce::Result MixDocument::saveIfPossible (const MixSession* captureForSave)
 {
     if (! hasFile())
-        return juce::Result::fail (juce::String::fromUTF8 ("저장할 파일이 정해지지 않았습니다"));
+        return juce::Result::fail (tr ("저장할 파일이 정해지지 않았습니다"));
 
     return save (file, captureForSave);
 }

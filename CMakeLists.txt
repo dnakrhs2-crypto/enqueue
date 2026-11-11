@@ -265,8 +265,14 @@ set_property(TARGET libminiupnpc-static PROPERTY MSVC_RUNTIME_LIBRARY "MultiThre
 target_compile_options(libminiupnpc-static PRIVATE $<$<C_COMPILER_ID:MSVC>:/utf-8>)
 # LiveMix (the live mic VST3 host) shares the core: its model and engine are a second interface library
 add_library(LiveMixCore INTERFACE)
+juce_add_binary_data(LiveMixTranslations HEADER_NAME LiveMixStrings.h NAMESPACE LiveMixStrings
+    SOURCES livemix/i18n/strings.json)
+set_property(TARGET LiveMixTranslations PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_link_libraries(LiveMixCore INTERFACE LiveMixTranslations)
 target_compile_features(LiveMixCore INTERFACE c_std_17)
 target_sources(LiveMixCore INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/Localisation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/AppRestart.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/shared/lm_asrc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/MixEngine.cpp
@@ -308,7 +314,7 @@ if(WIN32)
 endif()
 target_sources(LiveMixCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/livemix/src/WebDavBackup.cpp)
 
-set(LIVEMIX_VERSION "0.19.0")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
+set(LIVEMIX_VERSION "0.20.0")   # LiveMix version (the Enqueue version is the project version); not a cache variable: a bump must reach existing build trees
 set(LIVEMIX_APPCAST_URL "" CACHE STRING "LiveMix WinSparkle appcast URL (empty disables update checks)")
 
 # The online backup's server account is built into the app from a JSON file that lives outside the repository

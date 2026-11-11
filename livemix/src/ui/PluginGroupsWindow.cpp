@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "ui/PluginGroupsWindow.h"
 
 #include "Widgets.h"
@@ -17,7 +18,7 @@ public:
         title.setColour (juce::Label::textColourId, Palette::text);
         addAndMakeVisible (title);
 
-        styleCaption (groupsCaption, ko ("그룹 (카드의 번호)"));
+        styleCaption (groupsCaption, tr ("그룹 (카드의 번호)"));
         addAndMakeVisible (groupsCaption);
         groupsList.setModel (&groupsModel);
         groupsList.setRowHeight (30);
@@ -34,13 +35,13 @@ public:
             addAndMakeVisible (b);
         };
 
-        button (addGroupButton, ko ("+ 그룹 추가"), [this] { addGroup(); });
+        button (addGroupButton, tr ("+ 그룹 추가"), [this] { addGroup(); });
         addGroupButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
         addGroupButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
-        button (removeGroupButton, ko ("그룹 삭제"), [this] { removeGroup(); });
-        button (offButton, ko ("이 그룹 끄기"), [this] { toggleOff(); });
+        button (removeGroupButton, tr ("그룹 삭제"), [this] { removeGroup(); });
+        button (offButton, tr ("이 그룹 끄기"), [this] { toggleOff(); });
 
-        styleCaption (membersCaption, ko ("이 그룹에 넣을 플러그인 (지금 VST3 체인)"));
+        styleCaption (membersCaption, tr ("이 그룹에 넣을 플러그인 (지금 VST3 체인)"));
         addAndMakeVisible (membersCaption);
         membersList.setModel (&membersModel);
         membersList.setRowHeight (30);
@@ -49,7 +50,7 @@ public:
         membersList.setOutlineThickness (1);
         addAndMakeVisible (membersList);
 
-        styleCaption (note, ko ("그룹을 만들면 마이크 카드의 체인 밑에 그 번호가 켜집니다. 번호를 누르면 그룹에 넣은 플러그인이 한꺼번에 꺼지고 (번호가 빨갛게), 다시 누르면 켜집니다. 그룹에 없는 플러그인은 그대로입니다."));
+        styleCaption (note, tr ("그룹을 만들면 마이크 카드의 체인 밑에 그 번호가 켜집니다. 번호를 누르면 그룹에 넣은 플러그인이 한꺼번에 꺼지고 (번호가 빨갛게), 다시 누르면 켜집니다. 그룹에 없는 플러그인은 그대로입니다."));
         note.setFont (bodyFont (12.5f));
         note.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (note);
@@ -165,10 +166,10 @@ private:
 
             g.setColour (Palette::text);
             g.setFont (bodyFont (13.5f));
-            g.drawText (ko ("플러그인 그룹 ") + juce::String (row + 1), 40, 0, width - 48, height, juce::Justification::centredLeft, true);
+            g.drawText (trf ("플러그인 그룹 {0}", juce::String (row + 1)), 40, 0, width - 48, height, juce::Justification::centredLeft, true);
             g.setColour (info.off ? Palette::danger : Palette::dimText);
             g.setFont (bodyFont (12.5f));
-            g.drawText (juce::String (info.members) + ko ("개") + (info.off ? ko (" · 꺼짐") : juce::String()), 0, 0, width - 10, height, juce::Justification::centredRight, true);
+            g.drawText (trf ("{0}개{1}", juce::String (info.members), (info.off ? tr (" · 꺼짐") : juce::String())), 0, 0, width - 10, height, juce::Justification::centredRight, true);
         }
 
         void selectedRowsChanged (int row) override { owner.groupSelected (row); }
@@ -213,7 +214,7 @@ private:
             {
                 g.setColour (Palette::dimText);
                 g.setFont (bodyFont (12.0f));
-                g.drawText (ko ("지금 꺼짐"), 0, 0, width - 10, height, juce::Justification::centredRight, true);
+                g.drawText (tr ("지금 꺼짐"), 0, 0, width - 10, height, juce::Justification::centredRight, true);
             }
         }
 
@@ -248,7 +249,7 @@ private:
             return;
         }
 
-        title.setText (c->name + " - " + ko ("플러그인 그룹"), juce::dontSendNotification);
+        title.setText (trf ("{0} - 플러그인 그룹", c->name), juce::dontSendNotification);
 
         groups.clear();
 
@@ -263,7 +264,7 @@ private:
             for (int i = 0; i < chain->getNumSlots(); ++i)
             {
                 const auto& slot = chain->getSlot (i);
-                slots.push_back ({ slot.state.slotId, slot.plugin != nullptr ? slot.plugin->getName() : slot.state.name + ko (" (없음)"), slot.bypassed.load() });
+                slots.push_back ({ slot.state.slotId, slot.plugin != nullptr ? slot.plugin->getName() : trf ("{0} (없음)", slot.state.name), slot.bypassed.load() });
             }
 
         groupsList.updateContent();
@@ -287,10 +288,10 @@ private:
         addGroupButton.setEnabled (c != nullptr && (int) c->pluginGroups.size() < MixSession::maxPluginGroups);
         removeGroupButton.setEnabled (have);
         offButton.setEnabled (have);   // like the card's number: a group that exists can be switched, members or not
-        offButton.setButtonText (have && c->pluginGroups[(size_t) selectedGroup].off ? ko ("이 그룹 켜기") : ko ("이 그룹 끄기"));
+        offButton.setButtonText (have && c->pluginGroups[(size_t) selectedGroup].off ? tr ("이 그룹 켜기") : tr ("이 그룹 끄기"));
         offButton.setColour (juce::TextButton::buttonColourId, have && c->pluginGroups[(size_t) selectedGroup].off ? Palette::danger : Palette::card2);
-        membersCaption.setText (have ? ko ("플러그인 그룹 ") + juce::String (selectedGroup + 1) + ko ("에 넣을 플러그인 (지금 VST3 체인, 눌러서 넣거나 뺌)")
-                                     : ko ("먼저 왼쪽에서 그룹을 고르거나 만드세요"), juce::dontSendNotification);
+        membersCaption.setText (have ? trf ("플러그인 그룹 {0}에 넣을 플러그인 (지금 VST3 체인, 눌러서 넣거나 뺌)", juce::String (selectedGroup + 1))
+                                     : tr ("먼저 왼쪽에서 그룹을 고르거나 만드세요"), juce::dontSendNotification);
     }
 
     void groupSelected (int row)
@@ -306,12 +307,12 @@ private:
 
         if (index < 0)
         {
-            statusLabel.setText (ko ("그룹은 채널마다 ") + juce::String (MixSession::maxPluginGroups) + ko ("개까지입니다."), juce::dontSendNotification);
+            statusLabel.setText (trf ("그룹은 채널마다 {0}개까지입니다.", juce::String (MixSession::maxPluginGroups)), juce::dontSendNotification);
             return;
         }
 
         selectedGroup = index;
-        statusLabel.setText (ko ("플러그인 그룹 ") + juce::String (index + 1) + ko ("을 만들었습니다. 오른쪽에서 플러그인을 넣으세요."), juce::dontSendNotification);
+        statusLabel.setText (trf ("플러그인 그룹 {0}을 만들었습니다. 오른쪽에서 플러그인을 넣으세요.", juce::String (index + 1)), juce::dontSendNotification);
     }
 
     void removeGroup()
@@ -322,7 +323,7 @@ private:
         const int removed = selectedGroup;
         document.removePluginGroup (channelId, removed);
         selectedGroup = juce::jmin (removed, (int) groups.size() - 2);   // the one before it, or none
-        statusLabel.setText (ko ("플러그인 그룹 ") + juce::String (removed + 1) + ko ("을 지웠습니다 (뒤의 그룹 번호가 하나씩 당겨집니다)."), juce::dontSendNotification);
+        statusLabel.setText (trf ("플러그인 그룹 {0}을 지웠습니다 (뒤의 그룹 번호가 하나씩 당겨집니다).", juce::String (removed + 1)), juce::dontSendNotification);
     }
 
     void toggleOff()
@@ -342,7 +343,7 @@ private:
 
         if (selectedGroup < 0)
         {
-            statusLabel.setText (ko ("먼저 왼쪽에서 그룹을 고르거나 '+ 그룹 추가'로 만드세요."), juce::dontSendNotification);
+            statusLabel.setText (tr ("먼저 왼쪽에서 그룹을 고르거나 '+ 그룹 추가'로 만드세요."), juce::dontSendNotification);
             return;
         }
 
@@ -367,7 +368,7 @@ private:
 
 //==============================================================================
 PluginGroupsWindow::PluginGroupsWindow (MixDocument& document)
-    : DocumentWindow (ko ("플러그인 그룹"), Palette::background, DocumentWindow::allButtons)
+    : DocumentWindow (tr ("플러그인 그룹"), Palette::background, DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar (true);
     auto* c = new Content (document);

@@ -382,6 +382,19 @@ void LiveMixSettings::setBackupPassword (const juce::String& password)
    #endif
 }
 
+juce::String LiveMixSettings::getLanguage() const { return settings->getValue ("language"); }
+void LiveMixSettings::setLanguage (Language selected)
+{
+    settings->setValue ("language", languageCode (selected));
+    saveIfNeeded();
+}
+Language LiveMixSettings::resolveLanguage (unsigned displayLanguage, const juce::String& environment)
+{
+    const auto choice = chooseLanguage (getLanguage(), settings->containsKey (Keys::lastRunVersion), displayLanguage, environment);
+    if (choice.save) setLanguage (choice.language);
+    return choice.language;
+}
+
 juce::String LiveMixSettings::getLastRunVersion() const { return settings->getValue (Keys::lastRunVersion); }
 void LiveMixSettings::setLastRunVersion (const juce::String& version) { settings->setValue (Keys::lastRunVersion, version); }
 

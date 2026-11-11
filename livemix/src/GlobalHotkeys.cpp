@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "GlobalHotkeys.h"
 
 #include "ui/UiUtils.h"
@@ -51,7 +52,7 @@ public:
     {
         if (hwnd == nullptr)
         {
-            error = ko ("핫키 창을 만들지 못했습니다.");
+            error = tr ("핫키 창을 만들지 못했습니다.");
             return false;
         }
 
@@ -60,8 +61,8 @@ public:
         if (! RegisterHotKey (hwnd, id, modifiers | MOD_NOREPEAT, vk))
         {
             const auto code = GetLastError();
-            error = code == ERROR_HOTKEY_ALREADY_REGISTERED ? ko ("다른 프로그램이 이미 쓰는 키입니다.")
-                                                             : ko ("Windows가 이 키를 핫키로 등록해 주지 않았습니다 (오류 ") + juce::String ((int) code) + ")";
+            error = code == ERROR_HOTKEY_ALREADY_REGISTERED ? tr ("다른 프로그램이 이미 쓰는 키입니다.")
+                                                             : trf ("Windows가 이 키를 핫키로 등록해 주지 않았습니다 (오류 {0})", juce::String ((int) code));
             return false;
         }
 
@@ -129,7 +130,7 @@ bool GlobalHotkeys::set (int id, const juce::KeyPress& key, juce::String& error)
         window->unregisterKey (id);
 
         if (key.isValid())
-            error = ko ("이 키는 전역 핫키로 쓸 수 없습니다: ") + key.getTextDescription();
+            error = trf ("이 키는 전역 핫키로 쓸 수 없습니다: {0}", key.getTextDescription());
 
         return false;
     }
@@ -176,12 +177,12 @@ juce::String GlobalHotkeys::reasonToRefuse (const juce::KeyPress& key)
     unsigned int modifiers = 0, vk = 0;
 
     if (! toWindowsHotkey (key, modifiers, vk))
-        return ko ("F 키, 숫자 패드, 또는 Ctrl/Alt/Shift + 글자·숫자만 됩니다.");
+        return tr ("F 키, 숫자 패드, 또는 Ctrl/Alt/Shift + 글자·숫자만 됩니다.");
 
     const bool plainCharacter = (vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9') || vk == 0x20;
 
     if (plainCharacter && modifiers == 0)
-        return ko ("글자·숫자·스페이스는 Ctrl, Alt 또는 Shift와 함께 쓰세요 (다른 프로그램에서 못 치게 됩니다).");
+        return tr ("글자·숫자·스페이스는 Ctrl, Alt 또는 Shift와 함께 쓰세요 (다른 프로그램에서 못 치게 됩니다).");
 
     return {};
 }

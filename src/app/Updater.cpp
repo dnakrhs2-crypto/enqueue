@@ -84,7 +84,8 @@ bool Updater::askOnMessageThread (std::function<void (std::function<void (bool)>
 }
 
 void Updater::initialise (const juce::String& companyName, const juce::String& appName,
-                          const juce::String& version, Callbacks callbacks, const juce::String& registryPath)
+                          const juce::String& version, Callbacks callbacks, const juce::String& registryPath,
+                          const juce::String& language)
 {
    #if GOCUE_HAS_WINSPARKLE
     if (initialised || ! isConfigured())
@@ -105,10 +106,12 @@ void Updater::initialise (const juce::String& companyName, const juce::String& a
     win_sparkle_set_can_shutdown_callback (canShutdownThunk);
     win_sparkle_set_shutdown_request_callback (shutdownRequestThunk);
     win_sparkle_set_automatic_check_for_updates (0);   // no built-in timer: the app checks at idle moments (Main.cpp), never during a show
+    if (language.isNotEmpty())
+        win_sparkle_set_lang (language.toRawUTF8());   // the language picked in the app, not the one Windows shows
     win_sparkle_init();
     initialised = true;
    #else
-    juce::ignoreUnused (companyName, appName, version, callbacks);
+    juce::ignoreUnused (companyName, appName, version, callbacks, language);
    #endif
 }
 

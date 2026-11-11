@@ -1,4 +1,7 @@
+#include "Localisation.h"
 #include "LiveMixSettings.h"
+#include "AppRestart.h"
+#include <utility>
 #include "BundledPlugins.h"
 #include "CollabSession.h"
 #include "ControlServer.h"
@@ -108,16 +111,16 @@ public:
         if (e.mods.isPopupMenu())
         {
             juce::PopupMenu menu;
-            menu.addItem (1, ko ("LiveMix 열기"));
-            menu.addItem (7, ko ("창 숨기기/불러오기"));
+            menu.addItem (1, tr ("LiveMix 열기"));
+            menu.addItem (7, tr ("창 숨기기/불러오기"));
             menu.addSeparator();
-            menu.addItem (2, ko ("마이크 전부 ON"));
-            menu.addItem (3, ko ("마이크 전부 OFF"));
+            menu.addItem (2, tr ("마이크 전부 ON"));
+            menu.addItem (3, tr ("마이크 전부 OFF"));
             menu.addSeparator();
-            menu.addItem (5, ko ("마이크 뮤트그룹 뮤트/해제"));
-            menu.addItem (6, ko ("FX 뮤트그룹 뮤트/해제"));
+            menu.addItem (5, tr ("마이크 뮤트그룹 뮤트/해제"));
+            menu.addItem (6, tr ("FX 뮤트그룹 뮤트/해제"));
             menu.addSeparator();
-            menu.addItem (4, ko ("종료"));
+            menu.addItem (4, tr ("종료"));
             menu.showMenuAsync (juce::PopupMenu::Options(), [this] (int result) { if (result != 0 && menuHandler) menuHandler (result); });
         }
         else if (menuHandler)
@@ -148,6 +151,11 @@ public:
     const juce::String getApplicationVersion() override { return appVersionString(); }
     bool moreThanOneInstanceAllowed() override
     {
+        if (! restartParentWaited)
+        {
+            restartParentWaited = true;
+            waitForRestartParent (getCommandLineParameters());
+        }
         return PluginScanWorker::isWorkerCommandLine (getCommandLineParameters())
             || isRegisterBundledPluginsCommand (getCommandLineParameters())
             || juce::SystemStats::getEnvironmentVariable ("LIVEMIX_ALLOW_MULTI", {}) == "1"
@@ -170,6 +178,9 @@ public:
 
         if (ObsPluginInstaller::isInstallCommandLine (commandLine))
         {
+            // An elevated helper must return messages in the caller's language, even under another account.
+            initialiseLanguage (chooseLanguage (juce::ArgumentList ("LiveMix", commandLine).getValueForOption ("--ui-language"),
+                                true, 0, juce::SystemStats::getEnvironmentVariable ("LIVEMIX_LANGUAGE", {})).language);
             juce::String message;
             bool reported = false;
             const auto result = ObsPluginInstaller::runInstallCommandLine (commandLine, ObsPluginInstaller::systemRoots(), message, reported);
@@ -192,10 +203,12 @@ public:
             return;
         }
 
+        settings = std::make_unique<LiveMixSettings>();
+        initialiseLanguage (settings->resolveLanguage (windowsDisplayLanguage(),
+                            juce::SystemStats::getEnvironmentVariable ("LIVEMIX_LANGUAGE", {})));
         lookAndFeel = std::make_unique<LiveMixLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
-        settings = std::make_unique<LiveMixSettings>();
         // tests only (as the OBS plugin's LIVEMIX_OBS_RING): two copies on one PC write their own rings, <name>.Peer too
         engine = std::make_unique<MixEngine> (juce::SystemStats::getEnvironmentVariable ("LIVEMIX_OBS_RING", {}));
         collabSession = std::make_unique<collab::CollabSession> (*engine, *settings);
@@ -231,6 +244,11 @@ public:
         auto& main = mainWindow->getMainComponent();
         main.setCollabSession (collabSession.get());
         main.onToggleWindow = [this] { toggleWindow(); };
+        main.onRestartApp = [this]
+        {
+            restartRequested = true;
+            systemRequestedQuit();
+        };
         main.setSafeMode (safeMode);
 
         // a session named on the command line that could not be opened keeps its notice: loading the last session
@@ -273,9 +291,9 @@ public:
         // in the window, not a modal alert: a modal would freeze the frame (no resizing) and the mic buttons until
         // dismissed. Its own line under a session warning, never replacing it.
         if (safeMode)
-            main.setStartupNote (ko ("안전 모드로 시작했습니다 (Shift): 저장된 오디오 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false, true);
+            main.setStartupNote (tr ("안전 모드로 시작했습니다 (Shift): 저장된 오디오 장치와 플러그인을 불러오지 않았습니다. 플러그인 설정은 세션에 그대로 남습니다. 설정에서 장치를 고르세요."), false, true);
         else if (deviceError.isNotEmpty())
-            main.setStartupNote (ko ("오디오 장치를 열지 못했습니다: ") + deviceError + " " + ko ("설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요."), true, false);
+            main.setStartupNote (trf ("오디오 장치를 열지 못했습니다: {0} 설정에서 장치를 고르거나 오디오 인터페이스 연결을 확인하세요.", deviceError), true, false);
 
         Updater::Callbacks callbacks;
         callbacks.canShutdown = [this]
@@ -298,7 +316,8 @@ public:
                     app->systemRequestedQuit();
             });
         };
-        Updater::initialise ("Gomtwigim", getApplicationName(), getApplicationVersion(), std::move (callbacks), "Software\\Gomtwigim\\LiveMix\\WinSparkle");
+        Updater::initialise ("Gomtwigim", getApplicationName(), getApplicationVersion(), std::move (callbacks), "Software\\Gomtwigim\\LiveMix\\WinSparkle",
+                             languageCode (currentLanguage()));
         launchedAt = juce::Time::getCurrentTime();
         startTimer (30 * 1000);
 
@@ -310,7 +329,10 @@ public:
     {
         auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("LiveMix");
         folder.createDirectory();
-        const auto file = folder.getChildFile (ko ("기본 세션") + juce::String (MixSession::fileExtension));
+        // Keep finding the pre-localisation default before choosing a name for a new file.
+        const auto legacy = folder.getChildFile (ko ("기본 세션") + juce::String (MixSession::fileExtension));
+        const auto file = legacy.existsAsFile() ? legacy
+            : folder.getChildFile (defaultSessionName() + juce::String (MixSession::fileExtension));
 
         if (file.existsAsFile())
         {
@@ -376,6 +398,7 @@ public:
 
     void systemRequestedQuit() override
     {
+        const bool restarting = std::exchange (restartRequested, false);
         if (mainWindow == nullptr || document == nullptr)
         {
             quit();
@@ -385,12 +408,17 @@ public:
         if (document->isDirty())
             showWindow();   // the question below must be seen, also from the tray
 
-        mainWindow->getMainComponent().withSessionSecured ([]
+        mainWindow->getMainComponent().withSessionSecured ([restarting]
         {
             // This continuation runs only after any save/quit question has succeeded. Cancellation leaves
             // control live. No remote edit can slip between confirmed quit and shutdown's final save.
             if (auto* app = dynamic_cast<LiveMixApplication*> (juce::JUCEApplication::getInstance()))
             {
+                if (restarting && ! launchRestart())
+                {
+                    app->mainWindow->getMainComponent().setStartupNote (tr ("LiveMix를 다시 시작하지 못했습니다."), true, false);
+                    return;
+                }
                 if (app->controlServer != nullptr)
                     app->controlServer->beginShutdown();
                 app->quit();
@@ -517,12 +545,11 @@ public:
             juce::Component::SafePointer<MainWindow> safe (this);
             juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                               .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                                              .withTitle (ko ("LiveMix 닫기"))
-                                              .withMessage (ko ("종료할까요, 트레이로 보낼까요?") + juce::newLine + juce::newLine
-                                                                + ko ("트레이에 있어도 소리와 뮤트그룹 핫키는 계속 동작합니다. (설정에서 '닫을 때 물어보기'를 끄면 이 창 없이 바로 처리합니다)"))
-                                              .withButton (ko ("종료"))
-                                              .withButton (ko ("트레이로"))
-                                              .withButton (ko ("취소")),
+                                              .withTitle (tr ("LiveMix 닫기"))
+                                              .withMessage (tr ("종료할까요, 트레이로 보낼까요?\n\n트레이에 있어도 소리와 뮤트그룹 핫키는 계속 동작합니다. (설정에서 '닫을 때 물어보기'를 끄면 이 창 없이 바로 처리합니다)"))
+                                              .withButton (tr ("종료"))
+                                              .withButton (tr ("트레이로"))
+                                              .withButton (tr ("취소")),
                                           [safe] (int result)
             {
                 if (safe == nullptr)
@@ -636,6 +663,7 @@ private:
     std::unique_ptr<TrayIcon> tray;
     juce::Time launchedAt, lastQuietCheck;
     bool safeMode = false;
+    bool restartRequested = false, restartParentWaited = false;
 };
 
 } // namespace gocue::livemix

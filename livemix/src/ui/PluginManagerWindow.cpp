@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "ui/PluginManagerWindow.h"
 #include "BundledPlugins.h"
 #include "audio/PluginScan.h"
@@ -97,20 +98,20 @@ public:
         : allAvailable (std::move (types)), available (allAvailable), save (std::move (onSave)), cancel (std::move (onCancel)),
           availableModel (*this, false), chosenModel (*this, true)
     {
-        styleCaption (nameCaption, ko ("프리셋 이름"));
+        styleCaption (nameCaption, tr ("프리셋 이름"));
         addAndMakeVisible (nameCaption);
         nameEditor.setFont (bodyFont());
-        nameEditor.setTextToShowWhenEmpty (ko ("예: 보컬 기본, 스트리밍 마이크"), Palette::dimText);
+        nameEditor.setTextToShowWhenEmpty (tr ("예: 보컬 기본, 스트리밍 마이크"), Palette::dimText);
         addAndMakeVisible (nameEditor);
 
-        styleCaption (availableCaption, ko ("쓸 수 있는 플러그인 (더블클릭으로 추가)"));
+        styleCaption (availableCaption, tr ("쓸 수 있는 플러그인 (더블클릭으로 추가)"));
         addAndMakeVisible (availableCaption);
         searchEditor.setFont (bodyFont (13.5f));
-        searchEditor.setTextToShowWhenEmpty (ko ("검색: 이름, 제조사, 형식"), Palette::dimText);
+        searchEditor.setTextToShowWhenEmpty (tr ("검색: 이름, 제조사, 형식"), Palette::dimText);
         searchEditor.onTextChange = [this] { applyFilter(); };
         searchEditor.onEscapeKey = [this] { if (searchEditor.getText().isNotEmpty()) searchEditor.setText ({}, true); else if (cancel) cancel(); };   // setText sends the change (clear() does not: the list would stay filtered)
         addAndMakeVisible (searchEditor);
-        styleCaption (chosenCaption, ko ("프리셋의 체인 (위에서 아래 순서로 통과)"));
+        styleCaption (chosenCaption, tr ("프리셋의 체인 (위에서 아래 순서로 통과)"));
         addAndMakeVisible (chosenCaption);
 
         availableList.setModel (&availableModel);
@@ -128,14 +129,14 @@ public:
             addAndMakeVisible (b);
         };
 
-        button (addButton, ko ("추가 ▶"), [this] { addSelected(); });
-        button (removeButton, ko ("◀ 빼기"), [this] { removeSelected(); });
-        button (upButton, ko ("▲ 위로"), [this] { moveSelected (-1); });
-        button (downButton, ko ("▼ 아래로"), [this] { moveSelected (1); });
-        button (saveButton, ko ("프리셋 저장"), [this] { commit(); });
+        button (addButton, tr ("추가 ▶"), [this] { addSelected(); });
+        button (removeButton, tr ("◀ 빼기"), [this] { removeSelected(); });
+        button (upButton, tr ("▲ 위로"), [this] { moveSelected (-1); });
+        button (downButton, tr ("▼ 아래로"), [this] { moveSelected (1); });
+        button (saveButton, tr ("프리셋 저장"), [this] { commit(); });
         saveButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
         saveButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
-        button (cancelButton, ko ("취소"), [this] { if (cancel) cancel(); });
+        button (cancelButton, tr ("취소"), [this] { if (cancel) cancel(); });
 
         statusLabel.setFont (bodyFont (13.0f));
         statusLabel.setColour (juce::Label::textColourId, Palette::danger);
@@ -260,7 +261,7 @@ private:
 
         if ((int) chosen.size() >= PluginPreset::maxPlugins)
         {
-            statusLabel.setText (ko ("프리셋에는 플러그인을 ") + juce::String (PluginPreset::maxPlugins) + ko ("개까지 넣을 수 있습니다."), juce::dontSendNotification);
+            statusLabel.setText (trf ("프리셋에는 플러그인을 {0}개까지 넣을 수 있습니다.", juce::String (PluginPreset::maxPlugins)), juce::dontSendNotification);
             return;
         }
 
@@ -303,14 +304,14 @@ private:
 
         if (name.isEmpty())
         {
-            statusLabel.setText (ko ("프리셋 이름을 넣으세요."), juce::dontSendNotification);
+            statusLabel.setText (tr ("프리셋 이름을 넣으세요."), juce::dontSendNotification);
             nameEditor.grabKeyboardFocus();
             return;
         }
 
         if (chosen.empty())
         {
-            statusLabel.setText (ko ("플러그인을 하나 이상 넣으세요."), juce::dontSendNotification);
+            statusLabel.setText (tr ("플러그인을 하나 이상 넣으세요."), juce::dontSendNotification);
             return;
         }
 
@@ -353,10 +354,10 @@ public:
           runtimeHint ({ Palette::danger, Palette::text, Palette::dimText, Palette::accent, juce::Colours::white,
                          bodyFont (12.5f), bodyFont (13.0f).boldened(), Palette::controlRadius, true }, runtimeOptions)
     {
-        styleCaption (pluginsCaption, ko ("플러그인"));
+        styleCaption (pluginsCaption, tr ("플러그인"));
         addAndMakeVisible (pluginsCaption);
 
-        vst2Toggle.setButtonText (ko ("VST2 플러그인 사용 (기본 꺼짐)"));
+        vst2Toggle.setButtonText (tr ("VST2 플러그인 사용 (기본 꺼짐)"));
         vst2Toggle.setToggleState (host.isVst2Enabled(), juce::dontSendNotification);
         vst2Toggle.setEnabled (PluginHost::hasVst2Support());
         vst2Toggle.setWantsKeyboardFocus (false);
@@ -364,15 +365,15 @@ public:
         addAndMakeVisible (vst2Toggle);
 
         styleCaption (note, PluginHost::hasVst2Support()
-                                ? ko ("'사용'을 끈 플러그인은 '+ 추가' 메뉴에서 빠집니다. VST3가 기본이고, 옛 VST2 플러그인이 꼭 필요할 때만 VST2를 켜세요.")
-                                : ko ("'사용'을 끈 플러그인은 '+ 추가' 메뉴에서 빠집니다. (이 빌드에는 VST2 지원이 없습니다)"));
+                                ? tr ("'사용'을 끈 플러그인은 '+ 추가' 메뉴에서 빠집니다. VST3가 기본이고, 옛 VST2 플러그인이 꼭 필요할 때만 VST2를 켜세요.")
+                                : tr ("'사용'을 끈 플러그인은 '+ 추가' 메뉴에서 빠집니다. (이 빌드에는 VST2 지원이 없습니다)"));
         note.setFont (bodyFont (12.5f));
         note.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (note);
 
         // the search: the table shows the plugins it matches (every word: name, maker, format); Esc clears it
         pluginSearch.setFont (bodyFont (13.5f));
-        pluginSearch.setTextToShowWhenEmpty (ko ("검색: 이름, 제조사, 형식 (예: waves comp, vst2)"), Palette::dimText);
+        pluginSearch.setTextToShowWhenEmpty (tr ("검색: 이름, 제조사, 형식 (예: waves comp, vst2)"), Palette::dimText);
         pluginSearch.onTextChange = [this] { applyPluginSearch(); };
         pluginSearch.onEscapeKey = [this] { pluginSearch.setText ({}, true); };   // with the change message: the table shows everything again
         addAndMakeVisible (pluginSearch);
@@ -383,11 +384,11 @@ public:
         pluginTable.setModel (&pluginModel);
         styleTable (pluginTable);
         auto& header = pluginTable.getHeader();
-        header.addColumn (ko ("사용"), colEnabled, 56, 56, 56, juce::TableHeaderComponent::visible);
-        header.addColumn (ko ("이름"), colName, 220, 100, 500, columnFlags);
-        header.addColumn (ko ("제조사"), colMaker, 150, 60, 300, columnFlags);
-        header.addColumn (ko ("형식"), colFormat, 60, 50, 80, columnFlags);
-        header.addColumn (ko ("파일"), colFile, 300, 100, 900, columnFlags);
+        header.addColumn (tr ("사용"), colEnabled, 56, 56, 56, juce::TableHeaderComponent::visible);
+        header.addColumn (tr ("이름"), colName, 220, 100, 500, columnFlags);
+        header.addColumn (tr ("제조사"), colMaker, 150, 60, 300, columnFlags);
+        header.addColumn (tr ("형식"), colFormat, 60, 50, 80, columnFlags);
+        header.addColumn (tr ("파일"), colFile, 300, 100, 900, columnFlags);
         addAndMakeVisible (pluginTable);
 
         auto button = [this] (juce::TextButton& b, const juce::String& text, std::function<void()> fn)
@@ -398,11 +399,11 @@ public:
             addAndMakeVisible (b);
         };
 
-        button (scanVst3Button, ko ("VST3 스캔"), [this] { scan ("VST3"); });
-        button (scanVst2Button, ko ("VST2 스캔"), [this] { scan ("VST"); });
-        button (removeButton, ko ("목록에서 빼기"), [this] { removeSelectedPlugin(); });
-        button (enableAllButton, ko ("전부 사용"), [this] { setAll (true); });
-        button (resetListButton, ko ("목록 초기화"), [this] { resetList(); });
+        button (scanVst3Button, tr ("VST3 스캔"), [this] { scan ("VST3"); });
+        button (scanVst2Button, tr ("VST2 스캔"), [this] { scan ("VST"); });
+        button (removeButton, tr ("목록에서 빼기"), [this] { removeSelectedPlugin(); });
+        button (enableAllButton, tr ("전부 사용"), [this] { setAll (true); });
+        button (resetListButton, tr ("목록 초기화"), [this] { resetList(); });
 
         PluginScanCoordinator::Options scanOptions;
         scanOptions.executable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
@@ -417,12 +418,12 @@ public:
 
         // JUCE drives progress/cancellation; plugin code runs on the worker's message thread.
         scanner = std::make_unique<PluginScanListComponent> (host.getFormatManager(), host.getKnownPlugins(),
-                                                            crashMarker, *scanCoordinator, ko ("LiveMix 플러그인 스캔"));
+                                                            crashMarker, *scanCoordinator, tr ("LiveMix 플러그인 스캔"));
         addChildComponent (*scanner);
 
-        styleCaption (presetsCaption, ko ("플러그인 프리셋"));
+        styleCaption (presetsCaption, tr ("플러그인 프리셋"));
         addAndMakeVisible (presetsCaption);
-        styleCaption (presetsNote, ko ("플러그인을 순서대로 골라 프리셋으로 두면, 어느 체인에서든 '+ 추가 > 프리셋 불러오기'로 한 번에 넣습니다. 체인 서랍의 '+ 추가' 메뉴에서 지금 체인을(설정째) 프리셋으로 저장할 수도 있습니다. 파일: ") + presetsFolder.getFullPathName());
+        styleCaption (presetsNote, trf ("플러그인을 순서대로 골라 프리셋으로 두면, 어느 체인에서든 '+ 추가 > 프리셋 불러오기'로 한 번에 넣습니다. 체인 서랍의 '+ 추가' 메뉴에서 지금 체인을(설정째) 프리셋으로 저장할 수도 있습니다. 파일: {0}", presetsFolder.getFullPathName()));
         presetsNote.setFont (bodyFont (12.5f));
         presetsNote.setMinimumHorizontalScale (1.0f);
         addAndMakeVisible (presetsNote);
@@ -430,18 +431,18 @@ public:
         presetTable.setModel (&presetModel);
         styleTable (presetTable);
         auto& ph = presetTable.getHeader();
-        ph.addColumn (ko ("이름"), colPresetName, 200, 80, 400, columnFlags);
-        ph.addColumn (ko ("플러그인"), colPresetChain, 500, 100, 1200, columnFlags);
+        ph.addColumn (tr ("이름"), colPresetName, 200, 80, 400, columnFlags);
+        ph.addColumn (tr ("플러그인"), colPresetChain, 500, 100, 1200, columnFlags);
         addAndMakeVisible (presetTable);
 
-        button (newPresetButton, ko ("새 프리셋 만들기..."), [this] { newPreset(); });
+        button (newPresetButton, tr ("새 프리셋 만들기..."), [this] { newPreset(); });
         newPresetButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
         newPresetButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
-        button (renamePresetButton, ko ("이름 바꾸기..."), [this] { renamePreset(); });
-        button (deletePresetButton, ko ("삭제"), [this] { deletePreset(); });
-        button (exportPresetButton, ko ("파일로 저장..."), [this] { exportPreset(); });
-        button (importPresetButton, ko ("파일에서 불러오기..."), [this] { importPreset(); });
-        button (openFolderButton, ko ("폴더 열기"), [this] { presetsFolder.createDirectory(); presetsFolder.revealToUser(); });
+        button (renamePresetButton, tr ("이름 바꾸기..."), [this] { renamePreset(); });
+        button (deletePresetButton, tr ("삭제"), [this] { deletePreset(); });
+        button (exportPresetButton, tr ("파일로 저장..."), [this] { exportPreset(); });
+        button (importPresetButton, tr ("파일에서 불러오기..."), [this] { importPreset(); });
+        button (openFolderButton, tr ("폴더 열기"), [this] { presetsFolder.createDirectory(); presetsFolder.revealToUser(); });
 
         statusLabel.setFont (bodyFont (13.0f));
         statusLabel.setColour (juce::Label::textColourId, Palette::dimText);
@@ -530,7 +531,7 @@ public:
         enableAllButton.setBounds (pluginButtons.removeFromLeft (90));
         pluginButtons.removeFromLeft (8);
         resetListButton.setBounds (pluginButtons.removeFromLeft (100));
-        removeButton.setBounds (pluginButtons.removeFromRight (120));
+        removeButton.setBounds (pluginButtons.removeFromRight (textButtonWidth (removeButton, 120, 32)));
         area.removeFromBottom (8);
         pluginTable.setBounds (area);
 
@@ -552,7 +553,7 @@ public:
             fileRow = presetsArea.removeFromBottom (32);
         }
 
-        openFolderButton.setBounds (fileRow.removeFromRight (90));
+        openFolderButton.setBounds (fileRow.removeFromRight (textButtonWidth (openFolderButton, 90, 32)));
         fileRow.removeFromRight (8);
         importPresetButton.setBounds (fileRow.removeFromRight (140));
         fileRow.removeFromRight (8);
@@ -599,7 +600,7 @@ public:
         presetButtonsEnabled();
 
         if (! problems.isEmpty())
-            setStatus (ko ("읽을 수 없는 프리셋 파일: ") + problems.joinIntoString (" / "), true);
+            setStatus (trf ("읽을 수 없는 프리셋 파일: {0}", problems.joinIntoString (" / ")), true);
     }
 
 private:
@@ -718,7 +719,7 @@ private:
         refreshPlugins();
         const auto skipped = scanCoordinator->getSkippedMessage();
         setStatus (skipped.isNotEmpty() ? skipped
-                                       : ko ("스캔 끝: 플러그인 ") + juce::String (allTypes.size()) + ko ("개 (스캔 창에서 고른 폴더 기준)"),
+                                       : trf ("스캔 끝: 플러그인 {0}개 (스캔 창에서 고른 폴더 기준)", juce::String (allTypes.size())),
                    skipped.isNotEmpty());
         statusLabel.setTooltip (skipped);
         runtimeHint.showResults (scanCoordinator->getRuntimeResults());
@@ -762,8 +763,8 @@ private:
 
         pluginTable.repaint();
         removeButton.setEnabled (pluginTable.getSelectedRow() >= 0);
-        pluginCount.setText (! isSearching() ? ko ("플러그인 ") + juce::String (allTypes.size()) + ko ("개")
-                                             : ko ("검색 결과 ") + juce::String (types.size()) + ko ("개 / 전체 ") + juce::String (allTypes.size()) + ko ("개"),
+        pluginCount.setText (! isSearching() ? trf ("플러그인 {0}개", juce::String (allTypes.size()))
+                                             : trf ("검색 결과 {0}개 / 전체 {1}개", juce::String (types.size()), juce::String (allTypes.size())),
                              juce::dontSendNotification);
     }
 
@@ -788,7 +789,7 @@ private:
         settings.setVst2Enabled (on);
         host.setVst2Enabled (on);
         refreshPlugins();
-        setStatus (on ? ko ("VST2 플러그인을 씁니다. 'VST2 스캔'으로 찾으세요.") : ko ("VST2 플러그인은 목록과 메뉴에서 빠집니다 (세션에 든 VST2 자리는 비워 둡니다)."), false);
+        setStatus (on ? tr ("VST2 플러그인을 씁니다. 'VST2 스캔'으로 찾으세요.") : tr ("VST2 플러그인은 목록과 메뉴에서 빠집니다 (세션에 든 VST2 자리는 비워 둡니다)."), false);
 
         if (owner.onVst2Changed)
             owner.onVst2Changed (on);
@@ -800,7 +801,7 @@ private:
         {
             if (! PluginHost::hasVst2Support())
             {
-                setStatus (ko ("이 빌드에는 VST2 지원이 없습니다."), true);
+                setStatus (tr ("이 빌드에는 VST2 지원이 없습니다."), true);
                 return;
             }
 
@@ -811,20 +812,20 @@ private:
 
         if (format == nullptr)
         {
-            setStatus (ko ("이 빌드에는 그 형식이 없습니다: ") + formatLabel (formatName), true);
+            setStatus (trf ("이 빌드에는 그 형식이 없습니다: {0}", formatLabel (formatName)), true);
             return;
         }
 
         if (scanner->isScanning())
         {
-            setStatus (ko ("이미 찾는 중입니다 - 스캔 창을 먼저 끝내세요."), true);
+            setStatus (tr ("이미 찾는 중입니다 - 스캔 창을 먼저 끝내세요."), true);
             return;
         }
 
         runtimeHint.clear();
         scanCoordinator->prepareForScan (host.getKnownPlugins(), crashMarker);
         statusLabel.setTooltip ({});
-        setStatus (formatLabel (formatName) + ko (" 플러그인을 찾는 중... (창이 뜹니다)"), false);
+        setStatus (trf ("{0} 플러그인을 찾는 중... (창이 뜹니다)", formatLabel (formatName)), false);
         scanner->scanFor (*format);
         startTimer (250);
     }
@@ -836,18 +837,17 @@ private:
     {
         if (scanner->isScanning())
         {
-            setStatus (ko ("스캔 중에는 초기화할 수 없습니다 - 스캔 창을 먼저 끝내세요."), true);
+            setStatus (tr ("스캔 중에는 초기화할 수 없습니다 - 스캔 창을 먼저 끝내세요."), true);
             return;
         }
 
         juce::Component::SafePointer<Content> safe (this);
         juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                           .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                                          .withTitle (ko ("플러그인 목록 초기화"))
-                                          .withMessage (ko ("찾아 둔 플러그인 목록과 '문제 파일' 기록을 모두 지웁니다. 초기화한 뒤 [VST3 스캔]으로 다시 찾으세요.\n"
-                                                            "체인에 넣어 둔 플러그인과 '사용' 체크는 그대로입니다."))
-                                          .withButton (ko ("초기화"))
-                                          .withButton (ko ("취소")),
+                                          .withTitle (tr ("플러그인 목록 초기화"))
+                                          .withMessage (tr ("찾아 둔 플러그인 목록과 '문제 파일' 기록을 모두 지웁니다. 초기화한 뒤 [VST3 스캔]으로 다시 찾으세요.\n체인에 넣어 둔 플러그인과 '사용' 체크는 그대로입니다."))
+                                          .withButton (tr ("초기화"))
+                                          .withButton (tr ("취소")),
                                       [safe] (int result)
         {
             if (safe == nullptr || result != 1 || safe->scanner->isScanning())
@@ -858,7 +858,7 @@ private:
             safe->scanCoordinator->clearRuntimeMissingFiles();
             safe->crashMarker.deleteFile();
             safe->statusLabel.setTooltip ({});
-            safe->setStatus (ko ("플러그인 목록을 비웠습니다 - [VST3 스캔]으로 다시 찾으세요."), false);
+            safe->setStatus (tr ("플러그인 목록을 비웠습니다 - [VST3 스캔]으로 다시 찾으세요."), false);
         });
     }
 
@@ -870,7 +870,7 @@ private:
             return;
 
         host.getKnownPlugins().removeType (types[row]);   // the list announces the change: the table refreshes
-        setStatus (ko ("목록에서 뺐습니다 (다시 스캔하면 돌아옵니다): ") + types[row].name, false);
+        setStatus (trf ("목록에서 뺐습니다 (다시 스캔하면 돌아옵니다): {0}", types[row].name), false);
     }
 
     /** '전부 사용': the plugins the table shows - all of them, or the ones a search narrowed it to. */
@@ -884,7 +884,7 @@ private:
         refreshBuilder();
 
         if (isSearching())
-            setStatus (ko ("검색 결과 ") + juce::String (types.size()) + ko ("개를 '사용'으로 켰습니다 (검색을 지우면 전부 보입니다)"), false);
+            setStatus (trf ("검색 결과 {0}개를 '사용'으로 켰습니다 (검색을 지우면 전부 보입니다)", juce::String (types.size())), false);
     }
 
     const PluginPreset* selectedPreset() const
@@ -914,7 +914,7 @@ private:
 
         if (enabled.isEmpty())
         {
-            setStatus (ko ("쓸 수 있는 플러그인이 없습니다. 먼저 스캔하고 '사용'을 켜세요."), true);
+            setStatus (tr ("쓸 수 있는 플러그인이 없습니다. 먼저 스캔하고 '사용'을 켜세요."), true);
             return;
         }
 
@@ -924,7 +924,7 @@ private:
             [safe, closeLater] (const PluginPreset& preset) -> juce::Result
             {
                 if (safe == nullptr)
-                    return juce::Result::fail (ko ("플러그인 관리 창이 닫혔습니다"));
+                    return juce::Result::fail (tr ("플러그인 관리 창이 닫혔습니다"));
 
                 // what is saved is checked again now: a plugin switched off (or its format) since it was picked
                 for (const auto& slot : preset.plugins)
@@ -935,18 +935,18 @@ private:
                     d.uniqueId = slot.uniqueId;
 
                     if (! safe->host.isPluginEnabled (d))
-                        return juce::Result::fail (ko ("이제 쓸 수 없는 플러그인이 들어 있습니다 ('사용'이 꺼졌거나 그 형식이 꺼짐): ") + slot.name);
+                        return juce::Result::fail (trf ("이제 쓸 수 없는 플러그인이 들어 있습니다 ('사용'이 꺼졌거나 그 형식이 꺼짐): {0}", slot.name));
                 }
 
                 const auto file = PluginPreset::fileFor (preset.name, safe->presetsFolder);
 
                 if (file.existsAsFile())
-                    return juce::Result::fail (ko ("같은 이름의 프리셋이 이미 있습니다: ") + preset.name);
+                    return juce::Result::fail (trf ("같은 이름의 프리셋이 이미 있습니다: {0}", preset.name));
 
                 if (const auto result = preset.save (file); result.failed())
-                    return juce::Result::fail (ko ("프리셋을 저장하지 못했습니다: ") + result.getErrorMessage());
+                    return juce::Result::fail (trf ("프리셋을 저장하지 못했습니다: {0}", result.getErrorMessage()));
 
-                safe->setStatus (ko ("프리셋 저장: ") + preset.name + "  (" + preset.summary() + ")", false);
+                safe->setStatus (trf ("프리셋 저장: {0}  ({1})", preset.name, preset.summary()), false);
                 safe->presetsChanged();
                 closeLater();
                 return juce::Result::ok();
@@ -954,7 +954,7 @@ private:
             closeLater);
 
         // a window of its own, not a modal dialog: the manager (and the rest of the app) stays usable meanwhile
-        auto* window = new BuilderWindow (ko ("새 플러그인 프리셋"), closeLater);
+        auto* window = new BuilderWindow (tr ("새 플러그인 프리셋"), closeLater);
         window->setUsingNativeTitleBar (true);
         window->setContentOwned (builder, true);
         window->setResizable (true, false);
@@ -973,10 +973,10 @@ private:
 
         const auto oldName = p->name;
         const auto from = p->file;   // the file it was listed from (its name inside may differ from the file name: a restored backup)
-        auto* alert = new juce::AlertWindow (ko ("프리셋 이름"), ko ("새 이름"), juce::MessageBoxIconType::NoIcon);
-        alert->addTextEditor ("name", oldName, ko ("이름"));
-        alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
-        alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        auto* alert = new juce::AlertWindow (tr ("프리셋 이름"), tr ("새 이름"), juce::MessageBoxIconType::NoIcon);
+        alert->addTextEditor ("name", oldName, tr ("이름"));
+        alert->addButton (tr ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+        alert->addButton (tr ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
         juce::Component::SafePointer<Content> safe (this);
         alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, alert, oldName, from] (int r)
         {
@@ -992,7 +992,7 @@ private:
 
             if (to.existsAsFile() && to != from)   // (== from: only the case or the name inside changes)
             {
-                safe->setStatus (ko ("같은 이름의 프리셋이 이미 있습니다: ") + newName, true);
+                safe->setStatus (trf ("같은 이름의 프리셋이 이미 있습니다: {0}", newName), true);
                 return;
             }
 
@@ -1015,12 +1015,12 @@ private:
             if (to != from && ! from.deleteFile())
             {
                 to.deleteFile();   // back to one preset under the old name, rather than two
-                safe->setStatus (ko ("이름을 바꾸지 못했습니다 - 원래 파일을 지울 수 없습니다 (다른 프로그램이 열고 있나요?): ") + from.getFullPathName(), true);
+                safe->setStatus (trf ("이름을 바꾸지 못했습니다 - 원래 파일을 지울 수 없습니다 (다른 프로그램이 열고 있나요?): {0}", from.getFullPathName()), true);
                 safe->presetsChanged();
                 return;
             }
 
-            safe->setStatus (ko ("이름을 바꿨습니다: ") + newName, false);
+            safe->setStatus (trf ("이름을 바꿨습니다: {0}", newName), false);
             safe->presetsChanged();
         }), true);
         focusAlertTextEditor (*alert, "name");
@@ -1038,10 +1038,10 @@ private:
         juce::Component::SafePointer<Content> safe (this);
         juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                           .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                                          .withTitle (ko ("프리셋 삭제"))
-                                          .withMessage (ko ("'") + name + ko ("' 프리셋을 지울까요? (파일이 지워집니다)"))
-                                          .withButton (ko ("삭제"))
-                                          .withButton (ko ("취소")),
+                                          .withTitle (tr ("프리셋 삭제"))
+                                          .withMessage (trf ("'{0}' 프리셋을 지울까요? (파일이 지워집니다)", name))
+                                          .withButton (tr ("삭제"))
+                                          .withButton (tr ("취소")),
                                       [safe, name, file] (int result)
         {
             if (safe == nullptr || result != 1)
@@ -1049,12 +1049,12 @@ private:
 
             if (! file.deleteFile())
             {
-                safe->setStatus (ko ("지우지 못했습니다: ") + file.getFullPathName(), true);
+                safe->setStatus (trf ("지우지 못했습니다: {0}", file.getFullPathName()), true);
                 safe->presetsChanged();
                 return;
             }
 
-            safe->setStatus (ko ("지웠습니다: ") + name, false);
+            safe->setStatus (trf ("지웠습니다: {0}", name), false);
             safe->presetsChanged();
         });
     }
@@ -1067,7 +1067,7 @@ private:
             return;
 
         const auto source = p->file;
-        chooser = std::make_unique<juce::FileChooser> (ko ("프리셋을 파일로 저장"), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (PluginPreset::fileNameFor (p->name)),
+        chooser = std::make_unique<juce::FileChooser> (tr ("프리셋을 파일로 저장"), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (PluginPreset::fileNameFor (p->name)),
                                                        "*" + juce::String (PluginPreset::fileExtension));
         juce::Component::SafePointer<Content> safe (this);
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
@@ -1086,7 +1086,7 @@ private:
 
                 if (target.existsAsFile())
                 {
-                    safe->setStatus (ko ("같은 이름의 파일이 이미 있습니다 (확장자를 붙인 이름): ") + target.getFullPathName(), true);
+                    safe->setStatus (trf ("같은 이름의 파일이 이미 있습니다 (확장자를 붙인 이름): {0}", target.getFullPathName()), true);
                     return;
                 }
             }
@@ -1102,14 +1102,14 @@ private:
             }
 
             const auto saved = p.save (target);
-            safe->setStatus (saved.wasOk() ? ko ("파일로 저장했습니다: ") + target.getFullPathName()
-                                           : ko ("파일로 저장하지 못했습니다: ") + saved.getErrorMessage(), saved.failed());
+            safe->setStatus (saved.wasOk() ? trf ("파일로 저장했습니다: {0}", target.getFullPathName())
+                                           : trf ("파일로 저장하지 못했습니다: {0}", saved.getErrorMessage()), saved.failed());
         });
     }
 
     void importPreset()
     {
-        chooser = std::make_unique<juce::FileChooser> (ko ("프리셋 파일 불러오기"), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+        chooser = std::make_unique<juce::FileChooser> (tr ("프리셋 파일 불러오기"), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                        "*" + juce::String (PluginPreset::fileExtension));
         juce::Component::SafePointer<Content> safe (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc)
@@ -1138,7 +1138,7 @@ private:
                 return;
             }
 
-            safe->setStatus (ko ("프리셋을 불러왔습니다: ") + p.name, false);
+            safe->setStatus (trf ("프리셋을 불러왔습니다: {0}", p.name), false);
             safe->presetsChanged();
         });
     }
@@ -1171,7 +1171,7 @@ private:
 //==============================================================================
 PluginManagerWindow::PluginManagerWindow (PluginHost& host, LiveMixSettings& settings, const juce::File& presetsFolder,
                                          PluginRuntimeHint::Options runtimeOptions)
-    : DocumentWindow (ko ("플러그인 관리"), Palette::background, DocumentWindow::allButtons)
+    : DocumentWindow (tr ("플러그인 관리"), Palette::background, DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar (true);
     auto* c = new Content (*this, host, settings, presetsFolder, runtimeOptions);

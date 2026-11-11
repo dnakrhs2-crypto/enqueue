@@ -1,3 +1,4 @@
+#include "app/UiTranslation.h"
 #include "PluginRuntimeHint.h"
 #include <cmath>
 
@@ -65,27 +66,27 @@ void PluginRuntimeHint::showResults (const std::vector<PluginRuntimeResult>& res
     {
         if (result.packages.empty()) continue;
         auto file = juce::File (result.file).getFileName();
-        if (file.startsWithIgnoreCase ("WaveShell")) file += ko (" (웨이브즈)");
+        if (file.startsWithIgnoreCase ("WaveShell")) file += sharedTr (" (웨이브즈)");
         files.addIfNotAlreadyThere (file);
         if (result.format == "VST" || result.format == "VST2") vst2 = true; else vst3 = true;
         for (const auto& package : result.packages) packages.addIfNotAlreadyThere (package.name);
     }
     if (packages.isEmpty()) return;
-    const auto scan = ! style.vst2 || ! vst2 ? ko ("[VST3 스캔]")
-                    : vst3 ? ko ("[VST3 스캔]·[VST2 스캔]") : ko ("[VST2 스캔]");
-    const auto retry = ko ("설치한 뒤 ") + scan + ko ("을 다시 누르세요.");
-    const auto heading = ko ("불러오지 못한 파일: ") + files.joinIntoString (", ");
+    const auto scan = ! style.vst2 || ! vst2 ? sharedTr ("[VST3 스캔]")
+                    : vst3 ? sharedTr ("[VST3 스캔]·[VST2 스캔]") : sharedTr ("[VST2 스캔]");
+    const auto retry = sharedTrf ("설치한 뒤 {0}을 다시 누르세요.", scan);
+    const auto heading = sharedTrf ("불러오지 못한 파일: {0}", files.joinIntoString (", "));
     titleFiles = files;
     title.setText (heading, juce::dontSendNotification);
     title.setTooltip (heading);
     for (const auto& package : pluginRuntimePackages())
     {
         if (! packages.contains (package.name)) continue;
-        auto message = ko ("이 PC에 ") + package.name + ko (" 런타임이 없습니다.");
+        auto message = sharedTrf ("이 PC에 {0} 런타임이 없습니다.", package.name);
         if (packages.size() == 1) message += " " + retry;
         auto* paragraph = messages.add (new Paragraph (message, style));
         content.addAndMakeVisible (paragraph);
-        auto* button = buttons.add (new juce::TextButton (ko ("설치 파일 받기")));
+        auto* button = buttons.add (new juce::TextButton (sharedTr ("설치 파일 받기")));
         button->setColour (juce::TextButton::buttonColourId, style.accent);
         button->setColour (juce::TextButton::textColourOffId, style.accentInk);
         button->setWantsKeyboardFocus (false);
@@ -137,7 +138,7 @@ juce::StringArray PluginRuntimeHint::titleLines (int width) const
 
     // Prefer file boundaries without replacing spaces in the displayed names or tooltip.
     juce::StringArray paragraphs;
-    auto line = ko ("불러오지 못한 파일: ");
+    auto line = sharedTr ("불러오지 못한 파일: ");
     for (int i = 0; i < titleFiles.size(); ++i)
     {
         const auto piece = titleFiles[i] + (i + 1 < titleFiles.size() ? "," : "");

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MixModel.h"
+#include "Localisation.h"
 #include "recording/RecordingTypes.h"
 
 #include <juce_data_structures/juce_data_structures.h>
@@ -128,6 +129,10 @@ public:
     /** The password lives in the Windows credential store, never in the settings file. */
     juce::String getBackupPassword() const;
     void setBackupPassword (const juce::String& password);
+
+    juce::String getLanguage() const;
+    void setLanguage (Language language);
+    Language resolveLanguage (unsigned displayLanguage, const juce::String& environment);
 
     juce::String getLastRunVersion() const;
     void setLastRunVersion (const juce::String& version);

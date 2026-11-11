@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "MonitorOutput.h"
 
 #include <algorithm>
@@ -19,14 +20,14 @@ juce::String MonitorOutput::start (juce::AudioIODeviceType& type, const juce::St
     inputPeriod = producerPeriod;
     restartRequested.store (false, std::memory_order_release);
     if (outputName.isEmpty() || ! std::isfinite (producerRate) || producerRate <= 0.0 || producerPeriod <= 0)
-        return juce::String::fromUTF8 ("모니터 장치 설정이 올바르지 않습니다.");
+        return tr ("모니터 장치 설정이 올바르지 않습니다.");
     device.reset (type.createDevice (outputName, {}));
     if (device == nullptr)
-        return juce::String::fromUTF8 ("모니터 장치를 만들지 못했습니다: ") + outputName;
+        return trf ("모니터 장치를 만들지 못했습니다: {0}", outputName);
 
     auto fail = [this] (const juce::String& error) { stop(); return error; };
     if (device->getOutputChannelNames().size() < 2)
-        return fail (juce::String::fromUTF8 ("모니터 장치에 출력 1-2가 필요합니다."));
+        return fail (tr ("모니터 장치에 출력 1-2가 필요합니다."));
     const auto rates = device->getAvailableSampleRates();
     double rate = preferredOutputRate > 0.0 ? preferredOutputRate : producerRate;
     if (! rates.contains (rate))
@@ -43,14 +44,14 @@ juce::String MonitorOutput::start (juce::AudioIODeviceType& type, const juce::St
     if (error.isNotEmpty()) return fail (error);
     if (! device->isOpen() || device->getActiveOutputChannels() != outputs
         || device->getCurrentSampleRate() <= 0.0 || device->getCurrentBufferSizeSamples() <= 0)
-        return fail (juce::String::fromUTF8 ("모니터 장치의 출력 1-2를 열지 못했습니다."));
+        return fail (tr ("모니터 장치의 출력 1-2를 열지 못했습니다."));
     prepare (producerRate, producerPeriod, device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples(),
              device->getOutputLatencyInSamples());
     device->start (this);
     const auto startError = device->getLastError();
     if (startError.isNotEmpty()) return fail (startError);
     if (! device->isPlaying() || ! isRunning())
-        return fail (juce::String::fromUTF8 ("모니터 장치를 시작하지 못했습니다."));
+        return fail (tr ("모니터 장치를 시작하지 못했습니다."));
     return {};
 }
 

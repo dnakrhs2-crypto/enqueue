@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "PluginSet.h"
 
 #include "model/ProjectSerializer.h"
@@ -88,27 +89,27 @@ juce::String PluginSet::toJson() const
 juce::Result PluginSet::fromJson (const juce::String& json, PluginSet& out)
 {
     if ((juce::int64) json.getNumBytesAsUTF8() > maxFileBytes)
-        return juce::Result::fail (k ("세트 파일이 너무 큽니다 (최대 8 MB)."));
+        return juce::Result::fail (tr ("세트 파일이 너무 큽니다 (최대 8 MB)."));
 
     const auto root = juce::JSON::parse (json);
     if (root.getDynamicObject() == nullptr || ProjectSerializer::hasTrailingJsonData (json))
-        return juce::Result::fail (k ("플러그인 세트 파일의 JSON을 읽을 수 없습니다."));
+        return juce::Result::fail (tr ("플러그인 세트 파일의 JSON을 읽을 수 없습니다."));
     if (root["app"].toString() != "LiveMix" || root["kind"].toString() != "pluginSet")
-        return juce::Result::fail (k ("LiveMix 플러그인 세트 파일이 아닙니다."));
+        return juce::Result::fail (tr ("LiveMix 플러그인 세트 파일이 아닙니다."));
     if (! numberIn (root["version"], 1.0, 1.0e6, true))
-        return juce::Result::fail (k ("세트 파일의 버전 표시가 잘못됐습니다."));
+        return juce::Result::fail (tr ("세트 파일의 버전 표시가 잘못됐습니다."));
     if ((int) root["version"] > currentVersion)
-        return juce::Result::fail (k ("더 새로운 LiveMix로 저장한 세트입니다. LiveMix를 업데이트하세요."));
+        return juce::Result::fail (tr ("더 새로운 LiveMix로 저장한 세트입니다. LiveMix를 업데이트하세요."));
     if (! numberIn (root["number"], 1.0, numSets, true))
-        return juce::Result::fail (k ("세트 번호가 잘못됐습니다 (1~5)."));
+        return juce::Result::fail (tr ("세트 번호가 잘못됐습니다 (1~5)."));
     if (! root["source"].isString() || ! root["savedAt"].isString())
-        return juce::Result::fail (k ("세트 파일의 저장 정보가 잘못됐습니다."));
+        return juce::Result::fail (tr ("세트 파일의 저장 정보가 잘못됐습니다."));
 
     const auto* pluginsArray = root["plugins"].getArray();
     if (pluginsArray == nullptr)
-        return juce::Result::fail (k ("세트 파일에 플러그인 목록이 없습니다."));
+        return juce::Result::fail (tr ("세트 파일에 플러그인 목록이 없습니다."));
     if (pluginsArray->size() > maxPlugins)
-        return juce::Result::fail (k ("한 세트에는 플러그인을 16개까지 저장할 수 있습니다."));
+        return juce::Result::fail (tr ("한 세트에는 플러그인을 16개까지 저장할 수 있습니다."));
 
     std::set<juce::Uuid> ids;
     for (const auto& item : *pluginsArray)
@@ -116,12 +117,12 @@ juce::Result PluginSet::fromJson (const juce::String& json, PluginSet& out)
         if (item.getDynamicObject() == nullptr || ! validId (item["slotId"])
             || ! ids.insert (juce::Uuid (item["slotId"].toString())).second || ! item["bypassed"].isBool()
             || ! item["state"].isString())
-            return juce::Result::fail (k ("세트 파일의 플러그인 항목이 잘못됐습니다."));
+            return juce::Result::fail (tr ("세트 파일의 플러그인 항목이 잘못됐습니다."));
 
         juce::MemoryOutputStream decoded;
         const auto state = item["state"].toString();
         if (state.isNotEmpty() && ! juce::Base64::convertFromBase64 (decoded, state))
-            return juce::Result::fail (k ("세트 파일의 플러그인 설정 데이터를 읽을 수 없습니다: ") + item["name"].toString());
+            return juce::Result::fail (trf ("세트 파일의 플러그인 설정 데이터를 읽을 수 없습니다: {0}", item["name"].toString()));
     }
 
     PluginSet set;
@@ -134,7 +135,7 @@ juce::Result PluginSet::fromJson (const juce::String& json, PluginSet& out)
     {
         const auto* array = root["sends"].getArray();
         if (array == nullptr)
-            return juce::Result::fail (k ("세트 파일의 FX 센드 목록이 잘못됐습니다."));
+            return juce::Result::fail (tr ("세트 파일의 FX 센드 목록이 잘못됐습니다."));
         set.sends.emplace();
         ids.clear();
         for (const auto& item : *array)
@@ -142,7 +143,7 @@ juce::Result PluginSet::fromJson (const juce::String& json, PluginSet& out)
             if (item.getDynamicObject() == nullptr || ! validId (item["fx"]) || ! item["name"].isString()
                 || ! numberIn (item["amount"], 0.0, 1.0) || ! item["pre"].isBool()
                 || ! ids.insert (juce::Uuid (item["fx"].toString())).second)
-                return juce::Result::fail (k ("세트 파일의 FX 센드 항목이 잘못됐습니다."));
+                return juce::Result::fail (tr ("세트 파일의 FX 센드 항목이 잘못됐습니다."));
             set.sends->push_back ({ juce::Uuid (item["fx"].toString()), item["name"].toString(), (double) item["amount"], (bool) item["pre"] });
         }
     }
@@ -151,19 +152,19 @@ juce::Result PluginSet::fromJson (const juce::String& json, PluginSet& out)
     {
         const auto* array = root["groups"].getArray();
         if (array == nullptr || array->size() > MixSession::maxPluginGroups)
-            return juce::Result::fail (k ("세트 파일의 플러그인 그룹 목록이 잘못됐습니다 (최대 5개)."));
+            return juce::Result::fail (tr ("세트 파일의 플러그인 그룹 목록이 잘못됐습니다 (최대 5개)."));
         set.groups.emplace();
         for (const auto& item : *array)
         {
             const auto* slots = item["slots"].getArray();
             if (item.getDynamicObject() == nullptr || slots == nullptr || ! item["off"].isBool())
-                return juce::Result::fail (k ("세트 파일의 플러그인 그룹 항목이 잘못됐습니다."));
+                return juce::Result::fail (tr ("세트 파일의 플러그인 그룹 항목이 잘못됐습니다."));
             MixPluginGroup group;
             group.off = (bool) item["off"];
             for (const auto& id : *slots)
             {
                 if (! validId (id))
-                    return juce::Result::fail (k ("세트 파일의 플러그인 그룹 멤버가 잘못됐습니다."));
+                    return juce::Result::fail (tr ("세트 파일의 플러그인 그룹 멤버가 잘못됐습니다."));
                 const juce::Uuid slot (id.toString());
                 if (! hasSlot (group, slot))
                     group.slots.push_back (slot);
@@ -180,7 +181,7 @@ juce::Result PluginSet::save (const juce::File& target) const
 {
     const auto json = toJson();
     if ((juce::int64) json.getNumBytesAsUTF8() > maxFileBytes)
-        return juce::Result::fail (k ("세트가 너무 커서 저장하지 않았습니다 (최대 8 MB)."));
+        return juce::Result::fail (tr ("세트가 너무 커서 저장하지 않았습니다 (최대 8 MB)."));
 
     PluginSet check;
     if (const auto valid = fromJson (json, check); valid.failed())
@@ -196,9 +197,9 @@ juce::Result PluginSet::save (const juce::File& target) const
 juce::Result PluginSet::load (const juce::File& file, PluginSet& out)
 {
     if (! file.existsAsFile())
-        return juce::Result::fail (k ("세트 파일을 읽을 수 없습니다: ") + file.getFullPathName());
+        return juce::Result::fail (trf ("세트 파일을 읽을 수 없습니다: {0}", file.getFullPathName()));
     if (file.getSize() > maxFileBytes)
-        return juce::Result::fail (k ("세트 파일이 너무 큽니다 (최대 8 MB)."));
+        return juce::Result::fail (tr ("세트 파일이 너무 큽니다 (최대 8 MB)."));
     return fromJson (file.loadFileAsString(), out);
 }
 
@@ -226,22 +227,21 @@ juce::String PluginSet::summary() const
     auto text = names.joinIntoString (k (" → "));
     if (text.length() > 48)
         text = text.substring (0, 48) + k ("…");
-    text += " (" + juce::String ((int) plugins.size()) + k ("개)");
+    text += trf (" ({0}개)", juce::String ((int) plugins.size()));
     if (sends || groups)
-        text += k (" · ") + (sends ? k ("센드") : juce::String())
-            + (sends && groups ? k ("·") : juce::String()) + (groups ? k ("그룹") : juce::String());
+        text += k (" · ") + (sends ? tr ("센드") : juce::String())
+            + (sends && groups ? k ("·") : juce::String()) + (groups ? tr ("그룹") : juce::String());
     return text;
 }
 
 juce::String PluginSetEntry::description() const
 {
-    return state == State::empty ? k ("비어 있음") : state == State::unreadable ? k ("읽을 수 없는 파일") : set.summary();
+    return state == State::empty ? tr ("비어 있음") : state == State::unreadable ? tr ("읽을 수 없는 파일") : set.summary();
 }
 
 juce::String PluginSetEntry::menuText (bool saving) const
 {
-    return k ("세트 ") + juce::String (set.number) + k (" — ") + description()
-        + (saving && state != State::empty ? k (" (덮어쓰기)") : juce::String());
+    return trf ("세트 {0} — {1}{2}", juce::String (set.number), description(), (saving && state != State::empty ? tr (" (덮어쓰기)") : juce::String()));
 }
 
 std::array<PluginSetEntry, PluginSet::numSets> listPluginSets (const juce::File& folder)
@@ -259,7 +259,7 @@ std::array<PluginSetEntry, PluginSet::numSets> listPluginSets (const juce::File&
         if (result.failed() || loaded.number != entry.set.number)
         {
             entry.state = PluginSetEntry::State::unreadable;
-            entry.error = result.failed() ? result.getErrorMessage() : k ("파일 이름과 세트 번호가 다릅니다.");
+            entry.error = result.failed() ? result.getErrorMessage() : tr ("파일 이름과 세트 번호가 다릅니다.");
             continue;
         }
         entry.state = PluginSetEntry::State::ready;
@@ -320,22 +320,35 @@ PluginSetSendMatches matchPluginSetSends (const std::vector<PluginSetSend>& send
                 break;
             }
 
-    PluginSetSendMatches result;
+    // Reserve every exact name before allowing a translated factory name to consume a destination.
     for (size_t i = 0; i < sends.size(); ++i)
-    {
-        const auto& send = sends[i];
         if (targets[i] < 0)
             for (size_t j = 0; j < fx.size(); ++j)
-                if (! used[j] && send.name == fx[j].name)
+                if (! used[j] && sends[i].name == fx[j].name)
                 {
                     targets[i] = (int) j;
                     used[j] = true;
                     break;
                 }
+
+    for (size_t i = 0; i < sends.size(); ++i)
+        if (targets[i] < 0 && isDefaultFxName (sends[i].name))
+            for (size_t j = 0; j < fx.size(); ++j)
+                if (! used[j] && isDefaultFxName (fx[j].name))
+                {
+                    targets[i] = (int) j;
+                    used[j] = true;
+                    break;
+                }
+
+    PluginSetSendMatches result;
+    for (size_t i = 0; i < sends.size(); ++i)
+    {
+        const auto& send = sends[i];
         if (targets[i] >= 0)
             result.sends.push_back ({ fx[(size_t) targets[i]].id, send.amount, send.pre });
         else if (send.amount > 0.0)
-            result.warnings.add (k ("센드: '") + send.name + k ("' FX 채널이 이 세션에 없어 건너뛰었습니다"));
+            result.warnings.add (trf ("센드: '{0}' FX 채널이 이 세션에 없어 건너뛰었습니다", send.name));
     }
     return result;
 }

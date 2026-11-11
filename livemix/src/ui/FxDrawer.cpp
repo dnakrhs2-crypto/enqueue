@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "FxDrawer.h"
 
 namespace gocue::livemix
@@ -38,7 +39,7 @@ struct FxDrawer::SenderRow : public juce::Label
 
     void resized() override
     {
-        const int valueWidth = labelWidthForText (value, "100%" + ko (" · 포스트"));
+        const int valueWidth = labelWidthForText (value, tr ("100% · 포스트"));
         setBorderSize (juce::BorderSize<int> (1, 5, 1, valueWidth + 5));
         value.setBounds (getLocalBounds().removeFromRight (valueWidth));
     }
@@ -50,17 +51,17 @@ FxDrawer::~FxDrawer() = default;
 
 FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
 {
-    masterChip.setButtonText (ko ("마스터"));
-    directChip.setButtonText (ko ("직접 출력"));
-    monoChip.setButtonText (ko ("모노"));
-    title.setText (ko ("FX 채널"), juce::dontSendNotification);
+    masterChip.setButtonText (tr ("마스터"));
+    directChip.setButtonText (tr ("직접 출력"));
+    monoChip.setButtonText (tr ("모노"));
+    title.setText (tr ("FX 채널"), juce::dontSendNotification);
     title.setFont (titleFont (17.0f));
     addAndMakeVisible (title);
     closeButton.setWantsKeyboardFocus (false);
     closeButton.onClick = [this] { if (onClose) onClose(); };
     addAndMakeVisible (closeButton);
 
-    addFxButton.setButtonText (ko ("+ FX 채널"));
+    addFxButton.setButtonText (tr ("+ FX 채널"));
     addFxButton.setWantsKeyboardFocus (false);
     addFxButton.onClick = [this]
     {
@@ -70,7 +71,7 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
             selectFx (id);
     };
     addAndMakeVisible (addFxButton);
-    removeFxButton.setButtonText (ko ("이 FX 삭제"));
+    removeFxButton.setButtonText (tr ("이 FX 삭제"));
     removeFxButton.setWantsKeyboardFocus (false);
     removeFxButton.onClick = [this] { removeSelected(); };
     addAndMakeVisible (removeFxButton);
@@ -78,7 +79,7 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     name.onRenamed = [this] (const juce::String& text) { if (! selected.isNull()) document.renameFx (selected, text); };
     addAndMakeVisible (name);
 
-    lamp.setTexts ("FX ON", "FX OFF", ko ("뮤트그룹 - 뮤트 중"));
+    lamp.setTexts ("FX ON", "FX OFF", tr ("뮤트그룹 - 뮤트 중"));
     lamp.onClick = [this]
     {
         if (const auto* f = fx(); f != nullptr && ! refreshing)
@@ -86,18 +87,18 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     };
     addAndMakeVisible (lamp);
 
-    styleCaption (chainCaption, ko ("VST3 체인"));
+    styleCaption (chainCaption, tr ("VST3 체인"));
     addAndMakeVisible (chainCaption);
-    openChainButton.setButtonText (ko ("체인 열기"));
+    openChainButton.setButtonText (tr ("체인 열기"));
     openChainButton.setWantsKeyboardFocus (false);
     openChainButton.onClick = [this] { if (onOpenChain && ! selected.isNull()) onOpenChain (selected); };
     addAndMakeVisible (openChainButton);
-    addPluginButton.setButtonText (ko ("+ 추가"));
+    addPluginButton.setButtonText (tr ("+ 추가"));
     addPluginButton.setWantsKeyboardFocus (false);
     addPluginButton.onClick = [this] { if (onAddPlugin && ! selected.isNull()) onAddPlugin (selected); };
     addAndMakeVisible (addPluginButton);
 
-    styleCaption (returnCaption, ko ("돌아오는 양") + "   " + ko ("마스터로"));
+    styleCaption (returnCaption, tr ("돌아오는 양   마스터로"));
     addAndMakeVisible (returnCaption);
     returnSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     returnSlider.setRange (0.0, 100.0, 1.0);
@@ -117,7 +118,7 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     returnValue.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (returnValue);
 
-    styleCaption (outputCaption, ko ("출력"));
+    styleCaption (outputCaption, tr ("출력"));
     addAndMakeVisible (outputCaption);
     masterChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (masterChip);
@@ -126,14 +127,14 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     directCombo.setWantsKeyboardFocus (false);
     directCombo.onChange = [this] { commitOutput (true); };
     addAndMakeVisible (directCombo);
-    monoChip.setTooltip (ko ("켜면 이 FX의 소리를 좌우 합쳐 양쪽에 똑같이 내보냅니다"));
+    monoChip.setTooltip (tr ("켜면 이 FX의 소리를 좌우 합쳐 양쪽에 똑같이 내보냅니다"));
     monoChip.onClick = [this]
     {
         if (! refreshing && ! selected.isNull())
             document.setFxMono (selected, monoChip.getToggleState());
     };
     addAndMakeVisible (monoChip);
-    muteGroupChip.setTooltip (ko ("켜 두면 FX 뮤트그룹 핫키가 이 FX의 리턴을 함께 뮤트합니다 (핫키는 설정에서)"));
+    muteGroupChip.setTooltip (tr ("켜 두면 FX 뮤트그룹 핫키가 이 FX의 리턴을 함께 뮤트합니다 (핫키는 설정에서)"));
     muteGroupChip.onClick = [this]
     {
         if (! refreshing && ! selected.isNull())
@@ -141,13 +142,13 @@ FxDrawer::FxDrawer (MixDocument& doc) : document (doc)
     };
     addAndMakeVisible (muteGroupChip);
 
-    styleCaption (meterCaption, ko ("미터"));
+    styleCaption (meterCaption, tr ("미터"));
     addAndMakeVisible (meterCaption);
     addAndMakeVisible (meter_);
 
-    styleCaption (sendersCaption, ko ("이 FX로 보내는 마이크"));
+    styleCaption (sendersCaption, tr ("이 FX로 보내는 마이크"));
     addAndMakeVisible (sendersCaption);
-    styleCaption (note, ko ("양과 프리/포스트는 각 마이크 카드의 \"이펙터\" 칸에서 조절합니다"));
+    styleCaption (note, tr ("양과 프리/포스트는 각 마이크 카드의 \"이펙터\" 칸에서 조절합니다"));
     note.setFont (bodyFont (12.5f));
     addAndMakeVisible (note);
 
@@ -216,7 +217,7 @@ void FxDrawer::refresh()
 
         returnSlider.setValue (f->returnAmount * 100.0, juce::dontSendNotification);
         const bool mutedNow = allMuted || (groupMuted && f->muteGroup);
-        returnValue.setText (mutedNow ? ko ("뮤트") : juce::String ((int) std::lround (f->returnAmount * 100.0)) + "%", juce::dontSendNotification);
+        returnValue.setText (mutedNow ? tr ("뮤트") : juce::String ((int) std::lround (f->returnAmount * 100.0)) + "%", juce::dontSendNotification);
         returnValue.setColour (juce::Label::textColourId, mutedNow ? Palette::danger : Palette::text);
         masterChip.setToggleState (f->output.master, juce::dontSendNotification);
         directChip.setToggleState (f->output.direct, juce::dontSendNotification);
@@ -227,12 +228,12 @@ void FxDrawer::refresh()
         monoChip.setToggleState (f->mono, juce::dontSendNotification);
         muteGroupChip.setToggleState (f->muteGroup, juce::dontSendNotification);
         lamp.setOn (f->on);
-        lamp.setMutedText (allMuted ? ko ("전체 뮤트 중") : ko ("뮤트그룹 - 뮤트 중"));
+        lamp.setMutedText (allMuted ? tr ("전체 뮤트 중") : tr ("뮤트그룹 - 뮤트 중"));
         lamp.setMuted (mutedNow);
     }
     else
     {
-        name.setText (ko ("FX 채널이 없습니다"), juce::dontSendNotification);
+        name.setText (tr ("FX 채널이 없습니다"), juce::dontSendNotification);
     }
 
     rebuildChain();
@@ -270,7 +271,7 @@ void FxDrawer::rebuildTabs()
         const bool defaultName = f.name.trim() == "FX " + juce::String ((int) i + 1);   // the default name says no more than the badge
         auto tab = std::make_unique<FxTabButton> (defaultName ? badge : badge + "  " + f.name);
         tab->setWantsKeyboardFocus (false);
-        tab->setTooltip (f.name + "\n" + ko ("더블클릭: 이름 바꾸기"));
+        tab->setTooltip (trf ("{0}\n더블클릭: 이름 바꾸기", f.name));
         tab->setToggleState (f.id == selected, juce::dontSendNotification);
         tab->setColour (juce::TextButton::buttonOnColourId, Palette::accent);
         tab->setAlpha (f.on ? 1.0f : offAlpha);
@@ -307,7 +308,7 @@ void FxDrawer::rebuildChain()
     for (int i = 0; i < chain->getNumSlots(); ++i)
     {
         const auto& slot = chain->getSlot (i);
-        auto chip = std::make_unique<juce::TextButton> (juce::String (i + 1) + "  " + (slot.plugin != nullptr ? slot.plugin->getName() : slot.state.name + ko (" (없음)")));
+        auto chip = std::make_unique<juce::TextButton> (juce::String (i + 1) + "  " + (slot.plugin != nullptr ? slot.plugin->getName() : trf ("{0} (없음)", slot.state.name)));
         chip->setWantsKeyboardFocus (false);
         chip->setColour (juce::TextButton::buttonColourId, Palette::slotBg);
         chip->setColour (juce::TextButton::textColourOffId, slot.bypassed.load() ? Palette::dimText : Palette::text);
@@ -338,7 +339,7 @@ void FxDrawer::rebuildSenders()
         auto label = std::make_unique<SenderRow>();
         const auto amount = juce::String ((int) std::lround (send.amount * 100.0)) + "%";
         label->setText (juce::String ((int) i + 1) + "  " + c.name, juce::dontSendNotification);
-        label->value.setText (amount + (send.amount > 0.0 ? (send.pre ? ko (" · 프리") : ko (" · 포스트")) : juce::String()), juce::dontSendNotification);
+        label->value.setText (amount + (send.amount > 0.0 ? (send.pre ? tr (" · 프리") : tr (" · 포스트")) : juce::String()), juce::dontSendNotification);
         label->setColour (juce::Label::textColourId, send.amount > 0.0 && c.on ? Palette::text : Palette::dimText);
         label->value.setColour (juce::Label::textColourId, label->findColour (juce::Label::textColourId));
         label->setTooltip (label->getText() + "     " + label->value.getText());
@@ -381,10 +382,10 @@ void FxDrawer::removeSelected()
     juce::Component::SafePointer<FxDrawer> safeThis (this);
     juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                                      .withTitle (ko ("FX 채널 삭제"))
-                                      .withMessage (ko ("이 FX 채널과 그 플러그인, 마이크들의 센드 설정이 지워집니다.\n삭제할까요?"))
-                                      .withButton (ko ("삭제"))
-                                      .withButton (ko ("취소")),
+                                      .withTitle (tr ("FX 채널 삭제"))
+                                      .withMessage (tr ("이 FX 채널과 그 플러그인, 마이크들의 센드 설정이 지워집니다.\n삭제할까요?"))
+                                      .withButton (tr ("삭제"))
+                                      .withButton (tr ("취소")),
                                   [safeThis, id] (int result)
     {
         if (safeThis != nullptr && result == 1)
@@ -418,7 +419,7 @@ int FxDrawer::layout (int width, bool apply)
     const int columns = n >= 3 ? 2 : juce::jmax (1, n);
     const int tabRows = juce::jmax (1, (n + columns - 1) / columns);
     auto tabRow = area.removeFromTop (tabRows * 38 - 6);
-    place (addFxButton, tabRow.removeFromRight (90).withHeight (32));
+    place (addFxButton, tabRow.removeFromRight (textButtonWidth (addFxButton, 90, 32)).withHeight (32));
     tabRow.removeFromRight (6);
 
     if (! tabs.empty())
@@ -436,7 +437,7 @@ int FxDrawer::layout (int width, bool apply)
         place (name, nameRow);
         return area.getY() + 16;
     }
-    place (removeFxButton, nameRow.removeFromRight (90));
+    place (removeFxButton, nameRow.removeFromRight (textButtonWidth (removeFxButton, 90, 30)));
     nameRow.removeFromRight (8);
     place (name, nameRow);
     area.removeFromTop (8);
@@ -454,7 +455,7 @@ int FxDrawer::layout (int width, bool apply)
 
     place (returnCaption, area.removeFromTop (20));
     auto ret = area.removeFromTop (34);
-    place (returnValue, ret.removeFromRight (juce::jmax (labelWidthForText (returnValue, "100%"), labelWidthForText (returnValue, ko ("뮤트")))));
+    place (returnValue, ret.removeFromRight (juce::jmax (labelWidthForText (returnValue, "100%"), labelWidthForText (returnValue, tr ("뮤트")))));
     ret.removeFromRight (8);
     place (returnSlider, ret);
     area.removeFromTop (12);

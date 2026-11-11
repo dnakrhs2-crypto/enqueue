@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "AudioBackends.h"
 
 #if JUCE_WINDOWS
@@ -41,9 +42,9 @@ juce::StringArray availableTypes (juce::AudioDeviceManager& manager)
 juce::String label (const juce::String& typeName)
 {
     if (typeName.containsIgnoreCase ("ASIO")) return "ASIO";
-    if (typeName == windowsTypes[0]) return juce::String::fromUTF8 ("윈도우 오디오");
-    if (typeName == windowsTypes[1]) return juce::String::fromUTF8 ("윈도우 오디오 (저지연)");
-    if (typeName == windowsTypes[2]) return juce::String::fromUTF8 ("윈도우 오디오 (독점)");
+    if (typeName == windowsTypes[0]) return tr ("윈도우 오디오");
+    if (typeName == windowsTypes[1]) return tr ("윈도우 오디오 (저지연)");
+    if (typeName == windowsTypes[2]) return tr ("윈도우 오디오 (독점)");
     return typeName;
 }
 

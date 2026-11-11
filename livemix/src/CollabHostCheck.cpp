@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "CollabHostCheck.h"
 #include "ui/UiUtils.h"
 
@@ -19,9 +20,20 @@ CollabHostCheck::Result CollabHostCheck::evaluate (bool received, const CollabUp
     return { false, Cause::firewall, ko ("윈도우 방화벽이나 보안 프로그램이 막고 있을 수 있습니다") };
 }
 
+juce::String CollabHostCheck::Result::displayReason() const
+{
+    // reason is also sent in the room API's JSON. Keep that wire value unchanged.
+    switch (cause)
+    {
+        case Cause::upnpDisabled: return tr ("공유기 자동 포트 열기(UPnP)가 꺼져 있습니다");
+        case Cause::sharedAddress: return tr ("공유기가 두 대 연결돼 있거나 통신사 공유 IP라 바깥에서 들어올 수 없습니다");
+        case Cause::firewall: return tr ("윈도우 방화벽이나 보안 프로그램이 막고 있을 수 있습니다");
+        default: return reason;
+    }
+}
+
 juce::String CollabHostCheck::Result::message() const
 {
-    return reachable ? juce::String() : ko ("이 PC는 공유기 포트가 열리지 않아 방장을 할 수 없습니다. 상대방이 방을 만들어 주세요.")
-                                       + "\n" + reason;
+    return reachable ? juce::String() : trf ("이 PC는 공유기 포트가 열리지 않아 방장을 할 수 없습니다. 상대방이 방을 만들어 주세요.\n{0}", displayReason());
 }
 }

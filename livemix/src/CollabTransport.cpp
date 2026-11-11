@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <avrt.h>
 #include "CollabTransport.h"
+#include "Localisation.h"
 #include "CollabAudio.h"
 #include <algorithm>
 #include <atomic>
@@ -1010,7 +1011,7 @@ juce::String CollabTransport::open (int wantedPort, bool loopbackOnly)
 {
     stop();
     auto& i = *impl;
-    auto failure = [&] { return juce::String::fromUTF8 ("UDP 포트 ") + juce::String (wantedPort) + juce::String::fromUTF8 ("을 열 수 없습니다"); };
+    auto failure = [&] { return trf ("UDP 포트 {0}을 열 수 없습니다", juce::String (wantedPort)); };
     if (! i.winsock || wantedPort < 0 || wantedPort > 65535) return failure();
     i.socket = socket (AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (i.socket == INVALID_SOCKET) return failure();

@@ -1,3 +1,4 @@
+#include "app/UiTranslation.h"
 #include "audio/PluginChain.h"
 
 #include <cmath>
@@ -492,12 +493,12 @@ juce::StringArray PluginChain::restore (const std::vector<PluginSlotState>& stat
                 // it threw on its saved state or while getting ready: the slot stays empty and marked, the state kept
                 auto dead = std::move (slot->plugin);
                 try { dead.reset(); } catch (...) {}
-                errors.add (state.name + ": " + juce::String::fromUTF8 ("플러그인이 준비 중 오류를 내 비워 두었습니다 (저장된 설정은 그대로 둡니다)"));
+                errors.add (sharedTrf ("{0}: 플러그인이 준비 중 오류를 내 비워 두었습니다 (저장된 설정은 그대로 둡니다)", state.name));
             }
         }
         else
         {
-            errors.add (state.name + ": " + (error.isNotEmpty() ? error : juce::String::fromUTF8 ("이 PC에 없는 플러그인입니다 (자리는 비워 두고 저장된 설정은 그대로 둡니다)")));
+            errors.add (state.name + ": " + (error.isNotEmpty() ? error : sharedTr ("이 PC에 없는 플러그인입니다 (자리는 비워 두고 저장된 설정은 그대로 둡니다)")));
         }
 
         fresh.push_back (std::move (slot));

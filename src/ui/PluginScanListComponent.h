@@ -1,4 +1,5 @@
 #pragma once
+#include "app/UiTranslation.h"
 #include "audio/PluginScan.h"
 
 namespace gocue
@@ -14,7 +15,7 @@ public:
         : PluginListComponent (formats, list, crashMarker, properties, false),
           progressTitle (std::move (title)), coordinator (c)
     {
-        setScanDialogText (progressTitle, juce::String::fromUTF8 ("플러그인을 찾는 중입니다."));
+        setScanDialogText (progressTitle, sharedTr ("플러그인을 찾는 중입니다."));
         setNumberOfThreadsForScanning (1);
     }
     ~PluginScanListComponent() override

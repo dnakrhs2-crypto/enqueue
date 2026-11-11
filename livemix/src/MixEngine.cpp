@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "MixEngine.h"
 #include "AudioBackends.h"
 #include "MonitorOutput.h"
@@ -152,7 +153,7 @@ juce::String MixEngine::initialise (const MixDevice* saved)
             return openDevice ({ type->getTypeName(), inputs[juce::jmax (0, type->getDefaultDeviceIndex (true))],
                                  outputs[juce::jmax (0, type->getDefaultDeviceIndex (false))], 0, 0.0 });
     }
-    return error.isNotEmpty() ? error : juce::String::fromUTF8 ("오디오 장치를 열지 못했습니다.");
+    return error.isNotEmpty() ? error : tr ("오디오 장치를 열지 못했습니다.");
 }
 
 juce::AudioIODeviceType* MixEngine::findType (const juce::String& name)
@@ -216,9 +217,8 @@ juce::String MixEngine::openAllChannels()
 
     // JUCE closed the device on the refusal: back to the channels that worked
     const auto rollback = deviceManager.setAudioDeviceSetup (previous, true);
-    return juce::String::fromUTF8 ("모든 채널을 열지 못했습니다: ") + error
-           + (rollback.isNotEmpty() ? juce::String::fromUTF8 (" (이전 채널 구성으로 되돌리기도 실패: ") + rollback + ")"
-                                    : juce::String::fromUTF8 (" (이전 채널 구성을 유지합니다)"));
+    return trf ("모든 채널을 열지 못했습니다: {0}{1}", error, (rollback.isNotEmpty() ? trf (" (이전 채널 구성으로 되돌리기도 실패: {0})", rollback)
+                                    : tr (" (이전 채널 구성을 유지합니다)")));
 }
 
 juce::String MixEngine::openDevice (const MixDevice& requested)
@@ -232,13 +232,13 @@ juce::String MixEngine::openDevice (const MixDevice& requested)
     }
     auto* type = findType (wanted.type);
     if (type == nullptr || (! wanted.isAsio() && ! AudioBackends::isWindows (wanted.type)))
-        return juce::String::fromUTF8 ("오디오 장치 타입을 쓸 수 없습니다: ") + wanted.type;
+        return trf ("오디오 장치 타입을 쓸 수 없습니다: {0}", wanted.type);
     if (wanted.input.isEmpty())
-        return juce::String::fromUTF8 ("입력 장치를 선택하세요.");
+        return tr ("입력 장치를 선택하세요.");
     type->scanForDevices();
     if (! type->getDeviceNames (true).contains (wanted.input)
         || (wanted.output.isNotEmpty() && ! type->getDeviceNames (false).contains (wanted.output)))
-        return juce::String::fromUTF8 ("선택한 오디오 장치가 이 PC에 없습니다.");
+        return tr ("선택한 오디오 장치가 이 PC에 없습니다.");
 
     const bool split = ! wanted.isAsio() && wanted.output.isNotEmpty()
                        && ! AudioBackends::sameContainer (wanted.input, wanted.output);
@@ -274,7 +274,7 @@ juce::String MixEngine::openDevice (const MixDevice& requested)
     {
         auto* opened = deviceManager.getCurrentAudioDevice();
         if (opened == nullptr || ! opened->isOpen())
-            error = juce::String::fromUTF8 ("오디오 장치를 시작하지 못했습니다.");
+            error = tr ("오디오 장치를 시작하지 못했습니다.");
         else
             error = openAllChannels();
     }
@@ -297,17 +297,17 @@ juce::String MixEngine::openDevice (const MixDevice& requested)
         {
             rollback = deviceManager.setAudioDeviceSetup (previous, true);
             if (rollback.isEmpty() && deviceManager.getAudioDeviceSetup() != previous)
-                rollback = juce::String::fromUTF8 ("이전 장치의 샘플레이트, 버퍼 또는 채널을 복원하지 못했습니다.");
+                rollback = tr ("이전 장치의 샘플레이트, 버퍼 또는 채널을 복원하지 못했습니다.");
             if (rollback.isEmpty() && previousMonitor != nullptr)
             {
                 if (auto* oldType = findType (previousType))
                     rollback = previousMonitor->start (*oldType, previousInfo.output, previousInfo.sampleRate,
                                                         previousInfo.bufferSize, previousMonitorPeriod, previousMonitorRate);
                 else
-                    rollback = juce::String::fromUTF8 ("이전 모니터 장치 타입이 없습니다.");
+                    rollback = tr ("이전 모니터 장치 타입이 없습니다.");
                 if (rollback.isEmpty() && (previousMonitor->getOutputSampleRate() != previousMonitorRate
                                            || previousMonitor->getOutputPeriod() != previousMonitorPeriod))
-                    rollback = juce::String::fromUTF8 ("이전 모니터의 샘플레이트 또는 버퍼를 복원하지 못했습니다.");
+                    rollback = tr ("이전 모니터의 샘플레이트 또는 버퍼를 복원하지 못했습니다.");
             }
         }
         monitor = std::move (previousMonitor);
@@ -321,10 +321,9 @@ juce::String MixEngine::openDevice (const MixDevice& requested)
             if (monitor != nullptr) monitor->stop();
         }
         ensureCallback();
-        return juce::String::fromUTF8 ("오디오 장치를 열지 못했습니다: ") + error
-            + (! hadDevice ? juce::String()
-               : rollback.isNotEmpty() ? juce::String::fromUTF8 (" (이전 장치로 되돌리기도 실패: ") + rollback + ")"
-                                       : juce::String::fromUTF8 (" (이전 장치로 되돌렸습니다)"));
+        return trf ("오디오 장치를 열지 못했습니다: {0}{1}", error, (! hadDevice ? juce::String()
+               : rollback.isNotEmpty() ? trf (" (이전 장치로 되돌리기도 실패: {0})", rollback)
+                                       : tr (" (이전 장치로 되돌렸습니다)")));
     }
 
     openedDevice = wanted;
@@ -432,7 +431,7 @@ juce::String MixEngine::setBufferSize (int samples)
     const auto current = getOpenDevice();
     if (current.type == "Windows Audio") return {}; // the shared-mode period is chosen by Windows
     if (current.input.isEmpty())
-        return juce::String::fromUTF8 ("열린 오디오 장치가 없습니다.");
+        return tr ("열린 오디오 장치가 없습니다.");
     if (samples <= 0 || current.bufferSize == samples) return {};
     auto wanted = current;
     wanted.bufferSize = samples;
@@ -444,7 +443,7 @@ juce::String MixEngine::restartDevice()
     auto current = getOpenDevice();
     if (current.input.isEmpty()) current = openedDevice;
     if (current.input.isEmpty())
-        return juce::String::fromUTF8 ("장치를 다시 열지 못했습니다. 설정에서 장치를 다시 고르세요.");
+        return tr ("장치를 다시 열지 못했습니다. 설정에서 장치를 다시 고르세요.");
     return openDevice (current);
 }
 
@@ -465,7 +464,7 @@ juce::String MixEngine::openSessionDevice (const MixDevice& device)
         return error;
     }
     const auto error = openDevice (device);
-    return error.isEmpty() ? juce::String() : juce::String::fromUTF8 ("세션의 ") + error;
+    return error.isEmpty() ? juce::String() : trf ("세션의 {0}", error);
 }
 
 void MixEngine::shutdown()

@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "BackupDialog.h"
 
 #include "BackupServer.h"
@@ -29,45 +30,45 @@ namespace
         RegisterContent (WebDavBackup& b, const juce::String& initialId, std::function<void (const juce::String& id, const juce::String& password)> registered)
             : backup (b), onRegistered (std::move (registered))
         {
-            styleCaption (idCaption, ko ("아이디"));
+            styleCaption (idCaption, tr ("아이디"));
             addAndMakeVisible (idCaption);
             idEditor.setFont (bodyFont());
             idEditor.setText (initialId, false);
             idEditor.onReturnKey = [this] { submit(); };
             addAndMakeVisible (idEditor);
 
-            styleCaption (passwordCaption, ko ("비밀번호 (4자 이상)"));
+            styleCaption (passwordCaption, tr ("비밀번호 (4자 이상)"));
             addAndMakeVisible (passwordCaption);
             passwordEditor.setFont (bodyFont());
             passwordEditor.setPasswordCharacter (0x2022);
             passwordEditor.onReturnKey = [this] { submit(); };
             addAndMakeVisible (passwordEditor);
 
-            styleCaption (confirmCaption, ko ("비밀번호 확인"));
+            styleCaption (confirmCaption, tr ("비밀번호 확인"));
             addAndMakeVisible (confirmCaption);
             confirmEditor.setFont (bodyFont());
             confirmEditor.setPasswordCharacter (0x2022);
             confirmEditor.onReturnKey = [this] { submit(); };
             addAndMakeVisible (confirmEditor);
 
-            styleCaption (hint, ko ("아이디는 2~20자(영문·숫자·한글·_·-). 백업은 이 아이디와 비밀번호로만 올리고 내려받습니다. 비밀번호를 잊으면 되찾을 수 없습니다."));
+            styleCaption (hint, tr ("아이디는 2~20자(영문·숫자·한글·_·-). 백업은 이 아이디와 비밀번호로만 올리고 내려받습니다. 비밀번호를 잊으면 되찾을 수 없습니다."));
             hint.setFont (bodyFont (12.5f));
             hint.setMinimumHorizontalScale (1.0f);
             addAndMakeVisible (hint);
 
-            registerButton.setButtonText (ko ("등록"));
+            registerButton.setButtonText (tr ("등록"));
             registerButton.setWantsKeyboardFocus (false);
             registerButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
             registerButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
             registerButton.onClick = [this] { submit(); };
             addAndMakeVisible (registerButton);
 
-            cancelButton.setButtonText (ko ("취소"));
+            cancelButton.setButtonText (tr ("취소"));
             cancelButton.setWantsKeyboardFocus (false);
             cancelButton.onClick = [this] { closeWindow(); };
             addAndMakeVisible (cancelButton);
 
-            doneLabel.setText (ko ("등록완료!"), juce::dontSendNotification);
+            doneLabel.setText (tr ("등록완료!"), juce::dontSendNotification);
             doneLabel.setFont (juce::Font (juce::FontOptions (pt (26.0f), juce::Font::bold)));
             doneLabel.setJustificationType (juce::Justification::centred);
             doneLabel.setColour (juce::Label::textColourId, Palette::accent);
@@ -78,7 +79,7 @@ namespace
             doneNote.setMinimumHorizontalScale (1.0f);
             addChildComponent (doneNote);
 
-            okButton.setButtonText (ko ("확인"));
+            okButton.setButtonText (tr ("확인"));
             okButton.setWantsKeyboardFocus (false);
             okButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
             okButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
@@ -159,7 +160,7 @@ namespace
         {
             if (! BackupServer::isConfigured())
             {
-                setStatus (ko ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
+                setStatus (tr ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
                 return;
             }
 
@@ -175,21 +176,21 @@ namespace
 
             if (password.length() < 4)
             {
-                setStatus (ko ("비밀번호는 4자 이상으로 정하세요"), true);
+                setStatus (tr ("비밀번호는 4자 이상으로 정하세요"), true);
                 passwordEditor.grabKeyboardFocus();
                 return;
             }
 
             if (confirmEditor.getText() != password)
             {
-                setStatus (ko ("비밀번호 확인이 다릅니다"), true);
+                setStatus (tr ("비밀번호 확인이 다릅니다"), true);
                 confirmEditor.grabKeyboardFocus();
                 return;
             }
 
             if (backup.isBusy())
             {
-                setStatus (ko ("앞의 작업이 끝날 때까지 기다리세요"), true);
+                setStatus (tr ("앞의 작업이 끝날 때까지 기다리세요"), true);
                 return;
             }
 
@@ -217,7 +218,7 @@ namespace
             }
 
             setBusy (true);
-            setStatus (ko ("등록하는 중..."), false);
+            setStatus (tr ("등록하는 중..."), false);
         }
 
         void showDone (const juce::String& id, const juce::String& password)
@@ -230,7 +231,7 @@ namespace
                                                                     &hint, &registerButton, &cancelButton, &statusLabel })
                 c->setVisible (false);
 
-            doneNote.setText (ko ("아이디 '") + id + ko ("'로 등록했습니다. 확인을 누르면 이 계정으로 로그인합니다."), juce::dontSendNotification);
+            doneNote.setText (trf ("아이디 '{0}'로 등록했습니다. 확인을 누르면 이 계정으로 로그인합니다.", id), juce::dontSendNotification);
             doneLabel.setVisible (true);
             doneNote.setVisible (true);
             okButton.setVisible (true);
@@ -267,21 +268,21 @@ namespace
         BackupContent (MixDocument& d, LiveMixSettings& s, WebDavBackup& b, BackupDialog::Callbacks cb)
             : document (d), settings (s), backup (b), callbacks (std::move (cb))
         {
-            styleCaption (idCaption, ko ("아이디"));
+            styleCaption (idCaption, tr ("아이디"));
             addAndMakeVisible (idCaption);
             idEditor.setFont (bodyFont());
             idEditor.setText (settings.getBackupUser(), false);
             idEditor.onReturnKey = [this] { signIn(); };
             addAndMakeVisible (idEditor);
 
-            styleCaption (passwordCaption, ko ("비밀번호"));
+            styleCaption (passwordCaption, tr ("비밀번호"));
             addAndMakeVisible (passwordCaption);
             passwordEditor.setFont (bodyFont());
             passwordEditor.setPasswordCharacter (0x2022);
             passwordEditor.onReturnKey = [this] { signIn(); };
             addAndMakeVisible (passwordEditor);
 
-            remember.setButtonText (ko ("이 PC에 기억"));
+            remember.setButtonText (tr ("이 PC에 기억"));
             remember.setToggleState (settings.getBackupRememberPassword(), juce::dontSendNotification);
             remember.setWantsKeyboardFocus (false);
             addAndMakeVisible (remember);
@@ -289,14 +290,14 @@ namespace
             if (remember.getToggleState())
                 passwordEditor.setText (settings.getBackupPassword(), false);
 
-            signInButton.setButtonText (ko ("로그인"));
+            signInButton.setButtonText (tr ("로그인"));
             signInButton.setWantsKeyboardFocus (false);
             signInButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
             signInButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
             signInButton.onClick = [this] { signIn(); };
             addAndMakeVisible (signInButton);
 
-            createButton.setButtonText (ko ("계정 만들기"));
+            createButton.setButtonText (tr ("계정 만들기"));
             createButton.setWantsKeyboardFocus (false);
             createButton.onClick = [this] { openRegisterWindow(); };
             addAndMakeVisible (createButton);
@@ -313,22 +314,22 @@ namespace
             header.setColour (juce::TableHeaderComponent::outlineColourId, Palette::line);
             header.setColour (juce::TableHeaderComponent::highlightColourId, Palette::card2);
             const int columnFlags = juce::TableHeaderComponent::visible | juce::TableHeaderComponent::resizable;
-            header.addColumn (ko ("계정"), columnOwner, 120, 60, 300, columnFlags);
-            header.addColumn (ko ("종류"), columnKind, 70, 50, 90, columnFlags);
-            header.addColumn (ko ("이름 · PC"), columnPc, 150, 60, 400, columnFlags);   // the backup name typed at upload, then the PC
-            header.addColumn (ko ("파일"), columnName, 280, 120, 800, columnFlags);
-            header.addColumn (ko ("날짜"), columnDate, 140, 100, 200, columnFlags);
-            header.addColumn (ko ("크기"), columnSize, 80, 50, 120, columnFlags);
+            header.addColumn (tr ("계정"), columnOwner, 120, 60, 300, columnFlags);
+            header.addColumn (tr ("종류"), columnKind, 70, 50, 90, columnFlags);
+            header.addColumn (tr ("이름 · PC"), columnPc, 150, 60, 400, columnFlags);   // the backup name typed at upload, then the PC
+            header.addColumn (tr ("파일"), columnName, 280, 120, 800, columnFlags);
+            header.addColumn (tr ("날짜"), columnDate, 140, 100, 200, columnFlags);
+            header.addColumn (tr ("크기"), columnSize, 80, 50, 120, columnFlags);
             header.setStretchToFitActive (true);
             header.setColumnVisible (columnOwner, false);
             addAndMakeVisible (table);
 
-            styleCaption (nameCaption, ko ("백업 이름"));
+            styleCaption (nameCaption, tr ("백업 이름"));
             // the operator's own word for whose session this is: it goes in front of the backup's file name, so the
             // list says "리붕후_PC이름_날짜" instead of a PC and a date the others cannot tell apart
             nameEditor.setFont (bodyFont (14.0f));
-            nameEditor.setTooltip (ko ("백업 파일 이름 앞에 붙습니다. 목록에서 누구 세션인지 알아보려고 쓰는 이름입니다."));
-            nameEditor.setTextToShowWhenEmpty (ko ("누구 세션인지"), Palette::dimText);
+            nameEditor.setTooltip (tr ("백업 파일 이름 앞에 붙습니다. 목록에서 누구 세션인지 알아보려고 쓰는 이름입니다."));
+            nameEditor.setTextToShowWhenEmpty (tr ("누구 세션인지"), Palette::dimText);
             {
                 const auto remembered = settings.getBackupCreator();
                 nameEditor.setText (remembered.isNotEmpty() ? remembered : document.getDisplayName(), juce::dontSendNotification);
@@ -336,18 +337,18 @@ namespace
             addAndMakeVisible (nameCaption);
             addAndMakeVisible (nameEditor);
 
-            uploadButton.setButtonText (ko ("지금 세션 백업"));
+            uploadButton.setButtonText (tr ("지금 세션 백업"));
             uploadButton.setWantsKeyboardFocus (false);
             uploadButton.onClick = [this] { upload(); };
             addAndMakeVisible (uploadButton);
 
-            uploadPresetsButton.setButtonText (ko ("플러그인 프리셋 백업"));
-            uploadPresetsButton.setTooltip (ko ("이 PC의 플러그인 프리셋을 전부 이 계정에 올립니다 (같은 이름은 덮어씁니다)"));
+            uploadPresetsButton.setButtonText (tr ("플러그인 프리셋 백업"));
+            uploadPresetsButton.setTooltip (tr ("이 PC의 플러그인 프리셋을 전부 이 계정에 올립니다 (같은 이름은 덮어씁니다)"));
             uploadPresetsButton.setWantsKeyboardFocus (false);
             uploadPresetsButton.onClick = [this] { uploadPresets(); };
             addAndMakeVisible (uploadPresetsButton);
 
-            restoreButton.setButtonText (ko ("선택한 백업 불러오기"));
+            restoreButton.setButtonText (tr ("선택한 백업 불러오기"));
             restoreButton.setWantsKeyboardFocus (false);
             restoreButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
             restoreButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
@@ -356,23 +357,23 @@ namespace
             addAndMakeVisible (restoreButton);
 
             // what can be done to the backup picked in the list
-            styleCaption (selectedCaption, ko ("고른 백업:"));
+            styleCaption (selectedCaption, tr ("고른 백업:"));
             addAndMakeVisible (selectedCaption);
 
-            overwriteButton.setButtonText (ko ("지금 세션으로 덮어쓰기"));
-            overwriteButton.setTooltip (ko ("고른 백업 파일을 지금 세션으로 바꿔 씁니다 (파일 이름은 그대로)"));
+            overwriteButton.setButtonText (tr ("지금 세션으로 덮어쓰기"));
+            overwriteButton.setTooltip (tr ("고른 백업 파일을 지금 세션으로 바꿔 씁니다 (파일 이름은 그대로)"));
             overwriteButton.setWantsKeyboardFocus (false);
             overwriteButton.setEnabled (false);
             overwriteButton.onClick = [this] { overwriteSelected(); };
             addAndMakeVisible (overwriteButton);
 
-            renameButton.setButtonText (ko ("이름 바꾸기"));
+            renameButton.setButtonText (tr ("이름 바꾸기"));
             renameButton.setWantsKeyboardFocus (false);
             renameButton.setEnabled (false);
             renameButton.onClick = [this] { renameSelected(); };
             addAndMakeVisible (renameButton);
 
-            deleteButton.setButtonText (ko ("삭제"));
+            deleteButton.setButtonText (tr ("삭제"));
             deleteButton.setWantsKeyboardFocus (false);
             deleteButton.setColour (juce::TextButton::buttonColourId, Palette::danger);
             deleteButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
@@ -380,7 +381,7 @@ namespace
             deleteButton.onClick = [this] { deleteSelected(); };
             addAndMakeVisible (deleteButton);
 
-            styleCaption (hint, ko ("백업은 로그인한 계정의 것만 보이고, 올리기와 불러오기도 그 계정의 아이디·비밀번호로만 됩니다. 처음이면 '계정 만들기'로 아이디와 비밀번호를 등록하세요. 세션과 플러그인 프리셋이 함께 목록에 보입니다. '백업 이름'에 적은 이름이 백업 파일 앞에 붙습니다."));
+            styleCaption (hint, tr ("백업은 로그인한 계정의 것만 보이고, 올리기와 불러오기도 그 계정의 아이디·비밀번호로만 됩니다. 처음이면 '계정 만들기'로 아이디와 비밀번호를 등록하세요. 세션과 플러그인 프리셋이 함께 목록에 보입니다. '백업 이름'에 적은 이름이 백업 파일 앞에 붙습니다."));
             hint.setFont (bodyFont (12.5f));
             hint.setMinimumHorizontalScale (1.0f);
             addAndMakeVisible (hint);
@@ -392,11 +393,11 @@ namespace
             setSize (900, 580);   // 820 cut a common '세션_PC' and 'name_PC_date_time' (10/30); fits 1280x688 (1080p at 150%)
 
             if (! BackupServer::isConfigured())
-                setStatus (ko ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
+                setStatus (tr ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
             else if (idEditor.getText().trim().isNotEmpty() && passwordEditor.getText().isNotEmpty())
                 signIn();   // a remembered account: the list comes up at once
             else
-                setStatus (ko ("아이디와 비밀번호를 넣고 로그인을 누르세요"), false);
+                setStatus (tr ("아이디와 비밀번호를 넣고 로그인을 누르세요"), false);
         }
 
         void resized() override
@@ -413,18 +414,18 @@ namespace
 
             if (twoRows)
             {
-                remember.setBounds (row.removeFromLeft (juce::jmin (130, juce::jmax (0, row.getWidth()))));
+                remember.setBounds (row.removeFromLeft (juce::jmin (tickBoxWidth (remember, 130, 30), juce::jmax (0, row.getWidth()))));
                 area.removeFromTop (6);
                 row = area.removeFromTop (30);
             }
 
-            createButton.setBounds (row.removeFromRight (100));
+            createButton.setBounds (row.removeFromRight (textButtonWidth (createButton, 100, 30)));
             row.removeFromRight (8);
             signInButton.setBounds (row.removeFromRight (90));
             row.removeFromRight (8);
 
             if (! twoRows)
-                remember.setBounds (row.removeFromLeft (juce::jmin (130, juce::jmax (0, row.getWidth()))));
+                remember.setBounds (row.removeFromLeft (juce::jmin (tickBoxWidth (remember, 130, 30), juce::jmax (0, row.getWidth()))));
 
             area.removeFromTop (6);
             hint.setBounds (area.removeFromTop (34));
@@ -450,7 +451,7 @@ namespace
             row.removeFromRight (8);
             uploadPresetsButton.setBounds (row.removeFromRight (170));
             row.removeFromRight (14);
-            nameCaption.setBounds (row.removeFromLeft (juce::jmin (74, juce::jmax (0, row.getWidth()))));
+            nameCaption.setBounds (row.removeFromLeft (juce::jmin (captionWidth (nameCaption, 74), juce::jmax (0, row.getWidth()))));
             nameEditor.setBounds (row.removeFromLeft (juce::jmin (230, juce::jmax (0, row.getWidth()))));
             area.removeFromBottom (12);
 
@@ -477,13 +478,13 @@ namespace
         {
             if (! BackupServer::isConfigured())
             {
-                setStatus (ko ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
+                setStatus (tr ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
                 return false;
             }
 
             if (backup.isBusy())
             {
-                setStatus (ko ("앞의 작업이 끝날 때까지 기다리세요"), true);
+                setStatus (tr ("앞의 작업이 끝날 때까지 기다리세요"), true);
                 return false;
             }
 
@@ -495,7 +496,7 @@ namespace
 
             if (passwordEditor.getText().isEmpty() || (creating && passwordEditor.getText().length() < 4))
             {
-                setStatus (creating ? ko ("비밀번호는 4자 이상으로 정하세요") : ko ("비밀번호를 넣으세요"), true);
+                setStatus (creating ? tr ("비밀번호는 4자 이상으로 정하세요") : tr ("비밀번호를 넣으세요"), true);
                 return false;
             }
 
@@ -544,7 +545,7 @@ namespace
             if (attempt > 200)   // ~6 s: something is wrong, give the controls back
             {
                 setBusy (false);
-                setStatus (ko ("앞의 작업이 끝나지 않았습니다. 잠시 후 다시 시도하세요."), true);
+                setStatus (tr ("앞의 작업이 끝나지 않았습니다. 잠시 후 다시 시도하세요."), true);
                 return;
             }
 
@@ -601,7 +602,7 @@ namespace
             }
 
             setBusy (true);
-            setStatus (ko ("로그인 중..."), false);
+            setStatus (tr ("로그인 중..."), false);
         }
 
         void openRegisterWindow()
@@ -614,7 +615,7 @@ namespace
 
             if (! BackupServer::isConfigured())
             {
-                setStatus (ko ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
+                setStatus (tr ("이 프로그램에는 백업 서버가 설정되어 있지 않습니다"), true);
                 return;
             }
 
@@ -631,7 +632,7 @@ namespace
 
             juce::DialogWindow::LaunchOptions options;
             options.content.setOwned (content);
-            options.dialogTitle = ko ("계정 만들기");
+            options.dialogTitle = tr ("계정 만들기");
             options.dialogBackgroundColour = Palette::card;
             options.escapeKeyTriggersCloseButton = true;
             options.useNativeTitleBar = true;
@@ -648,7 +649,7 @@ namespace
 
             if (! callbacks.saveBeforeUpload || ! callbacks.saveBeforeUpload())
             {
-                setStatus (ko ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
+                setStatus (tr ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
                 return;
             }
 
@@ -687,7 +688,7 @@ namespace
             }
 
             setBusy (true);
-            setStatus (ko ("백업 중... ") + remotePath.fromLastOccurrenceOf ("/", false, false), false);
+            setStatus (trf ("백업 중... {0}", remotePath.fromLastOccurrenceOf ("/", false, false)), false);
         }
 
         void uploadPresets()
@@ -702,13 +703,13 @@ namespace
             if (! problems.isEmpty())
             {
                 // "backup complete" must mean every preset: a file that cannot be read stops it, by name
-                setStatus (ko ("백업하지 않았습니다 - 읽을 수 없는 프리셋 파일이 있습니다 (고치거나 지우세요): ") + problems.joinIntoString (" / "), true);
+                setStatus (trf ("백업하지 않았습니다 - 읽을 수 없는 프리셋 파일이 있습니다 (고치거나 지우세요): {0}", problems.joinIntoString (" / ")), true);
                 return;
             }
 
             if (presets.empty())
             {
-                setStatus (ko ("이 PC에 플러그인 프리셋이 없습니다 (플러그인 관리에서 만듭니다)"), true);
+                setStatus (tr ("이 PC에 플러그인 프리셋이 없습니다 (플러그인 관리에서 만듭니다)"), true);
                 return;
             }
 
@@ -733,7 +734,7 @@ namespace
 
             if (! clashes.isEmpty())
             {
-                setStatus (ko ("백업하지 않았습니다 - 서버에서 같은 이름이 되는 프리셋 파일이 있습니다 (이름을 바꾸세요): ") + clashes.joinIntoString (", "), true);
+                setStatus (trf ("백업하지 않았습니다 - 서버에서 같은 이름이 되는 프리셋 파일이 있습니다 (이름을 바꾸세요): {0}", clashes.joinIntoString (", ")), true);
                 return;
             }
 
@@ -767,7 +768,7 @@ namespace
             }
 
             setBusy (true);
-            setStatus (ko ("플러그인 프리셋 ") + juce::String ((int) presets.size()) + ko ("개 올리는 중..."), false);
+            setStatus (trf ("플러그인 프리셋 {0}개 올리는 중...", juce::String ((int) presets.size())), false);
         }
 
         /** The backup picked in the list, or nothing (with a word in the status line). */
@@ -777,7 +778,7 @@ namespace
 
             if (! juce::isPositiveAndBelow (row, (int) entries.size()))
             {
-                setStatus (ko ("목록에서 백업을 고르세요"), true);
+                setStatus (tr ("목록에서 백업을 고르세요"), true);
                 return nullptr;
             }
 
@@ -796,11 +797,10 @@ namespace
             juce::Component::SafePointer<BackupContent> safe (this);
             juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                               .withIconType (juce::MessageBoxIconType::WarningIcon)
-                                              .withTitle (ko ("백업 삭제"))
-                                              .withMessage (ko ("'") + name + ko ("' 백업을 서버에서 지울까요?") + juce::newLine + juce::newLine
-                                                            + ko ("되돌릴 수 없습니다."))
-                                              .withButton (ko ("삭제"))
-                                              .withButton (ko ("취소")),
+                                              .withTitle (tr ("백업 삭제"))
+                                              .withMessage (trf ("'{0}' 백업을 서버에서 지울까요?\n\n되돌릴 수 없습니다.", name))
+                                              .withButton (tr ("삭제"))
+                                              .withButton (tr ("취소")),
                                           [safe, path] (int result)
             {
                 if (safe == nullptr || result != 1 || ! safe->checkReady())
@@ -836,7 +836,7 @@ namespace
                 }
 
                 safe->setBusy (true);
-                safe->setStatus (ko ("삭제 중... ") + path.fromLastOccurrenceOf ("/", false, false), false);
+                safe->setStatus (trf ("삭제 중... {0}", path.fromLastOccurrenceOf ("/", false, false)), false);
             });
         }
 
@@ -854,11 +854,11 @@ namespace
             const auto shown = preset ? WebDavBackup::presetNameFromFileName (name)
                                       : name.upToLastOccurrenceOf (".", false, false);
 
-            auto* alert = new juce::AlertWindow (ko ("백업 이름 바꾸기"),
-                                                 ko ("새 이름 (확장자는 그대로 붙습니다)"), juce::MessageBoxIconType::NoIcon);
-            alert->addTextEditor ("name", shown, ko ("이름"));
-            alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
-            alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+            auto* alert = new juce::AlertWindow (tr ("백업 이름 바꾸기"),
+                                                 tr ("새 이름 (확장자는 그대로 붙습니다)"), juce::MessageBoxIconType::NoIcon);
+            alert->addTextEditor ("name", shown, tr ("이름"));
+            alert->addButton (tr ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+            alert->addButton (tr ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
             juce::Component::SafePointer<BackupContent> safe (this);
             alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, alert, name, path, shown] (int result)
             {
@@ -874,7 +874,7 @@ namespace
 
                 if (newName.isEmpty())
                 {
-                    safe->setStatus (ko ("쓸 수 있는 이름이 아닙니다"), true);
+                    safe->setStatus (tr ("쓸 수 있는 이름이 아닙니다"), true);
                     return;
                 }
 
@@ -911,7 +911,7 @@ namespace
                 }
 
                 safe->setBusy (true);
-                safe->setStatus (ko ("이름 바꾸는 중... ") + newName, false);
+                safe->setStatus (trf ("이름 바꾸는 중... {0}", newName), false);
             }), true);
             focusAlertTextEditor (*alert, "name");
         }
@@ -925,7 +925,7 @@ namespace
 
             if (entry->isPreset)
             {
-                setStatus (ko ("플러그인 프리셋은 세션으로 덮어쓸 수 없습니다"), true);
+                setStatus (tr ("플러그인 프리셋은 세션으로 덮어쓸 수 없습니다"), true);
                 return;
             }
 
@@ -934,11 +934,10 @@ namespace
             juce::Component::SafePointer<BackupContent> safe (this);
             juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                               .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                                              .withTitle (ko ("백업 덮어쓰기"))
-                                              .withMessage (ko ("'") + name + ko ("' 백업을 지금 세션으로 덮어쓸까요?") + juce::newLine + juce::newLine
-                                                            + ko ("그 백업에 들어 있던 내용은 사라집니다. 파일 이름은 그대로입니다."))
-                                              .withButton (ko ("덮어쓰기"))
-                                              .withButton (ko ("취소")),
+                                              .withTitle (tr ("백업 덮어쓰기"))
+                                              .withMessage (trf ("'{0}' 백업을 지금 세션으로 덮어쓸까요?\n\n그 백업에 들어 있던 내용은 사라집니다. 파일 이름은 그대로입니다.", name))
+                                              .withButton (tr ("덮어쓰기"))
+                                              .withButton (tr ("취소")),
                                           [safe, path] (int result)
             {
                 if (safe == nullptr || result != 1 || ! safe->checkReady())
@@ -946,7 +945,7 @@ namespace
 
                 if (! safe->callbacks.saveBeforeUpload || ! safe->callbacks.saveBeforeUpload())
                 {
-                    safe->setStatus (ko ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
+                    safe->setStatus (tr ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
                     return;
                 }
 
@@ -980,7 +979,7 @@ namespace
                 }
 
                 safe->setBusy (true);
-                safe->setStatus (ko ("덮어쓰는 중... ") + path.fromLastOccurrenceOf ("/", false, false), false);
+                safe->setStatus (trf ("덮어쓰는 중... {0}", path.fromLastOccurrenceOf ("/", false, false)), false);
             });
         }
 
@@ -990,7 +989,7 @@ namespace
 
             if (row < 0 || row >= (int) entries.size())
             {
-                setStatus (ko ("불러올 백업을 목록에서 고르세요"), true);
+                setStatus (tr ("불러올 백업을 목록에서 고르세요"), true);
                 return;
             }
 
@@ -1062,8 +1061,7 @@ namespace
                     if (const auto check = PluginPreset::load (file, probe); check.failed())
                     {
                         file.deleteFile();
-                        report (juce::String::fromUTF8 ("내려받은 파일을 프리셋으로 읽을 수 없습니다: ") + check.getErrorMessage()
-                                    + juce::String::fromUTF8 (" (프리셋 폴더에는 넣지 않았습니다)"), true);
+                        report (trf ("내려받은 파일을 프리셋으로 읽을 수 없습니다: {0} (프리셋 폴더에는 넣지 않았습니다)", check.getErrorMessage()), true);
                         return;
                     }
 
@@ -1073,11 +1071,11 @@ namespace
 
                     if (saved.failed())
                     {
-                        report (juce::String::fromUTF8 ("내려받은 프리셋을 프리셋 폴더에 쓰지 못했습니다: ") + saved.getErrorMessage(), true);
+                        report (trf ("내려받은 프리셋을 프리셋 폴더에 쓰지 못했습니다: {0}", saved.getErrorMessage()), true);
                         return;
                     }
 
-                    report (juce::String::fromUTF8 ("프리셋 불러옴: ") + probe.name + juce::String::fromUTF8 (" (플러그인 관리 창과 '+ 추가 > 프리셋 불러오기'에 보입니다)"), false);
+                    report (trf ("프리셋 불러옴: {0} (플러그인 관리 창과 '+ 추가 > 프리셋 불러오기'에 보입니다)", probe.name), false);
 
                     if (presetRestored)
                         presetRestored();
@@ -1092,20 +1090,18 @@ namespace
                 if (const auto check = MixSession::load (file, probe, &warnings); check.failed())
                 {
                     // kept where it landed: the copy on the server is all there is of it, and a newer LiveMix may open it
-                    report (juce::String::fromUTF8 ("내려받은 파일을 세션으로 열 수 없습니다: ") + check.getErrorMessage()
-                                + juce::String::fromUTF8 (" (파일은 남겨 두었습니다: ") + file.getFullPathName() + ")", true);
+                    report (trf ("내려받은 파일을 세션으로 열 수 없습니다: {0} (파일은 남겨 두었습니다: {1})", check.getErrorMessage(), file.getFullPathName()), true);
                     return;
                 }
 
                 if (! file.moveFileTo (destination))
                 {
-                    report (juce::String::fromUTF8 ("내려받은 세션을 세션 폴더로 옮기지 못했습니다: ") + destination.getFullPathName()
-                                + juce::String::fromUTF8 (" (내려받은 파일: ") + file.getFullPathName() + ")", true);
+                    report (trf ("내려받은 세션을 세션 폴더로 옮기지 못했습니다: {0} (내려받은 파일: {1})", destination.getFullPathName(), file.getFullPathName()), true);
                     return;
                 }
 
                 juce::ignoreUnused (message);
-                report (juce::String::fromUTF8 ("불러옴: ") + destination.getFileName(), false);
+                report (trf ("불러옴: {0}", destination.getFileName()), false);
 
                 if (restore)
                     restore (destination);   // the session opens (after the usual unsaved-changes question)
@@ -1124,7 +1120,7 @@ namespace
             }
 
             setBusy (true);
-            setStatus (ko ("불러오는 중... ") + entry.name, false);
+            setStatus (trf ("불러오는 중... {0}", entry.name), false);
         }
 
         //==============================================================================
@@ -1149,7 +1145,7 @@ namespace
                 case columnName:  return BackupDialog::fileColumnText (entry.name);
                 case columnDate:  return entry.modified == juce::Time() ? juce::String() : entry.modified.formatted ("%Y-%m-%d %H:%M");
                 case columnSize:  return juce::File::descriptionOfSizeInBytes (entry.size);
-                case columnKind:  return entry.isPreset ? ko ("프리셋") : ko ("세션");
+                case columnKind:  return entry.isPreset ? tr ("프리셋") : tr ("세션");
                 default:          return {};
             }
         }
@@ -1203,7 +1199,7 @@ namespace
     class BackupWindow : public juce::DialogWindow
     {
     public:
-        BackupWindow() : juce::DialogWindow (ko ("온라인 백업"), Palette::card, true, true)
+        BackupWindow() : juce::DialogWindow (tr ("온라인 백업"), Palette::card, true, true)
         {
             setUsingNativeTitleBar (true);
             setResizable (true, false);

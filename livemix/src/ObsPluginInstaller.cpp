@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "ObsPluginInstaller.h"
 
 #include <windows.h>
@@ -17,7 +18,7 @@ namespace
     constexpr auto dllName = "livemix-obs.dll";
 
     juce::String ko (const char* text) { return juce::String::fromUTF8 (text); }
-    juce::String failure (const juce::String& reason) { return ko ("OBS 플러그인을 설치하지 못했습니다: ") + reason; }
+    juce::String failure (const juce::String& reason) { return trf ("OBS 플러그인을 설치하지 못했습니다: {0}", reason); }
 
     juce::String windowsError (DWORD error)
     {
@@ -369,13 +370,13 @@ ObsPluginInstaller::Result ObsPluginInstaller::install (const Roots& roots, juce
     const auto locales = bundledLocales (roots);
     if (! bundle.existsAsFile() || locales.isEmpty())
     {
-        message = failure (ko ("LiveMix에 포함된 플러그인 파일을 찾지 못했습니다. LiveMix를 다시 설치해 주세요."));
+        message = failure (tr ("LiveMix에 포함된 플러그인 파일을 찾지 못했습니다. LiveMix를 다시 설치해 주세요."));
         return Result::noBundledFiles;
     }
     const auto version = fileVersion (bundle);
     if (version == 0)
     {
-        message = failure (ko ("포함된 플러그인의 버전 정보를 읽지 못했습니다."));
+        message = failure (tr ("포함된 플러그인의 버전 정보를 읽지 못했습니다."));
         return Result::failed;
     }
     const auto major = obsMajorVersion (roots);
@@ -384,7 +385,7 @@ ObsPluginInstaller::Result ObsPluginInstaller::install (const Roots& roots, juce
     const bool updateDll = fileVersion (target) < version;
     if (! updateDll && ! other.exists() && localesPresent (roots, locales))
     {
-        message = ko ("OBS 플러그인이 이미 설치되어 있습니다.");
+        message = tr ("OBS 플러그인이 이미 설치되어 있습니다.");
         return Result::alreadyCurrent;
     }
 
@@ -408,8 +409,7 @@ ObsPluginInstaller::Result ObsPluginInstaller::install (const Roots& roots, juce
     {
         if (! transaction.rollback())
         {
-            message = failure (ko ("기존 파일을 복원하지 못했습니다. OBS를 종료하고 다시 시도해 주세요. 보관 파일: ")
-                               + pluginRoot (roots).getFullPathName());
+            message = failure (trf ("기존 파일을 복원하지 못했습니다. OBS를 종료하고 다시 시도해 주세요. 보관 파일: {0}", pluginRoot (roots).getFullPathName()));
             return Result::failed;
         }
         return result;
@@ -423,7 +423,7 @@ ObsPluginInstaller::Result ObsPluginInstaller::install (const Roots& roots, juce
         {
             if (change.dll)
             {
-                message = ko ("OBS가 예전 플러그인을 쓰고 있어 바꾸지 못했습니다. OBS를 종료한 뒤 다시 눌러 주세요.");
+                message = tr ("OBS가 예전 플러그인을 쓰고 있어 바꾸지 못했습니다. OBS를 종료한 뒤 다시 눌러 주세요.");
                 return abort (Result::obsBusyCloseIt);
             }
             return abort (fileFailure (error, change.destination, message));
@@ -441,9 +441,9 @@ ObsPluginInstaller::Result ObsPluginInstaller::install (const Roots& roots, juce
         if (change.previous != juce::File() && (! change.dll || ! running))
             DeleteFileW (change.previous.getFullPathName().toWideCharPointer());
 
-    message = major == 0 ? ko ("OBS를 찾지 못했습니다. OBS를 설치하면 바로 쓸 수 있게 플러그인을 넣어 두었습니다.")
-            : running ? ko ("OBS 플러그인을 설치했습니다. OBS를 다시 시작하면 연결됩니다.")
-                      : ko ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요.");
+    message = major == 0 ? tr ("OBS를 찾지 못했습니다. OBS를 설치하면 바로 쓸 수 있게 플러그인을 넣어 두었습니다.")
+            : running ? tr ("OBS 플러그인을 설치했습니다. OBS를 다시 시작하면 연결됩니다.")
+                      : tr ("OBS 플러그인을 설치했습니다. OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요.");
     return running ? Result::installedRestartObs : Result::installed;
 }
 
@@ -482,7 +482,8 @@ juce::File ObsPluginInstaller::resultFile (const juce::String& commandLine)
 
 juce::String ObsPluginInstaller::elevatedCommandLine (const juce::File& report)
 {
-    return "--install-obs-plugin --elevated-helper --result " + report.getFullPathName().quoted();
+    return "--install-obs-plugin --elevated-helper --ui-language=" + juce::String (languageCode (currentLanguage()))
+        + " --result " + report.getFullPathName().quoted();
 }
 
 ObsPluginInstaller::Result ObsPluginInstaller::runInstallCommandLine (const juce::String& commandLine, const Roots& roots,
@@ -512,7 +513,7 @@ bool ObsPluginInstaller::writeResult (const juce::File& file, Result result, con
 
 ObsPluginInstaller::Result ObsPluginInstaller::readResult (const juce::File& file, juce::String& message)
 {
-    message = failure (ko ("설치 결과를 읽지 못했습니다. 다시 시도해 주세요."));
+    message = failure (tr ("설치 결과를 읽지 못했습니다. 다시 시도해 주세요."));
     if (! file.existsAsFile() || file.getSize() > 65536) return Result::failed;
     const auto line = file.loadFileAsString().trimEnd();
     const auto tab = line.indexOfChar ('\t');
@@ -532,7 +533,7 @@ ObsPluginInstaller::Result ObsPluginInstaller::installElevated (juce::String& me
     // The caller owns a unique reply file even when runas uses another administrator's TEMP.
     const juce::TemporaryFile reply (".obs-install-result.txt");
     const auto report = reply.getFile();
-    if (! writeResult (report, Result::failed, ko ("설치 결과를 받지 못했습니다.")))
+    if (! writeResult (report, Result::failed, tr ("설치 결과를 받지 못했습니다.")))
         return fileFailure (GetLastError(), report, message);
 
     const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName();
@@ -552,14 +553,14 @@ ObsPluginInstaller::Result ObsPluginInstaller::installElevated (juce::String& me
     {
         if (launchError == ERROR_CANCELLED)
         {
-            message = ko ("설치를 취소했습니다");
+            message = tr ("설치를 취소했습니다");
             return Result::needsElevation;
         }
         return fileFailure (launchError, juce::File (exe), message);
     }
     if (execute.hProcess == nullptr)
     {
-        message = failure (ko ("설치 프로세스를 기다릴 수 없습니다."));
+        message = failure (tr ("설치 프로세스를 기다릴 수 없습니다."));
         return Result::failed;
     }
     const auto waited = WaitForSingleObject (execute.hProcess, INFINITE);

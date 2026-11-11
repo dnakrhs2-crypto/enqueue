@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "CollabWindow.h"
 #include "qrcodegen.hpp"
 #include <cmath>
@@ -22,16 +23,39 @@ juce::TextLayout messageLayout (const juce::String& text, int width, float size,
     if (width <= 0) return {};
     // DirectWrite permits breaks inside Korean words; the reference uses word-break: keep-all.
     const auto font = bodyFont (size);
+    const auto fits = [&font, width] (const juce::String& s) { return juce::GlyphArrangement::getStringWidthInt (font, s) <= width; };
+    const auto latin = [] (juce::juce_wchar c) { return c < 128 && juce::CharacterFunctions::isLetterOrDigit (c); };
+    const auto closing = juce::String::fromUTF8 ("、。，．！？）」』】ー・ゃゅょっャュョッ");
     juce::String wrapped, line;
     for (const auto& word : juce::StringArray::fromTokens (text, " ", ""))
     {
         const auto next = line.isEmpty() ? word : line + " " + word;
-        if (line.isNotEmpty() && juce::GlyphArrangement::getStringWidthInt (font, next) > width)
+        if (line.isNotEmpty() && ! fits (next))
         {
             wrapped += line + "\n";
             line = word;
         }
         else line = next;
+
+        // Japanese has no spaces to break at: a run wider than the box carries on by characters - not inside a
+        // Latin word or a number, and never with a closing mark at the start of a line
+        while (currentLanguage() == Language::ja && line.length() > 1 && ! fits (line))
+        {
+            int count = line.length() - 1;
+            while (count > 1 && ! fits (line.substring (0, count))) --count;
+            const int widest = count;
+            int clause = 0;   // a sentence or a clause that ends near the end of the line: the break goes after it
+            for (int i = widest; i > widest * 3 / 5 && clause == 0; --i)
+                if (line[i - 1] == 0x3001 || line[i - 1] == 0x3002) clause = i;
+            if (clause > 0) count = clause;
+            else
+            {
+                while (count > 1 && ((latin (line[count - 1]) && latin (line[count])) || closing.containsChar (line[count]))) --count;
+                if (count <= 1) count = widest;   // one Latin run as wide as the box: as many characters as fit
+            }
+            wrapped += line.substring (0, count) + "\n";
+            line = line.substring (count);
+        }
     }
     juce::AttributedString attributed;
     attributed.setWordWrap (juce::AttributedString::none);
@@ -51,13 +75,13 @@ struct CollabPanel::RequestCard : juce::Component
         {
             l->setBorderSize (juce::BorderSize<int> (0)); l->setMinimumHorizontalScale (1.0f); addAndMakeVisible (*l);
         }
-        caption.setText (ko ("들어오기 요청"), juce::dontSendNotification); caption.setFont (captionFont());
+        caption.setText (tr ("들어오기 요청"), juce::dontSendNotification); caption.setFont (captionFont());
         caption.setColour (juce::Label::textColourId, Palette::dimText);
         name.setFont (titleFont()); name.setTooltip (value.nickname);
-        web.setFont (titleFont (12)); web.setText (ko ("웹"), juce::dontSendNotification);
+        web.setFont (titleFont (12)); web.setText (tr ("웹"), juce::dontSendNotification);
         web.setJustificationType (juce::Justification::centred); web.setColour (juce::Label::textColourId, Palette::accent);
-        accept.setComponentID ("accept"); accept.setButtonText (ko ("수락"));
-        reject.setComponentID ("reject"); reject.setButtonText (ko ("거절"));
+        accept.setComponentID ("accept"); accept.setButtonText (tr ("수락"));
+        reject.setComponentID ("reject"); reject.setButtonText (tr ("거절"));
         accept.setToggleState (true, juce::dontSendNotification);
         for (auto* button : { &accept, &reject }) { button->setWantsKeyboardFocus (false); addAndMakeVisible (*button); }
         accept.onClick = [this] { if (value.canAccept && owner.actions.acceptWebRequest) owner.actions.acceptWebRequest (value.requestId); };
@@ -245,12 +269,12 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
         l.setBorderSize (juce::BorderSize<int> (0)); l.setMinimumHorizontalScale (1.0f);
         l.setColour (juce::Label::textColourId, colour); addAndMakeVisible (l);
     };
-    label (nickCaption, "nick-caption", ko ("닉네임"), captionFont(), Palette::dimText);
-    label (codeCaption, "code-caption", ko ("방 코드"), captionFont(), Palette::dimText);
-    label (rateCaption, "rate-caption", ko ("샘플레이트"), captionFont(), Palette::dimText);
+    label (nickCaption, "nick-caption", tr ("닉네임"), captionFont(), Palette::dimText);
+    label (codeCaption, "code-caption", tr ("방 코드"), captionFont(), Palette::dimText);
+    label (rateCaption, "rate-caption", tr ("샘플레이트"), captionFont(), Palette::dimText);
     label (roomRate, "room-rate", {}, titleFont (14.0f), Palette::dimText);
     roomRate.setJustificationType (juce::Justification::centredRight);
-    label (waiting, "waiting", ko ("상대를 기다리는 중"), titleFont (14.0f), Palette::dimText);
+    label (waiting, "waiting", tr ("상대를 기다리는 중"), titleFont (14.0f), Palette::dimText);
     label (notice, "notice", {}, bodyFont (14.0f), Palette::danger);
     label (peerNick, "peer-nick", {}, titleFont(), Palette::text);
     label (connection, "connection", {}, titleFont (14.0f), Palette::lampOn);
@@ -264,10 +288,10 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     peerNick.setFont (titleFont (15)); volumeValue.setFont (titleFont (14));
     for (size_t i = 0; i < 2; ++i)
     {
-        label (seatLabels[i], "", ko ("자리 ") + juce::String ((int) i + 1), titleFont (12), Palette::dimText);
+        label (seatLabels[i], "", trf ("자리 {0}", juce::String ((int) i + 1)), titleFont (12), Palette::dimText);
         seatLabels[i].setComponentID ("seat-" + juce::String ((int) i + 1));
         seatLabels[i].setJustificationType (juce::Justification::centred);
-        label (webLabels[i], "", ko ("웹"), titleFont (12), Palette::accent);
+        label (webLabels[i], "", tr ("웹"), titleFont (12), Palette::accent);
         webLabels[i].setJustificationType (juce::Justification::centred);
         webLabels[i].setComponentID ("web-" + juce::String ((int) i + 1));
         label (delays[i], "", {}, titleFont (14), Palette::text);
@@ -290,7 +314,7 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     {
         if (snapshot.state != State::checkingHost && actions.create) actions.create (settings.getCollabNick());
     };
-    button (createButton, "create", ko ("방 만들기"), create);
+    button (createButton, "create", tr ("방 만들기"), create);
     createButton.setToggleState (true, juce::dontSendNotification);
     for (int i = 0; i < 2; ++i)
     {
@@ -305,23 +329,23 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
         };
         addAndMakeVisible (chip);
     }
-    button (joinButton, "join", ko ("참가"), [this] { join(); });
-    button (retryButton, "retry", ko ("다시 확인"), create);
-    button (dismissButton, "dismiss", ko ("닫기"), actions.leave);
-    button (leaveButton, "leave", ko ("방 닫기"), actions.leave);
-    button (rebufferButton, "rebuffer", ko ("다시 맞추기"), actions.rebuffer);
+    button (joinButton, "join", tr ("참가"), [this] { join(); });
+    button (retryButton, "retry", tr ("다시 확인"), create);
+    button (dismissButton, "dismiss", tr ("닫기"), actions.leave);
+    button (leaveButton, "leave", tr ("방 닫기"), actions.leave);
+    button (rebufferButton, "rebuffer", tr ("다시 맞추기"), actions.rebuffer);
     for (size_t i = 0; i < 2; ++i)
     {
-        button (kickButtons[i], "", ko ("내보내기"), [this, i]
+        button (kickButtons[i], "", tr ("내보내기"), [this, i]
         {
             if (kickButtons[i].isEnabled() && actions.kickWebGuest) actions.kickWebGuest (people[i].participantId);
         });
         kickButtons[i].setComponentID ("kick-" + juce::String ((int) i + 1));
     }
-    label (inviteCaption, "invite-caption", ko ("웹 초대"), captionFont(), Palette::dimText);
+    label (inviteCaption, "invite-caption", tr ("웹 초대"), captionFont(), Palette::dimText);
     label (inviteUrl, "invite-url", {}, bodyFont (14), Palette::dimText);
-    button (copyInvite, "copy-invite", ko ("주소 복사"), [this] { juce::SystemClipboard::copyTextToClipboard (snapshot.webInviteUrl); });
-    button (renewInvite, "renew-invite", ko ("새 주소"), [this]
+    button (copyInvite, "copy-invite", tr ("주소 복사"), [this] { juce::SystemClipboard::copyTextToClipboard (snapshot.webInviteUrl); });
+    button (renewInvite, "renew-invite", tr ("새 주소"), [this]
     {
         if (snapshot.canCreateWebInvite && actions.createWebInvite) actions.createWebInvite();
     });
@@ -342,7 +366,7 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     message.setComponentID ("host-message"); addAndMakeVisible (message);
     reason.setComponentID ("reason"); reason.size = 14.0f; reason.colour = Palette::dimText; addAndMakeVisible (reason);
     headphones.setComponentID ("headphones");
-    headphones.setTexts (ko ("상대방 목소리 ON"), ko ("상대방 목소리 OFF"), {});
+    headphones.setTexts (tr ("상대방 목소리 ON"), tr ("상대방 목소리 OFF"), {});
     headphones.onClick = [this]
     {
         if (actions.monitor) actions.monitor (snapshot.monitorVolume, ! headphones.isOn());
@@ -369,8 +393,8 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     };
     addAndMakeVisible (secondVolume);
     // the partner's output, as a channel card's 출력 row: 마스터, a direct pair, or OBS monitoring only
-    label (routeCaption, "route-caption", ko ("출력"), captionFont(), Palette::dimText);
-    const juce::String routeTexts[] { ko ("마스터"), ko ("직접 출력"), ko ("OBS에서 듣기") };
+    label (routeCaption, "route-caption", tr ("출력"), captionFont(), Palette::dimText);
+    const juce::String routeTexts[] { tr ("마스터"), tr ("직접 출력"), tr ("OBS에서 듣기") };
     const char* routeIds[] { "route-master", "route-direct", "route-obs" };
     for (int i = 0; i < 3; ++i)
     {
@@ -393,7 +417,7 @@ CollabPanel::CollabPanel (LiveMixSettings& prefs, Actions callbacks) : settings 
     };
     addAndMakeVisible (routePair);
     meter.setComponentID ("peer-meter"); addAndMakeVisible (meter);
-    const juce::String captions[] { ko ("지연"), ko ("버퍼"), ko ("손실"), ko ("샘플레이트") };
+    const juce::String captions[] { tr ("지연"), tr ("버퍼"), tr ("손실"), tr ("샘플레이트") };
     for (int i = 0; i < 4; ++i)
     {
         auto& stat = stats[(size_t) i]; stat.caption = captions[i]; stat.unit = i == 3 ? "kHz" : i == 2 ? "%" : "ms";
@@ -426,10 +450,10 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
     notice.setText (snapshot.message, juce::dontSendNotification); notice.setTooltip (snapshot.message);
     notice.setVisible (entry && ! failed && snapshot.message.isNotEmpty());
     notice.setColour (juce::Label::textColourId, state == State::error ? Palette::danger : Palette::dimText);
-    createButton.setButtonText (state == State::checkingHost ? ko ("포트 확인 중") : ko ("방 만들기"));
-    joinButton.setButtonText (state == State::joining ? ko ("연결 중") : ko ("참가"));
+    createButton.setButtonText (state == State::checkingHost ? tr ("포트 확인 중") : tr ("방 만들기"));
+    joinButton.setButtonText (state == State::joining ? tr ("연결 중") : tr ("참가"));
     for (int i = 0; i < 4; ++i) roomDigits[(size_t) i].setText (snapshot.code.substring (i, i + 1), juce::dontSendNotification);
-    leaveButton.setButtonText (snapshot.isHost ? ko ("방 닫기") : ko ("나가기"));
+    leaveButton.setButtonText (snapshot.isHost ? tr ("방 닫기") : tr ("나가기"));
     for (auto* c : std::initializer_list<juce::Component*> { &peerNick, &connection, &headphones, &volumeCaption,
                                                            &volumeValue, &volume, &meter, &rebufferButton, &routePair, &routeCaption })
         c->setVisible (call);
@@ -454,7 +478,7 @@ void CollabPanel::setSnapshot (const collab::CollabSession::Snapshot& value)
         if (c != &volumeCaption && c != &volumeValue) c->setEnabled (audible);
         c->setAlpha (audible ? 1.0f : 0.4f);
     }
-    connection.setText (state == State::disconnected ? ko ("연결 끊김") : ko ("연결됨"), juce::dontSendNotification);
+    connection.setText (state == State::disconnected ? tr ("연결 끊김") : tr ("연결됨"), juce::dontSendNotification);
     connection.setColour (juce::Label::textColourId, state == State::disconnected ? Palette::danger : Palette::lampOn);
     headphones.setOn (snapshot.monitorOn);
     if (! volume.isMouseButtonDown()) volume.setValue (std::lround (snapshot.monitorVolume * 100.0f), juce::dontSendNotification);
@@ -491,7 +515,7 @@ void CollabPanel::updatePeople()
     const bool audible = snapshot.route != collab::CollabAudio::Route::obs;
     volumeCaption.setVisible (false);
     roomCode.setVisible (inCall (snapshot.state));
-    roomCode.setText (ko ("방 코드 ") + snapshot.code, juce::dontSendNotification);
+    roomCode.setText (trf ("방 코드 {0}", snapshot.code), juce::dontSendNotification);
     for (size_t i = 0; i < 2; ++i)
     {
         auto& name = i == 0 ? peerNick : secondNick;
@@ -734,9 +758,10 @@ void CollabPanel::resized()
         inner.removeFromTop (callGap); row = inner.removeFromTop (32);
         // 마스터 58, 직접 출력 74, OBS에서 듣기 100; the pair keeps the 88 px of a channel card's direct output, where
         // '31-32 …' reads in full; the caption shows only when it fits too
-        const bool captioned = row.getWidth() >= 40 + 58 + 74 + 100 + 3 * 6 + 88;
+        const int captionW = captionWidth (routeCaption, 34);
+        const bool captioned = row.getWidth() >= captionW + 6 + 58 + 74 + 100 + 3 * 6 + 88;
         routeCaption.setVisible (captioned);
-        if (captioned) { routeCaption.setBounds (row.removeFromLeft (34)); row.removeFromLeft (6); }
+        if (captioned) { routeCaption.setBounds (row.removeFromLeft (captionW)); row.removeFromLeft (6); }
         routeChips[0].setBounds (row.removeFromLeft (58)); row.removeFromLeft (6);
         routeChips[1].setBounds (row.removeFromLeft (74)); row.removeFromLeft (6);
         routeChips[2].setBounds (row.removeFromRight (100)); row.removeFromRight (6);
@@ -868,7 +893,7 @@ void CollabViewport::resized()
 }
 
 CollabWindow::CollabWindow (collab::CollabSession& collab, LiveMixSettings& settings, std::function<CollabPanel::OutputPairs()> outputs)
-    : DocumentWindow (ko ("합방"), Palette::background, DocumentWindow::allButtons), session (collab)
+    : DocumentWindow (tr ("합방"), Palette::background, DocumentWindow::allButtons), session (collab)
 {
     setUsingNativeTitleBar (true);
     CollabPanel::Actions actions;

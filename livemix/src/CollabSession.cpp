@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "CollabSession.h"
 #include "LiveMixSettings.h"
 #include "MixEngine.h"
@@ -287,7 +288,7 @@ void CollabSession::createRoom (const juce::String& nick)
         if (! w.apiV2 && ! check.reachable && ! punch)
         {
             w.cleanup();
-            w.complete (id, [this, check] { setState (State::hostUnavailable, check.message(), check.reason); });
+            w.complete (id, [this, check] { setState (State::hostUnavailable, check.message(), check.displayReason()); });
             return;
         }
         if (! confirmed.ok()) { w.error (id, confirmed.error); return; }
@@ -637,10 +638,10 @@ void CollabSession::finishGuestLink (CollabTransport::State state)
 {
     if (state != CollabTransport::State::peerLeft && ! hostEverConnected)
     {
-        fail (ko ("방장 PC에 연결하지 못했습니다")); return;
+        fail (tr ("방장 PC에 연결하지 못했습니다")); return;
     }
     leave();
-    setState (State::off, state == CollabTransport::State::peerLeft ? ko ("방장이 방을 닫았습니다") : ko ("연결 끊김"));
+    setState (State::off, state == CollabTransport::State::peerLeft ? tr ("방장이 방을 닫았습니다") : tr ("연결 끊김"));
 }
 
 void CollabSession::refreshWebActions()
@@ -1065,7 +1066,7 @@ void CollabSession::timerCallback()
         setState (State::hostWaiting);
     else if (! snapshot.isHost && snapshot.state == State::joining && now >= joinDeadline)
     {
-        fail (ko ("방장 PC에 연결하지 못했습니다")); return;
+        fail (tr ("방장 PC에 연결하지 못했습니다")); return;
     }
     if (snapshot.isHost)
     {

@@ -1,0 +1,122 @@
+[
+  {
+    "file": "livemix/src/LiveMixSettings.cpp",
+    "ko": "/LiveMix 백업",
+    "count": 1,
+    "reason": "기존 WebDAV 서버 폴더 기본값이다."
+  },
+  {
+    "file": "livemix/src/Main.cpp",
+    "ko": "기본 세션",
+    "count": 1,
+    "reason": "기존 한국어 기본 세션 파일을 찾는 이름이다. 새 파일 이름은 defaultSessionName()을 쓴다."
+  },
+  {
+    "file": "livemix/src/MixDocument.cpp",
+    "ko": "새 세션",
+    "count": 1,
+    "reason": "0.8.0 이전 세션의 자동 이름을 판별하는 마이그레이션 값이다."
+  },
+  {
+    "file": "livemix/src/MixDocument.cpp",
+    "ko": "기본 세션",
+    "count": 1,
+    "reason": "0.8.0 이전 세션의 자동 이름을 판별하는 마이그레이션 값이다."
+  },
+  {
+    "file": "livemix/src/PluginPreset.cpp",
+    "ko": "플러그인 프리셋",
+    "count": 1,
+    "reason": "기존 플러그인 프리셋·세트 파일을 생성하거나 찾는 저장 규칙이다."
+  },
+  {
+    "file": "livemix/src/PluginPreset.cpp",
+    "ko": "프리셋",
+    "count": 1,
+    "reason": "기존 플러그인 프리셋·세트 파일을 생성하거나 찾는 저장 규칙이다."
+  },
+  {
+    "file": "livemix/src/PluginSet.cpp",
+    "ko": "플러그인 세트",
+    "count": 1,
+    "reason": "기존 플러그인 프리셋·세트 파일을 생성하거나 찾는 저장 규칙이다."
+  },
+  {
+    "file": "livemix/src/PluginSet.cpp",
+    "ko": "세트 ",
+    "count": 1,
+    "reason": "기존 플러그인 프리셋·세트 파일을 생성하거나 찾는 저장 규칙이다."
+  },
+  {
+    "file": "livemix/src/ui/SettingsDialog.cpp",
+    "ko": "한국어",
+    "count": 1,
+    "reason": "언어 목록의 이름. 화면 언어와 상관없이 그 언어로 보여 준다."
+  },
+  {
+    "file": "livemix/src/ui/SettingsDialog.cpp",
+    "ko": "https://곰튀김.com/livemix/#streamdeck",
+    "count": 1,
+    "reason": "브라우저로 여는 실제 URL. 언어와 무관한 주소다."
+  },
+  {
+    "file": "livemix/src/WebDavBackup.cpp",
+    "ko": "프리셋_",
+    "count": 3,
+    "reason": "온라인 백업 프리셋 경로의 생성·복원 판별 접두다."
+  },
+  {
+    "file": "src/audio/PluginScan.cpp",
+    "ko": "개",
+    "count": 1,
+    "reason": "스캔 로그 문장. 화면 번역과 무관하게 기존 기록 형식을 유지한다."
+  },
+  {
+    "file": "src/audio/PluginScan.cpp",
+    "ko": "튕김(종료 코드 0x",
+    "count": 1,
+    "reason": "스캔 로그 문장. 화면 번역과 무관하게 기존 기록 형식을 유지한다."
+  },
+  {
+    "file": "src/audio/PluginScan.cpp",
+    "ko": "시간 초과",
+    "count": 1,
+    "reason": "스캔 로그 문장. 화면 번역과 무관하게 기존 기록 형식을 유지한다."
+  },
+  {
+    "file": "src/audio/PluginScan.cpp",
+    "ko": "취소",
+    "count": 1,
+    "reason": "스캔 로그 문장. 화면 번역과 무관하게 기존 기록 형식을 유지한다."
+  },
+  {
+    "file": "src/audio/PluginScan.cpp",
+    "ko": "워커 시작/통신 실패",
+    "count": 1,
+    "reason": "스캔 로그 문장. 화면 번역과 무관하게 기존 기록 형식을 유지한다."
+  },
+  {
+    "file": "src/audio/PluginScan.cpp",
+    "ko": "런타임 없음: ",
+    "count": 1,
+    "reason": "스캔 로그 문장. 화면 번역과 무관하게 기존 기록 형식을 유지한다."
+  },
+  {
+    "file": "livemix/src/CollabHostCheck.cpp",
+    "ko": "공유기 자동 포트 열기(UPnP)가 꺼져 있습니다",
+    "count": 1,
+    "reason": "합방 서버에 전송하는 기존 JSON reason 값이다. 화면에는 displayReason()의 번역을 사용한다."
+  },
+  {
+    "file": "livemix/src/CollabHostCheck.cpp",
+    "ko": "공유기가 두 대 연결돼 있거나 통신사 공유 IP라 바깥에서 들어올 수 없습니다",
+    "count": 1,
+    "reason": "합방 서버에 전송하는 기존 JSON reason 값이다. 화면에는 displayReason()의 번역을 사용한다."
+  },
+  {
+    "file": "livemix/src/CollabHostCheck.cpp",
+    "ko": "윈도우 방화벽이나 보안 프로그램이 막고 있을 수 있습니다",
+    "count": 1,
+    "reason": "합방 서버에 전송하는 기존 JSON reason 값이다. 화면에는 displayReason()의 번역을 사용한다."
+  }
+]

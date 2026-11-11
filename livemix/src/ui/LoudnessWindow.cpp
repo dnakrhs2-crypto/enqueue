@@ -1,7 +1,9 @@
+#include "Localisation.h"
 #include "ui/LoudnessWindow.h"
 
 #include "Widgets.h"
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -14,18 +16,21 @@ namespace
     struct Target
     {
         double lufs;
-        const char* label;
+        juce::String label;
     };
 
     // the platforms' normalisation levels and the broadcast standards; the first is the default
-    const Target targets[] = {
-        { -14.0, "-14 LUFS   \xEC\x9C\xA0\xED\x8A\x9C\xEB\xB8\x8C \xC2\xB7 \xEC\x8A\xA4\xED\x8F\xAC\xED\x8B\xB0\xED\x8C\x8C\xEC\x9D\xB4" },        // 유튜브 · 스포티파이
-        { -16.0, "-16 LUFS   \xEC\x95\xA0\xED\x94\x8C \xEB\xAE\xA4\xEC\xA7\x81 \xC2\xB7 \xED\x8C\x9F\xEC\xBA\x90\xEC\x8A\xA4\xED\x8A\xB8" },   // 애플 뮤직 · 팟캐스트
-        { -18.0, "-18 LUFS" },
-        { -20.0, "-20 LUFS" },
-        { -23.0, "-23 LUFS   \xEB\xB0\xA9\xEC\x86\xA1 (EBU R128)" },                                                                       // 방송 (EBU R128)
-        { -24.0, "-24 LUFS   \xEB\xB0\xA9\xEC\x86\xA1 (ATSC A/85)" },                                                                      // 방송 (ATSC A/85)
-    };
+    std::array<Target, 6> makeTargets()
+    {
+        return {{
+            { -14.0, tr ("-14 LUFS   유튜브 · 스포티파이") },
+            { -16.0, tr ("-16 LUFS   애플 뮤직 · 팟캐스트") },
+            { -18.0, "-18 LUFS" },
+            { -20.0, "-20 LUFS" },
+            { -23.0, tr ("-23 LUFS   방송 (EBU R128)") },
+            { -24.0, tr ("-24 LUFS   방송 (ATSC A/85)") },
+        }};
+    }
 
     constexpr double scaleMin = -60.0, scaleMax = 0.0;   // the bar and the graph
     constexpr int historyLength = 1800;                 // three minutes of short-term values, one every 100 ms
@@ -51,13 +56,13 @@ class LoudnessWindow::Content : public juce::Component,
                                 private juce::Timer
 {
 public:
-    Content (MixEngine& e, LiveMixSettings& s) : engine (e), settings (s)
+    Content (MixEngine& e, LiveMixSettings& s) : engine (e), settings (s), targets (makeTargets())
     {
         history.assign ((size_t) historyLength, nothing);
         lastBlocks = engine.getLoudnessMeter().getStats().getSubBlockCount();   // the curve starts now: no invented past
 
-        resetButton.setButtonText (ko ("초기화"));
-        resetButton.setTooltip (ko ("통합 라우드니스, 범위, 최대값, 트루 피크를 지금부터 다시 잽니다"));
+        resetButton.setButtonText (tr ("초기화"));
+        resetButton.setTooltip (tr ("통합 라우드니스, 범위, 최대값, 트루 피크를 지금부터 다시 잽니다"));
         resetButton.setWantsKeyboardFocus (false);
         resetButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
         resetButton.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
@@ -69,11 +74,11 @@ public:
         };
         addAndMakeVisible (resetButton);
 
-        styleCaption (targetCaption, ko ("목표"));
+        styleCaption (targetCaption, tr ("목표"));
         addAndMakeVisible (targetCaption);
 
         for (size_t i = 0; i < std::size (targets); ++i)
-            targetCombo.addItem (juce::String::fromUTF8 (targets[i].label), (int) i + 1);
+            targetCombo.addItem (targets[i].label, (int) i + 1);
 
         targetCombo.setWantsKeyboardFocus (false);
         selectTarget (settings.getLufsTarget());
@@ -90,8 +95,8 @@ public:
         };
         addAndMakeVisible (targetCombo);
 
-        onTopToggle.setButtonText (ko ("항상 위"));
-        onTopToggle.setTooltip (ko ("이 창을 다른 창 위에 둡니다 (방송 화면 옆에 두고 볼 때)"));
+        onTopToggle.setButtonText (tr ("항상 위"));
+        onTopToggle.setTooltip (tr ("이 창을 다른 창 위에 둡니다 (방송 화면 옆에 두고 볼 때)"));
         onTopToggle.setWantsKeyboardFocus (false);
         onTopToggle.setToggleState (settings.getLufsAlwaysOnTop(), juce::dontSendNotification);
         onTopToggle.onClick = [this]
@@ -120,9 +125,9 @@ public:
         auto top = area.removeFromTop (32);
         resetButton.setBounds (top.removeFromRight (96));
         top.removeFromRight (10);
-        onTopToggle.setBounds (top.removeFromRight (96));
+        onTopToggle.setBounds (top.removeFromRight (tickBoxWidth (onTopToggle, 96, 32)));
         top.removeFromRight (10);
-        targetCaption.setBounds (top.removeFromLeft (40));
+        targetCaption.setBounds (top.removeFromLeft (captionWidth (targetCaption, 40)));
         targetCombo.setBounds (top.removeFromLeft (juce::jlimit (150, 300, top.getWidth() - 200)));
         noteArea = top.withTrimmedLeft (14);
         area.removeFromTop (12);
@@ -224,12 +229,12 @@ private:
         juce::StringArray parts;   // what matters first: a narrow window cuts the end
 
         if (meter.getDroppedSubBlocks() > 0)
-            parts.add (ko ("끊긴 구간 있음"));
+            parts.add (tr ("끊긴 구간 있음"));
 
         if (! engine.isDeviceRunning())
-            parts.add (ko ("오디오 멈춤 - 장치가 돌면 잽니다"));
+            parts.add (tr ("오디오 멈춤 - 장치가 돌면 잽니다"));
 
-        parts.add (ko ("측정 시간 ") + formatTimeMs (st.elapsedSeconds(), false));
+        parts.add (trf ("측정 시간 {0}", formatTimeMs (st.elapsedSeconds(), false)));
         g.drawText (parts.joinIntoString ("   "), noteArea, juce::Justification::centredLeft, true);
     }
 
@@ -286,19 +291,19 @@ private:
         };
 
         // the integrated value: the number of the stream, largest
-        area.removeFromTop (paintValue (g, area, ko ("통합 라우드니스  (초기화 후 전체)"), valueText (i), "LUFS", colourFor (i), tall ? 54.0f : 44.0f));
+        area.removeFromTop (paintValue (g, area, tr ("통합 라우드니스  (초기화 후 전체)"), valueText (i), "LUFS", colourFor (i), tall ? 54.0f : 44.0f));
         g.setColour (i.valid ? colourFor (i) : Palette::dimText);
         g.setFont (bodyFont (13.0f));
-        g.drawText (i.valid ? ko ("목표 ") + juce::String (target, 0) + ko (" 대비 ") + signedText (i.value - target) + " LU"
-                            : ko ("소리가 들어오면 잽니다"), area.removeFromTop (18), juce::Justification::centredLeft, true);
+        g.drawText (i.valid ? trf ("목표 {0} 대비 {1} LU", juce::String (target, 0), signedText (i.value - target))
+                            : tr ("소리가 들어오면 잽니다"), area.removeFromTop (18), juce::Justification::centredLeft, true);
         separator();
 
         // short-term and momentary side by side
         {
             auto row = area.removeFromTop (valueRowHeight (30.0f));
             auto left = row.removeFromLeft (row.getWidth() / 2);
-            paintValue (g, left, ko ("단기 (S, 3초)"), valueText (s), "LUFS", colourFor (s), 30.0f);
-            paintValue (g, row, ko ("순간 (M)"), valueText (m), "LUFS", colourFor (m), 30.0f);
+            paintValue (g, left, tr ("단기 (S, 3초)"), valueText (s), "LUFS", colourFor (s), 30.0f);
+            paintValue (g, row, tr ("순간 (M)"), valueText (m), "LUFS", colourFor (m), 30.0f);
         }
         separator();
 
@@ -306,14 +311,14 @@ private:
         {
             auto row = area.removeFromTop (valueRowHeight (24.0f));
             auto left = row.removeFromLeft (row.getWidth() / 2);
-            paintValue (g, left, ko ("범위 (LRA)"), valueText (lra), "LU", lra.valid ? Palette::text : Palette::dimText, 24.0f);
-            paintValue (g, row, ko ("트루 피크 (최대)"), valueText (tp), "dBTP", ! tp.valid ? Palette::dimText : tp.value > truePeakCeiling ? Palette::danger : Palette::text, 24.0f);
+            paintValue (g, left, tr ("범위 (LRA)"), valueText (lra), "LU", lra.valid ? Palette::text : Palette::dimText, 24.0f);
+            paintValue (g, row, tr ("트루 피크 (최대)"), valueText (tp), "dBTP", ! tp.valid ? Palette::dimText : tp.value > truePeakCeiling ? Palette::danger : Palette::text, 24.0f);
         }
         separator();
 
         g.setColour (Palette::dimText);
         g.setFont (bodyFont (12.5f));
-        g.drawText (ko ("최대 단기 ") + valueText (st.maxShortTerm()) + ko ("   최대 순간 ") + valueText (st.maxMomentary()), area.removeFromTop (18), juce::Justification::centredLeft, true);
+        g.drawText (trf ("최대 단기 {0}   최대 순간 {1}", valueText (st.maxShortTerm()), valueText (st.maxMomentary())), area.removeFromTop (18), juce::Justification::centredLeft, true);
     }
 
     void paintGraph (juce::Graphics& g, const LoudnessValue& i)
@@ -410,10 +415,10 @@ private:
 
         g.setColour (Palette::dimText);
         g.setFont (captionFont());
-        g.drawText (ko ("단기 라우드니스 (S)  ·  최근 3분"), plot.toNearestInt().reduced (10, 6), juce::Justification::topLeft, true);
+        g.drawText (tr ("단기 라우드니스 (S)  ·  최근 3분"), plot.toNearestInt().reduced (10, 6), juce::Justification::topLeft, true);
         g.setFont (juce::Font (juce::FontOptions (pt (10.5f))));
-        g.drawText (ko ("3분 전"), axis.withX (area.getX()).withWidth (60), juce::Justification::centredLeft, false);
-        g.drawText (ko ("지금"), axis.withLeft (area.getRight() - 60), juce::Justification::centredRight, false);
+        g.drawText (tr ("3분 전"), axis.withX (area.getX()).withWidth (60), juce::Justification::centredLeft, false);
+        g.drawText (tr ("지금"), axis.withLeft (area.getRight() - 60), juce::Justification::centredRight, false);
     }
 
     void paintBar (juce::Graphics& g, const LoudnessValue& m, const LoudnessValue& s, const LoudnessValue& i)
@@ -422,10 +427,14 @@ private:
         auto caption = area.removeFromTop (18);
         g.setColour (Palette::dimText);
         g.setFont (captionFont());
-        g.drawText (ko ("라우드니스 막대"), caption.removeFromLeft (110), juce::Justification::centredLeft, true);
+        g.drawText (tr ("라우드니스 막대"), caption.removeFromLeft (110), juce::Justification::centredLeft, true);
         g.setFont (bodyFont (12.0f));
-        g.drawText (caption.getWidth() >= 470 ? ko ("파란 막대 순간(M)  ·  흰 줄 단기(S)  ·  노란 줄 통합(I)  ·  초록 점선 목표 ±1 LU")
-                                              : ko ("막대 M · 흰 줄 S · 노란 줄 I · 점선 목표"), caption, juce::Justification::centredRight, true);
+        const auto legend = tr ("파란 막대 순간(M)  ·  흰 줄 단기(S)  ·  노란 줄 통합(I)  ·  초록 점선 목표 ±1 LU");
+        // the Korean line fits from 470 px; a longer line of another language gives way to the short one by its own width
+        const bool roomy = currentLanguage() == Language::ko
+                               ? caption.getWidth() >= 470
+                               : juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), legend) <= caption.getWidth();
+        g.drawText (roomy ? legend : tr ("막대 M · 흰 줄 S · 노란 줄 I · 점선 목표"), caption, juce::Justification::centredRight, true);
         auto scale = area.removeFromBottom (14);
         const auto track = area.reduced (0, 2).toFloat();
         g.setColour (Palette::meterBg);
@@ -473,6 +482,7 @@ private:
 
     MixEngine& engine;
     LiveMixSettings& settings;
+    const std::array<Target, 6> targets;
     double target = -14.0;
     std::vector<float> history;
     int historyPos = 0;
@@ -487,7 +497,7 @@ private:
 
 //==============================================================================
 LoudnessWindow::LoudnessWindow (MixEngine& engine, LiveMixSettings& settings)
-    : DocumentWindow (ko ("LUFS 미터 - 마스터 출력"), Palette::background, DocumentWindow::allButtons)
+    : DocumentWindow (tr ("LUFS 미터 - 마스터 출력"), Palette::background, DocumentWindow::allButtons)
 {
     setUsingNativeTitleBar (true);
     auto* c = new Content (engine, settings);

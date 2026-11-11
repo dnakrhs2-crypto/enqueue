@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "RecordingWindow.h"
 #include <cmath>
 
@@ -72,15 +73,15 @@ RecordingPanel::RecordingPanel (LiveMixSettings& prefs, Actions callbacks)
         l.setBorderSize (juce::BorderSize<int> (0)); l.setMinimumHorizontalScale (1.0f);
         l.setColour (juce::Label::textColourId, colour); addAndMakeVisible (l);
     };
-    label (formatCaption, "format-caption", ko ("형식"), captionFont(), Palette::dimText);
-    label (bitrateCaption, "bitrate-caption", ko ("비트레이트"), captionFont(), Palette::dimText);
-    label (directoryCaption, "directory-caption", ko ("저장 위치"), captionFont(), Palette::dimText);
+    label (formatCaption, "format-caption", tr ("형식"), captionFont(), Palette::dimText);
+    label (bitrateCaption, "bitrate-caption", tr ("비트레이트"), captionFont(), Palette::dimText);
+    label (directoryCaption, "directory-caption", tr ("저장 위치"), captionFont(), Palette::dimText);
     label (directory, "directory", {}, bodyFont (15), Palette::text);
-    label (status, "recording-status", ko ("녹음 중"), titleFont (14), Palette::danger);
+    label (status, "recording-status", tr ("녹음 중"), titleFont (14), Palette::danger);
     label (elapsed, "elapsed", {}, titleFont (26), Palette::text);
     elapsed.setJustificationType (juce::Justification::centredRight);
     label (filename, "filename", {}, bodyFont (12.5f), Palette::dimText);
-    label (error, "recording-error", ko ("녹음 실패"), bodyFont (14), Palette::danger);
+    label (error, "recording-error", tr ("녹음 실패"), bodyFont (14), Palette::danger);
     for (size_t i = 0; i < formats.size(); ++i)
     {
         auto& chip = formats[i]; chip.setComponentID (i == 0 ? "format-wav" : "format-mp3");
@@ -96,9 +97,9 @@ RecordingPanel::RecordingPanel (LiveMixSettings& prefs, Actions callbacks)
         chip.onClick = [this, rate] { options.mp3Kbps = rate; saveOptions(); };
         addAndMakeVisible (chip);
     }
-    change.setComponentID ("change-directory"); change.setButtonText (ko ("변경")); change.setWantsKeyboardFocus (false);
+    change.setComponentID ("change-directory"); change.setButtonText (tr ("변경")); change.setWantsKeyboardFocus (false);
     change.onClick = [this] { chooseDirectory(); }; addAndMakeVisible (change);
-    record.setComponentID ("record"); record.setButtonText (ko ("녹음")); record.setWantsKeyboardFocus (false);
+    record.setComponentID ("record"); record.setButtonText (tr ("녹음")); record.setWantsKeyboardFocus (false);
     record.red = record.large = true;
     record.onClick = [this]
     {
@@ -128,9 +129,9 @@ void RecordingPanel::saveOptions()
 void RecordingPanel::chooseDirectory()
 {
     const auto path = options.directoryUtf8.empty()
-        ? juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (ko ("LiveMix 녹음"))
+        ? defaultRecordingDirectory()
         : juce::File (juce::String::fromUTF8 (options.directoryUtf8.c_str()));
-    chooser = std::make_unique<juce::FileChooser> (ko ("저장 위치"), path, juce::String(), true, false, this);
+    chooser = std::make_unique<juce::FileChooser> (tr ("저장 위치"), path, juce::String(), true, false, this);
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
         [safe = juce::Component::SafePointer<RecordingPanel> (this)] (const juce::FileChooser& selected)
         {
@@ -176,7 +177,7 @@ void RecordingPanel::refresh()
     status.setVisible (live); elapsed.setVisible (live); filename.setVisible (live);
     elapsed.setText (recordingElapsedText (snapshot.elapsedSeconds), juce::dontSendNotification);
     error.setVisible (startFailed || snapshot.state == recording::State::error);
-    record.stop = live; record.setButtonText (live ? ko ("녹음 중지") : ko ("녹음"));
+    record.stop = live; record.setButtonText (live ? tr ("녹음 중지") : tr ("녹음"));
     record.setEnabled (! startPending && ! stopPending && snapshot.state != recording::State::starting
                        && snapshot.state != recording::State::stopping);
     record.setAlpha (record.isEnabled() ? 1.0f : 0.38f);
@@ -215,10 +216,10 @@ void RecordingPanel::resized()
     for (auto& bitrate : bitrates) { bitrate.setBounds (row.removeFromLeft (width)); row.removeFromLeft (8); }
     inner.removeFromTop (gap);
     if (! live) { directoryCaption.setBounds (inner.removeFromTop (15)); inner.removeFromTop (gap); }
-    row = inner.removeFromTop (36); change.setBounds (row.removeFromRight (58)); row.removeFromRight (8);
+    row = inner.removeFromTop (36); change.setBounds (row.removeFromRight (textButtonWidth (change, 58, 36))); row.removeFromRight (8);
     directory.setBounds (row.reduced (12, 0));
     const auto path = options.directoryUtf8.empty()
-        ? juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (ko ("LiveMix 녹음")).getFullPathName()
+        ? defaultRecordingDirectory().getFullPathName()
         : juce::String::fromUTF8 (options.directoryUtf8.c_str());
     directory.setText (directoryText (directory.getFont(), path, directory.getWidth()), juce::dontSendNotification);
     directory.setTooltip (path);
@@ -247,7 +248,7 @@ bool RecordingPanel::keyPressed (const juce::KeyPress& key)
 }
 
 RecordingWindow::RecordingWindow (MixEngine& mixer, LiveMixSettings& settings)
-    : DocumentWindow (ko ("녹음"), Palette::background, DocumentWindow::closeButton | DocumentWindow::minimiseButton), engine (mixer)
+    : DocumentWindow (tr ("녹음"), Palette::background, DocumentWindow::closeButton | DocumentWindow::minimiseButton), engine (mixer)
 {
     setUsingNativeTitleBar (true);
     RecordingPanel::Actions actions;

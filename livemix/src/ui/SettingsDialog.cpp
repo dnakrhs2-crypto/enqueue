@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "SettingsDialog.h"
 
 #include "AudioBackends.h"
@@ -50,40 +51,53 @@ namespace
         SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged,
                          std::function<void (bool)> hotkeyCapture, std::function<ControlServer::Status()> controlStatus,
                          std::function<void (bool)> controlEnabled, SettingsDialog::AcceptedFormatsQuery acceptedFormats,
-                         std::function<void()> openFailed, SettingsDialog::TrackList tracks)
+                         std::function<void()> openFailed, SettingsDialog::TrackList tracks, std::function<void()> restart)
             : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onOpenFailed (std::move (openFailed)),
               onHotkeysChanged (std::move (hotkeysChanged)), onHotkeyCapture (std::move (hotkeyCapture)),
               getControlStatus (std::move (controlStatus)), onControlEnabled (std::move (controlEnabled)),
-              getAcceptedFormats (std::move (acceptedFormats)), getTracks (std::move (tracks))
+              getAcceptedFormats (std::move (acceptedFormats)), getTracks (std::move (tracks)), onRestart (std::move (restart))
         {
-            styleCaption (typeCaption, ko ("장치 종류"));
+            // first, as in OBS: found without reading the language the app runs in (each name in its own language)
+            styleCaption (languageCaption, tr ("언어 (Language)"));
+            addAndMakeVisible (languageCaption);
+            languageCombo.setComponentID ("language");
+            languageCombo.setWantsKeyboardFocus (false);
+            languageCombo.addItem (juce::String::fromUTF8 ("한국어"), 1 + (int) Language::ko);
+            languageCombo.addItem ("English", 1 + (int) Language::en);
+            languageCombo.addItem (juce::String::fromUTF8 ("日本語"), 1 + (int) Language::ja);
+            // the saved one is what the next start runs in: shown also while it waits for that start
+            languageCombo.setSelectedId (1 + (int) parseLanguage (settings.getLanguage()).value_or (currentLanguage()),
+                                         juce::dontSendNotification);
+            languageCombo.onChange = [this] { applyLanguage(); };
+            addAndMakeVisible (languageCombo);
+            styleCaption (typeCaption, tr ("장치 종류"));
             addAndMakeVisible (typeCaption);
             typeCombo.setComponentID ("device-type");
             typeCombo.setWantsKeyboardFocus (false);
             typeCombo.onChange = [this] { typeCombo.settle(); applyType(); };
             addAndMakeVisible (typeCombo);
-            styleCaption (deviceCaption, ko ("ASIO 장치"));
+            styleCaption (deviceCaption, tr ("ASIO 장치"));
             addAndMakeVisible (deviceCaption);
             deviceCombo.setComponentID ("device-input");
             deviceCombo.setWantsKeyboardFocus (false);
             deviceCombo.onChange = [this] { deviceCombo.settle(); applySelection(); };
             deviceCombo.onRepick = [this] { reopenIfStopped(); };
             addAndMakeVisible (deviceCombo);
-            styleCaption (outputCaption, ko ("출력 (모니터)"));
+            styleCaption (outputCaption, tr ("출력 (모니터)"));
             addAndMakeVisible (outputCaption);
             outputCombo.setComponentID ("device-output");
             outputCombo.setWantsKeyboardFocus (false);
             outputCombo.onChange = [this] { outputCombo.settle(); applySelection(); };
             outputCombo.onRepick = [this] { reopenIfStopped(); };
             addAndMakeVisible (outputCombo);
-            styleCaption (rateCaption, ko ("샘플레이트"));
+            styleCaption (rateCaption, tr ("샘플레이트"));
             addAndMakeVisible (rateCaption);
             rateCombo.setComponentID ("device-rate");
             rateCombo.setWantsKeyboardFocus (false);
             rateCombo.onChange = [this] { rateCombo.settle(); applySelection (true); };
             addAndMakeVisible (rateCombo);
             panelButton.setComponentID ("asio-panel");
-            panelButton.setButtonText (ko ("ASIO 제어판 (버퍼 크기)..."));
+            panelButton.setButtonText (tr ("ASIO 제어판 (버퍼 크기)..."));
             panelButton.onClick = [this]
             {
                 auto* device = engine.getDeviceManager().getCurrentAudioDevice();
@@ -102,7 +116,7 @@ namespace
                 const auto error = engine.restartDevice();
 
                 if (error.isNotEmpty())
-                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("장치를 다시 열지 못했습니다"), error, ko ("확인"));
+                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("장치를 다시 열지 못했습니다"), error, tr ("확인"));
 
                 refreshDevices();
                 auto& notify = error.isEmpty() ? onDeviceChanged : onOpenFailed;
@@ -110,16 +124,16 @@ namespace
                     notify();
             };
             addAndMakeVisible (panelButton);
-            styleCaption (bufferCaption, ko ("버퍼"));
+            styleCaption (bufferCaption, tr ("버퍼"));
             addAndMakeVisible (bufferCaption);
             bufferCombo.setComponentID ("device-buffer");
             bufferCombo.setWantsKeyboardFocus (false);
             bufferCombo.onChange = [this] { bufferCombo.settle(); applySelection(); };
             addAndMakeVisible (bufferCombo);
-            styleCaption (sharedBufferNote, ko ("버퍼: 윈도우가 정함 (보통 10 ms)"));
+            styleCaption (sharedBufferNote, tr ("버퍼: 윈도우가 정함 (보통 10 ms)"));
             sharedBufferNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (sharedBufferNote);
-            styleCaption (bitDepthCaption, ko ("비트뎁스"));
+            styleCaption (bitDepthCaption, tr ("비트뎁스"));
             addAndMakeVisible (bitDepthCaption);
             bitDepthCombo.setComponentID ("device-bitdepth");
             bitDepthCombo.setWantsKeyboardFocus (false);
@@ -143,7 +157,7 @@ namespace
             bitDepthDetail.setColour (juce::Label::textColourId, Palette::text);
             bitDepthWarning.setColour (juce::Label::textColourId, Palette::meterYellow);
             soundSettingsButton.setComponentID ("windows-sound-settings");
-            soundSettingsButton.setButtonText (ko ("윈도우 소리 설정..."));
+            soundSettingsButton.setButtonText (tr ("윈도우 소리 설정..."));
             soundSettingsButton.onClick = []
             {
                #if JUCE_WINDOWS
@@ -151,7 +165,7 @@ namespace
                #endif
             };
             addAndMakeVisible (soundSettingsButton);
-            styleCaption (deviceNote, ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장)."));
+            styleCaption (deviceNote, tr ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장)."));
             deviceNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (deviceNote);
 
@@ -163,52 +177,52 @@ namespace
                 addAndMakeVisible (t);
             };
 
-            toggle (minimiseToTray, ko ("최소화하면 트레이로 (창은 사라지고 소리는 계속)"), settings.getMinimiseToTray(), [this] (bool on) { settings.setMinimiseToTray (on); });
-            toggle (closeAsk, ko ("닫을 때 물어보기 (종료할지 트레이로 갈지)"), settings.getCloseAsk(), [this] (bool on) { settings.setCloseAsk (on); });
-            toggle (closeToTray, ko ("물어보지 않을 때: 트레이로 (끄면 종료)"), settings.getCloseToTray(), [this] (bool on) { settings.setCloseToTray (on); });
-            toggle (startWithWindows, ko ("Windows 시작할 때 LiveMix 실행"), settings.getStartWithWindows(), [this] (bool on)
+            toggle (minimiseToTray, tr ("최소화하면 트레이로 (창은 사라지고 소리는 계속)"), settings.getMinimiseToTray(), [this] (bool on) { settings.setMinimiseToTray (on); });
+            toggle (closeAsk, tr ("닫을 때 물어보기 (종료할지 트레이로 갈지)"), settings.getCloseAsk(), [this] (bool on) { settings.setCloseAsk (on); });
+            toggle (closeToTray, tr ("물어보지 않을 때: 트레이로 (끄면 종료)"), settings.getCloseToTray(), [this] (bool on) { settings.setCloseToTray (on); });
+            toggle (startWithWindows, tr ("Windows 시작할 때 LiveMix 실행"), settings.getStartWithWindows(), [this] (bool on)
             {
                 settings.setStartWithWindows (on);
                 SettingsDialog::setStartWithWindows (on);
             });
-            toggle (skipWhenOff, ko ("꺼진 마이크는 플러그인도 멈춤"), settings.getSkipPluginsWhenOff(), [this] (bool on)
+            toggle (skipWhenOff, tr ("꺼진 마이크는 플러그인도 멈춤"), settings.getSkipPluginsWhenOff(), [this] (bool on)
             {
                 settings.setSkipPluginsWhenOff (on);
                 engine.setSkipChainWhenOff (on);
             });
-            toggle (sendTransport, ko ("재생 신호 보내기 (학습 플러그인 사용)"), settings.getSendTransport(), [this] (bool on)
+            toggle (sendTransport, tr ("재생 신호 보내기 (학습 플러그인 사용)"), settings.getSendTransport(), [this] (bool on)
             {
                 settings.setSendTransport (on);
                 engine.setSendTransport (on);
             });
 
-            styleCaption (hotkeyCaption, ko ("전역 핫키"));
+            styleCaption (hotkeyCaption, tr ("전역 핫키"));
             addAndMakeVisible (hotkeyCaption);
-            styleCaption (hotkeyNote, ko ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. '전체 뮤트'는 위쪽 막대의 '마이크 뮤트'·'FX 뮤트' 버튼과 같이 모든 마이크·FX를 뮤트합니다. 뮤트그룹의 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다. ON/OFF 핫키는 그 번호의 마이크·FX 하나만 켜고 끕니다 (다른 세션에서도 같은 번호). '창 숨기기/불러오기'는 창을 트레이로 숨기거나 다시 불러옵니다. 플러그인 그룹 핫키는 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (그룹은 채널의 '체인 열기' 옆에서 만듭니다)."));
+            styleCaption (hotkeyNote, tr ("LiveMix가 최소화·트레이 상태여도 듣는 전역 핫키입니다. 그동안 다른 프로그램은 그 키를 받지 못하니 F 키(F9 등)나 Ctrl+Alt 조합을 권합니다. '전체 뮤트'는 위쪽 막대의 '마이크 뮤트'·'FX 뮤트' 버튼과 같이 모든 마이크·FX를 뮤트합니다. 뮤트그룹의 대상은 각 마이크 카드와 FX의 '뮤트그룹' 칩으로 고릅니다. ON/OFF 핫키는 그 번호의 마이크·FX 하나만 켜고 끕니다 (다른 세션에서도 같은 번호). '창 숨기기/불러오기'는 창을 트레이로 숨기거나 다시 불러옵니다. 플러그인 그룹 핫키는 그 번호의 그룹을 마이크 전체에서 한꺼번에 껐다 켭니다 (그룹은 채널의 '체인 열기' 옆에서 만듭니다)."));
             hotkeyNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (hotkeyNote);
 
             auto& prefs = settings;   // 'settings' is a reference member; the lambdas below keep it by name
-            addFixedRow (micHotkeyLabel, ko ("마이크 뮤트그룹"), micHotkey, micHotkeyClear,
+            addFixedRow (micHotkeyLabel, tr ("마이크 뮤트그룹"), micHotkey, micHotkeyClear,
                          [&prefs] { return prefs.getMicMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setMicMuteHotkey (d); });
-            addFixedRow (fxHotkeyLabel, ko ("FX 뮤트그룹"), fxHotkey, fxHotkeyClear,
+            addFixedRow (fxHotkeyLabel, tr ("FX 뮤트그룹"), fxHotkey, fxHotkeyClear,
                          [&prefs] { return prefs.getFxMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setFxMuteHotkey (d); });
-            addFixedRow (windowHotkeyLabel, ko ("창 숨기기/불러오기"), windowHotkey, windowHotkeyClear,
+            addFixedRow (windowHotkeyLabel, tr ("창 숨기기/불러오기"), windowHotkey, windowHotkeyClear,
                          [&prefs] { return prefs.getWindowHotkey(); }, [&prefs] (const juce::String& d) { prefs.setWindowHotkey (d); });
 
             for (int i = 0; i < MixSession::maxPluginGroups; ++i)
             {
                 const int group = i + 1;   // the number on the card
-                addFixedRow (groupHotkeyLabel[i], ko ("플러그인 그룹 ") + juce::String (group), groupHotkey[i], groupHotkeyClear[i],
+                addFixedRow (groupHotkeyLabel[i], trf ("플러그인 그룹 {0}", juce::String (group)), groupHotkey[i], groupHotkeyClear[i],
                              [&prefs, group] { return prefs.getPluginGroupHotkey (group); },
                              [&prefs, group] (const juce::String& d) { prefs.setPluginGroupHotkey (group, d); });
             }
 
             // the top bar's 마이크 뮤트 / FX 뮤트: drawn above their kind's mute group (arrangeRows)
-            addFixedRow (micAllHotkeyLabel, ko ("마이크 전체 뮤트"), micAllHotkey, micAllHotkeyClear,
+            addFixedRow (micAllHotkeyLabel, tr ("마이크 전체 뮤트"), micAllHotkey, micAllHotkeyClear,
                          [&prefs] { return prefs.getMicAllMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setMicAllMuteHotkey (d); });
             micAllRow = fixedRows.back().get();
-            addFixedRow (fxAllHotkeyLabel, ko ("FX 전체 뮤트"), fxAllHotkey, fxAllHotkeyClear,
+            addFixedRow (fxAllHotkeyLabel, tr ("FX 전체 뮤트"), fxAllHotkey, fxAllHotkeyClear,
                          [&prefs] { return prefs.getFxAllMuteHotkey(); }, [&prefs] (const juce::String& d) { prefs.setFxAllMuteHotkey (d); });
             fxAllRow = fixedRows.back().get();
             micAllHotkey.setComponentID ("hotkey-mic-all");
@@ -217,14 +231,14 @@ namespace
             rebuildTrackRows();
             arrangeRows();
 
-            styleCaption (controlCaption, ko ("외부 제어 (Stream Deck)"));
+            styleCaption (controlCaption, tr ("외부 제어 (Stream Deck)"));
             addAndMakeVisible (controlCaption);
-            toggle (externalControl, ko ("외부 제어 사용"), settings.getExternalControlEnabled(), [this] (bool on)
+            toggle (externalControl, tr ("외부 제어 사용"), settings.getExternalControlEnabled(), [this] (bool on)
             {
                 if (onControlEnabled) onControlEnabled (on);
                 refreshControlStatus();   // the bound address is visible on the very first click
             });
-            styleCaption (controlNote, ko ("이 PC의 Stream Deck 등에서 마이크와 FX를 조절합니다."));
+            styleCaption (controlNote, tr ("이 PC의 Stream Deck 등에서 마이크와 FX를 조절합니다."));
             controlNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (controlNote);
             for (auto* label : { &controlAddress, &controlState })
@@ -234,15 +248,15 @@ namespace
                 label->setEditable (false, false, false);
                 addAndMakeVisible (*label);
             }
-            controlHelp.setButtonText (ko ("설치 방법"));
+            controlHelp.setButtonText (tr ("설치 방법"));
             controlHelp.setColour (juce::HyperlinkButton::textColourId, Palette::accent);
             controlHelp.setFont (bodyFont (12.5f), false, juce::Justification::centredLeft);
             controlHelp.onClick = [] { juce::URL (ko ("https://곰튀김.com/livemix/#streamdeck")).launchInDefaultBrowser(); };
             addAndMakeVisible (controlHelp);
 
-            styleCaption (backupCaption, ko ("온라인 백업"));
+            styleCaption (backupCaption, tr ("온라인 백업"));
             addAndMakeVisible (backupCaption);
-            styleCaption (backupNote, ko ("위쪽 '온라인 백업' 메뉴의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
+            styleCaption (backupNote, tr ("위쪽 '온라인 백업' 메뉴의 창에서 계정을 만들고 로그인합니다. 백업은 그 계정의 것만 보이고, 올리기·불러오기도 그 계정으로만 됩니다."));
             backupNote.setFont (bodyFont (12.5f));
             addAndMakeVisible (backupNote);
 
@@ -279,7 +293,7 @@ namespace
             shownType = types[typeIndex];
             const bool asio = shownType.containsIgnoreCase ("ASIO");
             const bool shared = shownType == "Windows Audio";
-            deviceCaption.setText (asio ? ko ("ASIO 장치") : ko ("입력 (마이크)"), juce::dontSendNotification);
+            deviceCaption.setText (asio ? tr ("ASIO 장치") : tr ("입력 (마이크)"), juce::dontSendNotification);
             deviceCombo.clear (juce::dontSendNotification);
             names.clear();
             outputNames.clear();
@@ -292,9 +306,9 @@ namespace
             for (int i = 0; i < names.size(); ++i)
                 deviceCombo.addRepickableItem (names[i], i + 1);
             deviceCombo.setSelectedId (choosing ? 0 : names.indexOf (current.input) + 1, juce::dontSendNotification);
-            deviceCombo.setTextWhenNothingSelected (! asio ? ko ("입력 장치 없음") : names.isEmpty() ? ko ("ASIO 장치 없음") : ko ("ASIO 장치를 고르세요"));
+            deviceCombo.setTextWhenNothingSelected (! asio ? tr ("입력 장치 없음") : names.isEmpty() ? tr ("ASIO 장치 없음") : tr ("ASIO 장치를 고르세요"));
             outputCombo.clear (juce::dontSendNotification);
-            outputCombo.addRepickableItem (ko ("없음 (OBS로만 보내기)"), 1);
+            outputCombo.addRepickableItem (tr ("없음 (OBS로만 보내기)"), 1);
             for (int i = 0; i < outputNames.size(); ++i) outputCombo.addRepickableItem (outputNames[i], i + 2);
             outputCombo.setSelectedId (current.output.isEmpty() ? 1 : outputNames.indexOf (current.output) + 2, juce::dontSendNotification);
             outputCaption.setVisible (! asio);
@@ -319,7 +333,7 @@ namespace
             {
                 const auto sizes = device->getAvailableBufferSizes();
                 for (int i = 0; i < sizes.size(); ++i)
-                    bufferCombo.addItem (juce::String (sizes[i]) + ko (" 샘플") + "  (" + juce::String (1000.0 * sizes[i] / juce::jmax (1.0, device->getCurrentSampleRate()), 1) + " ms)", sizes[i]);
+                    bufferCombo.addItem (trf ("{0} 샘플  ({1} ms)", juce::String (sizes[i]), juce::String (1000.0 * sizes[i] / juce::jmax (1.0, device->getCurrentSampleRate()), 1)), sizes[i]);
                 bufferCombo.setSelectedId (current.bufferSize, juce::dontSendNotification);
                 for (auto rate : device->getAvailableSampleRates())   // a closed ASIO device (a failed reset) offers none
                     if (rate > 0.0 && (! asio || (device->isOpen() && rate >= 44100.0 && rate <= 192000.0))) rates.addIfNotAlreadyThere (rate);
@@ -330,20 +344,51 @@ namespace
             rates.sort();
             rateCombo.clear (juce::dontSendNotification);
             for (auto rate : rates) rateCombo.addItem (juce::String (juce::roundToInt (rate)) + " Hz", juce::roundToInt (rate));
-            rateCombo.setTextWhenNothingSelected (ko ("장치 없음"));
+            rateCombo.setTextWhenNothingSelected (tr ("장치 없음"));
             rateCombo.setSelectedId (juce::roundToInt (shownRate > 0.0 ? shownRate : (asio ? 0.0 : 48000.0)), juce::dontSendNotification);
             for (auto* box : { &typeCombo, &deviceCombo, &outputCombo, &rateCombo, &bufferCombo })
                 box->settle();   // selected from here, nothing for an onChange to hand over
-            juce::String note = ko ("USB 마이크·헤드셋 같은 일반 장치를 씁니다. 마이크와 모니터가 서로 다른 장치면 샘플레이트 차이를 자동으로 맞춥니다 (모니터 지연이 조금 늘어납니다).");
-            if (shownType == "Windows Audio (Low Latency Mode)") note += ko (" 지원하지 않는 장치면 일반 모드로 여세요.");
-            if (shownType == "Windows Audio (Exclusive Mode)") note += ko (" 독점 모드에서는 OBS 등 다른 프로그램이 같은 마이크를 쓸 수 없습니다.");
-            deviceNote.setText (asio ? ko ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장).") : note, juce::dontSendNotification);
+            juce::String note = tr ("USB 마이크·헤드셋 같은 일반 장치를 씁니다. 마이크와 모니터가 서로 다른 장치면 샘플레이트 차이를 자동으로 맞춥니다 (모니터 지연이 조금 늘어납니다).");
+            if (shownType == "Windows Audio (Low Latency Mode)") note += tr (" 지원하지 않는 장치면 일반 모드로 여세요.");
+            if (shownType == "Windows Audio (Exclusive Mode)") note += tr (" 독점 모드에서는 OBS 등 다른 프로그램이 같은 마이크를 쓸 수 없습니다.");
+            deviceNote.setText (asio ? tr ("ASIO 장치만 씁니다. 버퍼가 작을수록 지연이 짧고 끊길 위험이 큽니다 (128~256 권장).") : note, juce::dontSendNotification);
             bitDepthCombo.setSelectedId (DeviceFormatText::choiceId (current.sampleFormat), juce::dontSendNotification);
             bitDepthCombo.settle();
             syncedChoiceId = DeviceFormatText::choiceId (current.sampleFormat);
             refreshBitDepth();
             updateContentSize();
             resized();
+        }
+
+        /** A language picked: saved at once, as the one the next start runs in. When it is not the one that runs, the
+            restart that brings it is asked for in the language picked - the one the operator reads. A restart stops
+            the sound for a moment, so it is never done unasked; 'later' (or Esc) leaves it to the next start.
+            The question stands alone under an empty line: JUCE evens out an alert's last two lines, and without
+            it broke the Korean and Japanese sentences in the middle of a word. */
+        void applyLanguage()
+        {
+            const auto picked = static_cast<Language> (languageCombo.getSelectedId() - 1);
+
+            if (languageCombo.getSelectedId() <= 0 || settings.getLanguage() == languageCode (picked))
+                return;
+
+            settings.setLanguage (picked);
+
+            if (picked == currentLanguage())
+                return;   // back to the one that runs: nothing to restart for
+
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                              .withIconType (juce::MessageBoxIconType::QuestionIcon)
+                                              .withTitle (trIn ("언어 변경", picked))
+                                              .withMessage (trIn ("선택한 언어는 LiveMix를 다시 시작하면 적용됩니다.\n다시 시작하는 동안 소리가 끊깁니다.\n\n지금 다시 시작할까요?", picked))
+                                              .withButton (trIn ("지금 다시 시작", picked))
+                                              .withButton (trIn ("나중에", picked))
+                                              .withAssociatedComponent (getTopLevelComponent()),
+                                          [safe = juce::Component::SafePointer<SettingsContent> (this)] (int result)
+            {
+                if (result == 1 && safe != nullptr && safe->onRestart)
+                    safe->onRestart();   // the app's own quit: an unsaved session is asked about first
+            });
         }
 
         juce::AudioIODeviceType* findType (const juce::String& typeName)
@@ -450,10 +495,9 @@ namespace
 
         void showRateNotApplied (double wantedRate, double actualRate)
         {
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("샘플레이트를 바꾸지 못했습니다"),
-                ko ("ASIO 드라이버가 ") + juce::String (juce::roundToInt (wantedRate)) + ko (" Hz로 바꾸지 않아 지금 ")
-                    + juce::String (juce::roundToInt (actualRate)) + ko (" Hz로 동작합니다. 장치의 클럭(외부 동기) 설정이나 ASIO 제어판을 확인하세요."),
-                ko ("확인"));
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("샘플레이트를 바꾸지 못했습니다"),
+                trf ("ASIO 드라이버가 {0} Hz로 바꾸지 않아 지금 {1} Hz로 동작합니다. 장치의 클럭(외부 동기) 설정이나 ASIO 제어판을 확인하세요.", juce::String (juce::roundToInt (wantedRate)), juce::String (juce::roundToInt (actualRate))),
+                tr ("확인"));
         }
 
         /** The device can change under the open dialog (a driver reset, a session opened from Explorer): show what runs,
@@ -506,7 +550,7 @@ namespace
             const bool kept = after.type == before.type && after.input == before.input && after.output == before.output
                               && engine.isDeviceRunning() == before.input.isNotEmpty();
             if (error.isNotEmpty() && ! (quietIfKept && kept))
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, ko ("오디오 장치를 열지 못했습니다"), error, ko ("확인"));
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("오디오 장치를 열지 못했습니다"), error, tr ("확인"));
             refreshDevices();
             // only a device that opened is the operator's choice: a failure leaves the session asking for its own device
             auto& notify = error.isEmpty() ? onDeviceChanged : onOpenFailed;
@@ -598,7 +642,7 @@ namespace
             // every hotkey row is 36 (30 + 6): the fixed ones (the mute switches, the window, the plugin groups) and
             // the session's mics / FX - counted, so a new row cannot squeeze the last note (온라인 백업) again
             setSize (560, 740 + 28 - 160 + (int) (fixedRows.size() + trackRows.size()) * 36 + deviceHeight + reasonHeight
-                              + hotkeyNoteHeight() - 90);
+                              + hotkeyNoteHeight() - 90 + languageHeight);
         }
 
         /** The session's mics / FX changed: their ON/OFF rows follow (nothing moves when the list is the same). */
@@ -624,6 +668,9 @@ namespace
         void resized() override
         {
             auto area = getLocalBounds().reduced (20, 16);
+            auto language = area.removeFromTop (languageHeight);
+            languageCaption.setBounds (language.removeFromTop (20));
+            languageCombo.setBounds (language.removeFromTop (30).withWidth (250));   // three short names: 샘플레이트's width
             typeCaption.setBounds (area.removeFromTop (20));
             typeCombo.setBounds (area.removeFromTop (30));
             area.removeFromTop (8);
@@ -736,12 +783,12 @@ namespace
         {
             const auto status = getControlStatus ? getControlStatus() : ControlServer::Status {};
             externalControl.setToggleState (status.enabled, juce::dontSendNotification);
-            controlAddress.setText (status.enabled ? status.address() : ko ("사용 안 함"), juce::dontSendNotification);
-            const auto text = ! status.enabled ? ko ("꺼짐")
-                : status.error.isNotEmpty() ? ko ("연결 오류 — 다시 켜 보세요")
-                : status.starting ? ko ("시작 중")
-                : status.connectedCount == 0 ? ko ("연결 대기 중")
-                : ko ("연결됨 ") + juce::String (status.connectedCount) + ko ("개");
+            controlAddress.setText (status.enabled ? status.address() : tr ("사용 안 함"), juce::dontSendNotification);
+            const auto text = ! status.enabled ? tr ("꺼짐")
+                : status.error.isNotEmpty() ? tr ("연결 오류 — 다시 켜 보세요")
+                : status.starting ? tr ("시작 중")
+                : status.connectedCount == 0 ? tr ("연결 대기 중")
+                : trf ("연결됨 {0}개", juce::String (status.connectedCount));
             controlState.setText (text, juce::dontSendNotification);
             controlState.setColour (juce::Label::textColourId, status.error.isNotEmpty() ? Palette::danger : Palette::dimText);
         }
@@ -754,6 +801,8 @@ namespace
         std::function<void (bool)> onControlEnabled;
         SettingsDialog::AcceptedFormatsQuery getAcceptedFormats;
         SettingsDialog::TrackList getTracks;
+        std::function<void()> onRestart;
+        static constexpr int languageHeight = 20 + 30 + 16;   // its caption and list, then a section's gap
         juce::StringArray types, names, outputNames;
         juce::String shownType;
         juce::String choosingType;      // shown while another type's device plays: switched to, its first driver did not open
@@ -838,7 +887,7 @@ namespace
                 for (const auto* other : order)
                     if (other->button != &button && other->button->getHotkey().isNotEmpty()
                         && key == juce::KeyPress::createFromDescription (other->button->getHotkey()))
-                        return ko ("다른 핫키가 쓰는 키입니다.");
+                        return tr ("다른 핫키가 쓰는 키입니다.");
 
                 return juce::String();
             };
@@ -853,7 +902,7 @@ namespace
             };
             addAndMakeVisible (button);
             clear.setButtonText ("x");
-            clear.setTooltip (ko ("핫키 지우기"));
+            clear.setTooltip (tr ("핫키 지우기"));
             clear.onClick = [this, set, &button]
             {
                 set ({});
@@ -938,7 +987,7 @@ namespace
         int hotkeyNoteHeight() const { return juce::jmax (90, textHeight (hotkeyNote)); }
         juce::Label deviceCaption, bufferCaption, deviceNote, backupCaption, backupNote, hotkeyCaption, hotkeyNote, micHotkeyLabel, fxHotkeyLabel, windowHotkeyLabel;
         juce::Label micAllHotkeyLabel, fxAllHotkeyLabel;
-        juce::Label typeCaption, outputCaption, rateCaption, sharedBufferNote;
+        juce::Label languageCaption, typeCaption, outputCaption, rateCaption, sharedBufferNote;
         juce::Label bitDepthCaption, bitDepthDetail, bitDepthHint, bitDepthWarning;
         juce::Label groupHotkeyLabel[MixSession::maxPluginGroups];
         juce::Label controlCaption, controlNote, controlAddress, controlState;
@@ -948,6 +997,7 @@ namespace
         juce::TextButton micHotkeyClear { "x" }, fxHotkeyClear { "x" }, windowHotkeyClear { "x" }, micAllHotkeyClear { "x" }, fxAllHotkeyClear { "x" };
         juce::TextButton groupHotkeyClear[MixSession::maxPluginGroups];
         RepickComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo, bitDepthCombo;
+        juce::ComboBox languageCombo;
         juce::TextButton panelButton, soundSettingsButton;
         juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, sendTransport, externalControl;
         bool refreshing = false;
@@ -969,7 +1019,7 @@ namespace
                            public juce::DialogWindow
     {
     public:
-        SettingsWindow() : DialogWindow (ko ("설정"), Palette::card, true, true)
+        SettingsWindow() : DialogWindow (tr ("설정"), Palette::card, true, true)
         {
             limits.frameNow = [this] { return getPeer() != nullptr ? getPeer()->getFrameSize() : juce::BorderSize<int>(); };
         }
@@ -1007,7 +1057,8 @@ namespace
 void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
                            std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture,
                            std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled,
-                           AcceptedFormatsQuery acceptedFormats, std::function<void()> onOpenFailed, TrackList tracks)
+                           AcceptedFormatsQuery acceptedFormats, std::function<void()> onOpenFailed, TrackList tracks,
+                           std::function<void()> onRestart)
 {
     if (openDialog != nullptr)
     {
@@ -1017,7 +1068,7 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
 
     auto* content = new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged), std::move (onHotkeyCapture),
                                          std::move (controlStatus), std::move (controlEnabled), std::move (acceptedFormats),
-                                         std::move (onOpenFailed), std::move (tracks));
+                                         std::move (onOpenFailed), std::move (tracks), std::move (onRestart));
     auto* scroller = new juce::Viewport();
     scroller->setViewedComponent (content, true);
     scroller->setScrollBarsShown (true, true);   // sideways only when a narrow display squeezed the window under the content's width

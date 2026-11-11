@@ -11,6 +11,7 @@ struct CollabHostCheck
         bool reachable = false;
         Cause cause = Cause::none;
         juce::String reason;
+        juce::String displayReason() const;
         juce::String message() const;
     };
     static Result evaluate (bool probeReceived, const CollabUpnp::Result&, const juce::String& publicIp);

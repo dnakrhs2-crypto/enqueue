@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "MainComponent.h"
 
 #include "BackupDialog.h"
@@ -33,19 +34,19 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     viewport.setScrollBarsShown (true, false);
     addAndMakeVisible (viewport);
 
-    addChannelButton.setButtonText (ko ("+ 마이크 채널 추가"));
+    addChannelButton.setButtonText (tr ("+ 마이크 채널 추가"));
     addChannelButton.setWantsKeyboardFocus (false);
     addChannelButton.setColour (juce::TextButton::buttonColourId, Palette::background);
     addChannelButton.onClick = [this]
     {
         if (document.addChannel().isNull())
-            showStatus (ko ("마이크 채널은 최대 ") + juce::String (MixSession::maxChannels) + ko ("개입니다"), true);
+            showStatus (trf ("마이크 채널은 최대 {0}개입니다", juce::String (MixSession::maxChannels)), true);
     };
     cardsHolder.addAndMakeVisible (addChannelButton);
 
     addAndMakeVisible (masterCard);
-    masterCard.onOpenChain = [this] { openChainFor (&engine.getMasterChain(), ko ("마스터")); };
-    masterCard.onAddPlugin = [this] { addPluginTo (&engine.getMasterChain(), ko ("마스터"), &masterCard.getAddPluginButton()); };
+    masterCard.onOpenChain = [this] { openChainFor (&engine.getMasterChain(), tr ("마스터")); };
+    masterCard.onAddPlugin = [this] { addPluginTo (&engine.getMasterChain(), tr ("마스터"), &masterCard.getAddPluginButton()); };
     masterCard.onOpenLoudness = [this] { showLoudnessWindow(); };
     masterCard.onOpenRecording = [this] { showRecordingWindow(); };
     masterCard.onObsEnabled = [this] { startObsPluginCheck (true, true); };
@@ -55,7 +56,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
         auto& chain = engine.getMasterChain();
 
         if (slot < chain.getNumSlots() && chain.getSlot (slot).plugin != nullptr)
-            windows.open (*chain.getSlot (slot).plugin, ko ("마스터") + " - " + chain.getSlot (slot).plugin->getName());
+            windows.open (*chain.getSlot (slot).plugin, trf ("마스터 - {0}", chain.getSlot (slot).plugin->getName()));
     };
 
     addChildComponent (chainDrawer);
@@ -100,7 +101,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     statusRight.setFont (bodyFont (12.5f));
     statusRight.setColour (juce::Label::textColourId, Palette::dimText);
     statusRight.setJustificationType (juce::Justification::centredRight);
-    statusRight.setText (ko ("최소화하면 트레이에서 계속 동작합니다"), juce::dontSendNotification);
+    statusRight.setText (tr ("최소화하면 트레이에서 계속 동작합니다"), juce::dontSendNotification);
     addAndMakeVisible (statusRight);
 
     noticeText.setMultiLine (true, true);
@@ -116,7 +117,7 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     noticeText.setColour (juce::TextEditor::textColourId, Palette::text);
     addChildComponent (noticeText);
     noticeClose.setWantsKeyboardFocus (false);
-    noticeClose.setTooltip (ko ("닫기"));
+    noticeClose.setTooltip (tr ("닫기"));
     noticeClose.onClick = [this] { hideNotice(); };
     addChildComponent (noticeClose);
 
@@ -237,14 +238,14 @@ void MainComponent::startObsPluginCheck (bool installIfNeeded, bool allowElevati
         }
         catch (const std::exception& error)
         {
-            work->message = ko ("OBS 플러그인을 설치하지 못했습니다: ") + juce::String::fromUTF8 (error.what());
+            work->message = trf ("OBS 플러그인을 설치하지 못했습니다: {0}", juce::String::fromUTF8 (error.what()));
             work->result = ObsPluginInstaller::Result::failed;
         }
         work->complete.store (true, std::memory_order_release);
     });
     if (! started)
     {
-        work->message = ko ("OBS 플러그인을 설치하지 못했습니다: 설치 작업을 시작할 수 없습니다.");
+        work->message = tr ("OBS 플러그인을 설치하지 못했습니다: 설치 작업을 시작할 수 없습니다.");
         work->complete.store (true, std::memory_order_release);
     }
 }
@@ -352,10 +353,10 @@ void MainComponent::rebuildCards()
                 juce::Component::SafePointer<MainComponent> safeThis (this);
                 juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                                   .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                                                  .withTitle (ko ("채널 삭제"))
-                                                  .withMessage (ko ("이 마이크 채널과 그 플러그인 설정이 지워집니다.\n삭제할까요?"))
-                                                  .withButton (ko ("삭제"))
-                                                  .withButton (ko ("취소")),
+                                                  .withTitle (tr ("채널 삭제"))
+                                                  .withMessage (tr ("이 마이크 채널과 그 플러그인 설정이 지워집니다.\n삭제할까요?"))
+                                                  .withButton (tr ("삭제"))
+                                                  .withButton (tr ("취소")),
                                               [safeThis, id] (int result)
                 {
                     if (safeThis != nullptr && result == 1)
@@ -499,7 +500,7 @@ void MainComponent::resized()
     noticeClose.setVisible (noticeVisible);
     auto status = area.removeFromBottom (30);
     const bool narrowStatus = getWidth() < 700;   // portrait: a short tray hint, the rest of the line for the status
-    statusRight.setText (narrowStatus ? ko ("최소화·X → 트레이") : ko ("최소화하면 트레이에서 계속 동작합니다"), juce::dontSendNotification);
+    statusRight.setText (narrowStatus ? tr ("최소화·X → 트레이") : tr ("최소화하면 트레이에서 계속 동작합니다"), juce::dontSendNotification);
     auto statusR = status.reduced (16, 0);
     statusR.removeFromRight (18);   // room for the grip
     statusRight.setBounds (statusR.removeFromRight (narrowStatus ? 124 : statusR.getWidth() / 2));
@@ -603,7 +604,7 @@ void MainComponent::openChainFor (PluginChain* chain, const juce::String& title)
 juce::String MainComponent::titleForChainOwner() const
 {
     if (chainOwnerId.isNull())
-        return ko ("마스터");
+        return tr ("마스터");
 
     if (chainIsFx)
     {
@@ -665,7 +666,7 @@ void MainComponent::showPluginManager()
 
             if (vst2Slots == 0)
             {
-                showStatus (on ? ko ("VST2 플러그인 사용: 켬 (이제 열거나 넣는 것부터)") : ko ("VST2 플러그인 사용: 끔 (이제 열거나 넣는 것부터)"));
+                showStatus (on ? tr ("VST2 플러그인 사용: 켬 (이제 열거나 넣는 것부터)") : tr ("VST2 플러그인 사용: 끔 (이제 열거나 넣는 것부터)"));
                 return;
             }
 
@@ -673,22 +674,20 @@ void MainComponent::showPluginManager()
 
             if (! document.hasFile())
             {
-                showStatus (on ? ko ("이 세션의 VST2 자리 ") + slots + ko ("개는 세션을 저장한 뒤 다시 열면 채워집니다")
-                               : ko ("이 세션의 VST2 플러그인 ") + slots + ko ("개는 세션을 저장한 뒤 다시 열어야 빠집니다"), true);
+                showStatus (on ? trf ("이 세션의 VST2 자리 {0}개는 세션을 저장한 뒤 다시 열면 채워집니다", slots)
+                               : trf ("이 세션의 VST2 플러그인 {0}개는 세션을 저장한 뒤 다시 열어야 빠집니다", slots), true);
                 return;
             }
 
-            showStatus (on ? ko ("VST2 플러그인 사용: 켬") : ko ("VST2 플러그인 사용: 끔"));
+            showStatus (on ? tr ("VST2 플러그인 사용: 켬") : tr ("VST2 플러그인 사용: 끔"));
             juce::Component::SafePointer<MainComponent> safeThis (this);
             juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                               .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                                              .withTitle (on ? ko ("VST2 자리 채우기") : ko ("VST2 플러그인 빼기"))
-                                              .withMessage (on ? ko ("이 세션에 VST2 플러그인 자리가 ") + slots + ko ("개 있습니다 (VST2가 꺼져 있어 비워 둔 자리).") + juce::newLine
-                                                                     + ko ("세션을 다시 열어 그 자리를 채울까요?")
-                                                               : ko ("이 세션의 VST2 플러그인 ") + slots + ko ("개는 세션을 다시 열 때까지 그대로 동작합니다.") + juce::newLine
-                                                                     + ko ("지금 세션을 다시 열어 그 자리를 비울까요? (세션 파일은 그대로, 다시 켜면 돌아옵니다)"))
-                                              .withButton (ko ("다시 열기"))
-                                              .withButton (ko ("나중에")),
+                                              .withTitle (on ? tr ("VST2 자리 채우기") : tr ("VST2 플러그인 빼기"))
+                                              .withMessage (on ? trf ("이 세션에 VST2 플러그인 자리가 {0}개 있습니다 (VST2가 꺼져 있어 비워 둔 자리).\n세션을 다시 열어 그 자리를 채울까요?", slots)
+                                                               : trf ("이 세션의 VST2 플러그인 {0}개는 세션을 다시 열 때까지 그대로 동작합니다.\n지금 세션을 다시 열어 그 자리를 비울까요? (세션 파일은 그대로, 다시 켜면 돌아옵니다)", slots))
+                                              .withButton (tr ("다시 열기"))
+                                              .withButton (tr ("나중에")),
                                           [safeThis] (int result)
             {
                 if (safeThis != nullptr && result == 1 && safeThis->document.hasFile())
@@ -897,7 +896,7 @@ void MainComponent::timerCallback()
     if (running && engine.isSplitMonitor() && ! engine.isMonitorRunning())
     {
         statusLeft.setColour (juce::Label::textColourId, Palette::danger);
-        statusLeft.setText (ko ("모니터 출력 멈춤 - 설정에서 출력 장치를 확인하세요"), juce::dontSendNotification);
+        statusLeft.setText (tr ("모니터 출력 멈춤 - 설정에서 출력 장치를 확인하세요"), juce::dontSendNotification);
     }
     else if (now < statusUntilMs)
     {
@@ -906,7 +905,7 @@ void MainComponent::timerCallback()
     else
     {
         statusLeft.setColour (juce::Label::textColourId, Palette::dimText);   // an error's red goes with its text
-        statusLeft.setText ((running ? ko ("오디오 동작 중") : ko ("오디오 멈춤 - 설정에서 오디오 장치를 확인하세요")) + "   " + ko ("끊김 ") + juce::String (engine.getXRunCount()) + ko ("회"),
+        statusLeft.setText (trf ("{0}   끊김 {1}회", (running ? tr ("오디오 동작 중") : tr ("오디오 멈춤 - 설정에서 오디오 장치를 확인하세요")), juce::String (engine.getXRunCount())),
                             juce::dontSendNotification);
     }
 
@@ -937,10 +936,10 @@ void MainComponent::timerCallback()
         pluginNote.clear();
 
         if (! faultedPlugins.isEmpty())
-            pluginNote << ko ("플러그인 오류로 꺼짐: ") << faultedPlugins.joinIntoString (", ") << ko (" - 그 자리는 소리를 그대로 통과시킵니다. 체인에서 빼거나 다시 넣으세요.");
+            pluginNote << trf ("플러그인 오류로 꺼짐: {0} - 그 자리는 소리를 그대로 통과시킵니다. 체인에서 빼거나 다시 넣으세요.", faultedPlugins.joinIntoString (", "));
 
         if (! stalledPlugins.isEmpty())
-            pluginNote << (pluginNote.isEmpty() ? "" : "\n") << ko ("응답이 없어 건너뛰는 중: ") << stalledPlugins.joinIntoString (", ") << ko (" - 그 플러그인이 다시 답하면 소리가 돌아옵니다.");
+            pluginNote << (pluginNote.isEmpty() ? "" : "\n") << trf ("응답이 없어 건너뛰는 중: {0} - 그 플러그인이 다시 답하면 소리가 돌아옵니다.", stalledPlugins.joinIntoString (", "));
 
         refreshNotice();
     }
@@ -958,8 +957,7 @@ void MainComponent::timerCallback()
 
         const auto sr = juce::jmax (1.0, engine.getSampleRate());
         const juce::String text = worst > 0 && ! settings.getLatencyNoticeDismissed()
-                                      ? ko ("마이크 체인에 지연이 있는 플러그인이 있습니다 (") + juce::String (1000.0 * worst / sr, 1)
-                                            + ko (" ms). 프리 센드나 직접 출력을 마스터와 같이 쓰면 위상이 어긋날 수 있습니다.")
+                                      ? trf ("마이크 체인에 지연이 있는 플러그인이 있습니다 ({0} ms). 프리 센드나 직접 출력을 마스터와 같이 쓰면 위상이 어긋날 수 있습니다.", juce::String (1000.0 * worst / sr, 1))
                                       : juce::String();
 
         if (text != latencyNote)
@@ -989,8 +987,8 @@ bool MainComponent::saveIfDirty()
 
     if (result.failed())
     {
-        showStatus (ko ("저장 실패: ") + result.getErrorMessage(), true);
-        setSaveError (ko ("저장 실패: ") + result.getErrorMessage());
+        showStatus (trf ("저장 실패: {0}", result.getErrorMessage()), true);
+        setSaveError (trf ("저장 실패: {0}", result.getErrorMessage()));
         return false;
     }
 
@@ -1194,12 +1192,12 @@ void MainComponent::askSaveBeforeUpdate (std::function<void (bool)> reply)
     }
 
     const auto message = document.hasFile()
-        ? "\"" + document.getDisplayName() + "\"" + ko ("에 저장하지 않은 변경이 있습니다. 저장하시겠습니까?")
-        : ko ("이 세션은 아직 파일로 저장되지 않았습니다. 저장하시겠습니까?");
-    auto* alert = new juce::AlertWindow (ko ("업데이트 설치"), message,
+        ? trf ("\"{0}\"에 저장하지 않은 변경이 있습니다. 저장하시겠습니까?", document.getDisplayName())
+        : tr ("이 세션은 아직 파일로 저장되지 않았습니다. 저장하시겠습니까?");
+    auto* alert = new juce::AlertWindow (tr ("업데이트 설치"), message,
         juce::MessageBoxIconType::QuestionIcon, this);
-    alert->addButton (ko ("예"), 1, juce::KeyPress (juce::KeyPress::returnKey));
-    alert->addButton (ko ("아니오"), 2);
+    alert->addButton (tr ("예"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (tr ("아니오"), 2);
     alert->setVisible (true);
     updateSaveDialog = alert;
     updateSavePending = true;
@@ -1280,11 +1278,11 @@ void MainComponent::withSessionSecured (std::function<void()> action)
             return;
         }
 
-        auto* alert = new juce::AlertWindow (ko ("저장 실패"),
-                                             ko ("세션을 저장하지 못했습니다:\n") + result.getErrorMessage() + ko ("\n\n저장하지 않은 변경을 버리고 계속할까요?"),
+        auto* alert = new juce::AlertWindow (tr ("저장 실패"),
+                                             trf ("세션을 저장하지 못했습니다:\n{0}\n\n저장하지 않은 변경을 버리고 계속할까요?", result.getErrorMessage()),
                                              juce::MessageBoxIconType::WarningIcon, this);
-        alert->addButton (ko ("버리고 계속"), 1);
-        alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        alert->addButton (tr ("버리고 계속"), 1);
+        alert->addButton (tr ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
         alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, action] (int r)
         {
             if (safeThis != nullptr && r == 1)
@@ -1296,11 +1294,11 @@ void MainComponent::withSessionSecured (std::function<void()> action)
         return;
     }
 
-    auto* alert = new juce::AlertWindow (ko ("저장하지 않은 세션"), ko ("이 세션은 아직 파일로 저장되지 않았습니다. 저장할까요?"),
+    auto* alert = new juce::AlertWindow (tr ("저장하지 않은 세션"), tr ("이 세션은 아직 파일로 저장되지 않았습니다. 저장할까요?"),
                                          juce::MessageBoxIconType::QuestionIcon, this);
-    alert->addButton (ko ("저장"), 1, juce::KeyPress (juce::KeyPress::returnKey));
-    alert->addButton (ko ("저장 안 함"), 2);
-    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    alert->addButton (tr ("저장"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (tr ("저장 안 함"), 2);
+    alert->addButton (tr ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, action] (int r)
     {
         if (safeThis == nullptr || r == 0)
@@ -1331,7 +1329,7 @@ void MainComponent::newSession()
         pluginNote.clear();
         setSessionNote ({}, false);   // the old session's notes do not describe the new one
         setSaveError ({});
-        showStatus (ko ("새 세션"));
+        showStatus (tr ("새 세션"));
     });
 }
 
@@ -1348,7 +1346,7 @@ void MainComponent::loadSession (const juce::File& file)
 
     if (result.failed())
     {
-        setSessionNote (ko ("세션 열기 실패: ") + result.getErrorMessage(), true);
+        setSessionNote (trf ("세션 열기 실패: {0}", result.getErrorMessage()), true);
         return;
     }
 
@@ -1359,12 +1357,12 @@ void MainComponent::loadSession (const juce::File& file)
     setSaveError ({});
     settings.setLastSessionFile (file);
     settings.addRecentSession (file);
-    showStatus (ko ("열림: ") + file.getFileName());
+    showStatus (trf ("열림: {0}", file.getFileName()));
 
     if (safeMode)
     {
         if (! pluginErrors.isEmpty())   // the parser's own warnings (skipped entries) stay: they are data the operator must know about
-            warnings.add (ko ("안전 모드: 플러그인과 세션의 장치를 불러오지 않았습니다 (설정은 세션에 그대로 남습니다)"));
+            warnings.add (tr ("안전 모드: 플러그인과 세션의 장치를 불러오지 않았습니다 (설정은 세션에 그대로 남습니다)"));
     }
     else
     {
@@ -1385,12 +1383,12 @@ void MainComponent::loadSession (const juce::File& file)
     }
 
     if (! warnings.isEmpty())
-        setSessionNote (ko ("세션을 열었지만 확인이 필요합니다: ") + warnings.joinIntoString ("\n"), true);
+        setSessionNote (trf ("세션을 열었지만 확인이 필요합니다: {0}", warnings.joinIntoString ("\n")), true);
 }
 
 void MainComponent::openSessionDialog()
 {
-    chooser = std::make_unique<juce::FileChooser> (ko ("세션 열기"), document.hasFile() ? document.getFile().getParentDirectory() : defaultSessionFolder(), "*.livemix");
+    chooser = std::make_unique<juce::FileChooser> (tr ("세션 열기"), document.hasFile() ? document.getFile().getParentDirectory() : defaultSessionFolder(), "*.livemix");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc)
     {
         const auto file = fc.getResult();
@@ -1412,14 +1410,14 @@ bool MainComponent::saveSession()
 
     if (result.failed())
     {
-        setSaveError (ko ("저장 실패: ") + result.getErrorMessage());
+        setSaveError (trf ("저장 실패: {0}", result.getErrorMessage()));
         return false;
     }
 
     setSaveError ({});
     settings.setLastSessionFile (document.getFile());
     settings.addRecentSession (document.getFile());
-    showStatus (ko ("저장됨: ") + document.getFile().getFileName());
+    showStatus (trf ("저장됨: {0}", document.getFile().getFileName()));
     return true;
 }
 
@@ -1427,7 +1425,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
 {
     const auto suggested = (document.hasFile() ? document.getFile().getParentDirectory() : defaultSessionFolder())
                                .getChildFile (document.getDisplayName() + MixSession::fileExtension);
-    chooser = std::make_unique<juce::FileChooser> (ko ("세션 저장"), suggested, "*.livemix");
+    chooser = std::make_unique<juce::FileChooser> (tr ("세션 저장"), suggested, "*.livemix");
     juce::Component::SafePointer<MainComponent> safeThis (this);
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
                           [safeThis, then] (const juce::FileChooser& fc)
@@ -1453,7 +1451,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
             // the chooser warned about the name the operator typed (e.g. "Show.txt"), not this one: never overwrite it unseen
             if (file.existsAsFile())
             {
-                self.setSaveError (ko ("같은 이름의 세션 파일이 이미 있습니다 (확장자를 붙인 이름): ") + file.getFullPathName());
+                self.setSaveError (trf ("같은 이름의 세션 파일이 이미 있습니다 (확장자를 붙인 이름): {0}", file.getFullPathName()));
 
                 if (then)
                     then (false);
@@ -1467,7 +1465,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
 
         if (result.failed())
         {
-            self.setSaveError (ko ("저장 실패: ") + result.getErrorMessage());
+            self.setSaveError (trf ("저장 실패: {0}", result.getErrorMessage()));
 
             if (then)
                 then (false);
@@ -1478,7 +1476,7 @@ void MainComponent::saveSessionAs (std::function<void (bool)> then)
         self.setSaveError ({});
         self.settings.setLastSessionFile (file);
         self.settings.addRecentSession (file);
-        self.showStatus (ko ("저장됨: ") + file.getFileName());
+        self.showStatus (trf ("저장됨: {0}", file.getFileName()));
 
         if (then)
             then (true);
@@ -1510,7 +1508,7 @@ bool MainComponent::openFromCommandLine (const juce::String& commandLine)
 
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { ko ("세션"), ko ("온라인 백업"), ko ("설정"), ko ("합방"), ko ("도움말") };
+    return { tr ("세션"), tr ("온라인 백업"), tr ("설정"), tr ("합방"), tr ("도움말") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
@@ -1528,12 +1526,12 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
     {
         case 0:
         {
-            menu.addItem (withShortcut (1, ko ("새 세션"), "Ctrl+N"));
-            menu.addItem (2, ko ("열기..."));
-            menu.addItem (withShortcut (3, ko ("저장"), "Ctrl+S"));
-            menu.addItem (withShortcut (4, ko ("다른 이름으로 저장..."), "Ctrl+Shift+S"));
+            menu.addItem (withShortcut (1, tr ("새 세션"), "Ctrl+N"));
+            menu.addItem (2, tr ("열기..."));
+            menu.addItem (withShortcut (3, tr ("저장"), "Ctrl+S"));
+            menu.addItem (withShortcut (4, tr ("다른 이름으로 저장..."), "Ctrl+Shift+S"));
             menu.addSeparator();
-            menu.addItem (5, ko ("세션 이름 바꾸기..."));
+            menu.addItem (5, tr ("세션 이름 바꾸기..."));
 
             const auto recent = settings.getRecentSessions();
 
@@ -1545,33 +1543,33 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
                     recentMenu.addItem (100 + i, juce::File (recent[i]).getFileNameWithoutExtension());
 
                 menu.addSeparator();
-                menu.addSubMenu (ko ("최근 세션"), recentMenu);
+                menu.addSubMenu (tr ("최근 세션"), recentMenu);
             }
 
             menu.addSeparator();
-            menu.addItem (9, ko ("종료"));
+            menu.addItem (9, tr ("종료"));
             break;
         }
 
         case 1:
-            menu.addItem (1, ko ("온라인 백업 창 열기..."));
+            menu.addItem (1, tr ("온라인 백업 창 열기..."));
             break;
 
         case 2:
-            menu.addItem (1, ko ("설정..."));
-            menu.addItem (2, ko ("플러그인 관리..."));
-            menu.addItem (3, ko ("LUFS 미터..."));
+            menu.addItem (1, tr ("설정..."));
+            menu.addItem (2, tr ("플러그인 관리..."));
+            menu.addItem (3, tr ("LUFS 미터..."));
             break;
 
         case 3:
-            menu.addItem (1, ko ("합방 창 열기..."), collabSession != nullptr);
+            menu.addItem (1, tr ("합방 창 열기..."), collabSession != nullptr);
             break;
 
         case 4:
-            menu.addItem (1, ko ("커뮤니티 (카카오톡 오픈채팅)"));
-            menu.addItem (2, ko ("업데이트 확인..."), Updater::isAvailable());
+            menu.addItem (1, tr ("커뮤니티 (카카오톡 오픈채팅)"));
+            menu.addItem (2, tr ("업데이트 확인..."), Updater::isAvailable());
             menu.addSeparator();
-            menu.addItem (3, ko ("LiveMix 정보"));
+            menu.addItem (3, tr ("LiveMix 정보"));
             break;
 
         default:
@@ -1644,11 +1642,11 @@ void MainComponent::menuItemSelected (int id, int topLevelMenuIndex)
 
 void MainComponent::renameSessionDialog()
 {
-    auto* alert = new juce::AlertWindow (ko ("세션 이름"), ko ("이 세션의 이름 (창 제목과 위쪽 이름 칸에 씁니다). 비우면 세션 파일의 이름을 씁니다."), juce::MessageBoxIconType::NoIcon);
+    auto* alert = new juce::AlertWindow (tr ("세션 이름"), tr ("이 세션의 이름 (창 제목과 위쪽 이름 칸에 씁니다). 비우면 세션 파일의 이름을 씁니다."), juce::MessageBoxIconType::NoIcon);
     const auto shown = document.getDisplayName();
-    alert->addTextEditor ("name", shown, ko ("이름"));
-    alert->addButton (ko ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
-    alert->addButton (ko ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    alert->addTextEditor ("name", shown, tr ("이름"));
+    alert->addButton (tr ("확인"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton (tr ("취소"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
     juce::Component::SafePointer<MainComponent> safeThis (this);
     alert->enterModalState (true, juce::ModalCallbackFunction::create ([safeThis, alert, shown] (int r)
     {
@@ -1666,7 +1664,7 @@ void MainComponent::renameSessionDialog()
 void MainComponent::showAbout()
 {
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "LiveMix " + juce::JUCEApplication::getInstance()->getApplicationVersion(),
-                                            ko ("방송용 라이브 마이크 VST3 · VST2 호스트\n곰튀김\n\n") + "VST is a trademark of Steinberg Media Technologies GmbH.", ko ("확인"));
+                                            tr ("방송용 라이브 마이크 VST3 · VST2 호스트\n곰튀김\n\nVST is a trademark of Steinberg Media Technologies GmbH."), tr ("확인"));
 }
 
 void MainComponent::showBackupDialog()
@@ -1692,7 +1690,7 @@ void MainComponent::showBackupDialog()
 
         if (! self.document.hasFile())
         {
-            self.showStatus (ko ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
+            self.showStatus (tr ("먼저 세션을 저장하세요 (세션 > 저장)"), true);
             return false;
         }
 
@@ -1700,7 +1698,7 @@ void MainComponent::showBackupDialog()
 
         if (! self.saveIfDirty())
         {
-            self.showStatus (ko ("세션을 저장하지 못해 백업을 시작하지 않았습니다"), true);   // an upload of the stale file would pass for a backup
+            self.showStatus (tr ("세션을 저장하지 못해 백업을 시작하지 않았습니다"), true);   // an upload of the stale file would pass for a backup
             return false;
         }
 
@@ -1725,21 +1723,21 @@ void MainComponent::setHotkey (juce::StringArray& failures, int id, const juce::
     juce::String error;
 
     if (! hotkeys.set (id, juce::KeyPress::createFromDescription (description), error))
-        failures.add (what + ko (" 핫키(") + description + ko (") 등록 실패: ") + error);
+        failures.add (trf ("{0} 핫키({1}) 등록 실패: {2}", what, description, error));
 }
 
 void MainComponent::registerHotkeys()
 {
     fixedKeyFailures.clear();
-    setHotkey (fixedKeyFailures, 1, settings.getMicMuteHotkey(), ko ("마이크 뮤트그룹"));
-    setHotkey (fixedKeyFailures, 2, settings.getFxMuteHotkey(), ko ("FX 뮤트그룹"));
-    setHotkey (fixedKeyFailures, 3, settings.getWindowHotkey(), ko ("창 숨기기/불러오기"));
-    setHotkey (fixedKeyFailures, allMicsHotkeyId, settings.getMicAllMuteHotkey(), ko ("마이크 전체 뮤트"));
-    setHotkey (fixedKeyFailures, allFxHotkeyId, settings.getFxAllMuteHotkey(), ko ("FX 전체 뮤트"));
+    setHotkey (fixedKeyFailures, 1, settings.getMicMuteHotkey(), tr ("마이크 뮤트그룹"));
+    setHotkey (fixedKeyFailures, 2, settings.getFxMuteHotkey(), tr ("FX 뮤트그룹"));
+    setHotkey (fixedKeyFailures, 3, settings.getWindowHotkey(), tr ("창 숨기기/불러오기"));
+    setHotkey (fixedKeyFailures, allMicsHotkeyId, settings.getMicAllMuteHotkey(), tr ("마이크 전체 뮤트"));
+    setHotkey (fixedKeyFailures, allFxHotkeyId, settings.getFxAllMuteHotkey(), tr ("FX 전체 뮤트"));
 
     for (int group = 1; group <= MixSession::maxPluginGroups; ++group)
         setHotkey (fixedKeyFailures, firstPluginGroupHotkeyId + group - 1, settings.getPluginGroupHotkey (group),
-                   ko ("플러그인 그룹 ") + juce::String (group));
+                   trf ("플러그인 그룹 {0}", juce::String (group)));
 
     trackKeyFailures = applyTrackHotkeys();
     showHotkeyFailures();
@@ -1774,7 +1772,7 @@ void MainComponent::showHotkeyFailures()
     failures.addArray (trackKeyFailures);
     hotkeyErrorNote = failures.joinIntoString (" / ");
     if (hotkeyErrorNote.isNotEmpty())
-        hotkeyErrorNote += ko (" 설정에서 다른 키로 바꿔 주세요.");
+        hotkeyErrorNote += tr (" 설정에서 다른 키로 바꿔 주세요.");
     refreshNotice();
 }
 
@@ -1785,12 +1783,11 @@ void MainComponent::togglePluginGroupEverywhere (int group)
 
     if (channels == 0)
     {
-        showStatus (ko ("플러그인 그룹 ") + juce::String (group + 1) + ko ("이(가) 있는 마이크가 없습니다 (체인 열기 아래 '플러그인 그룹'에서 만듭니다)"), true);
+        showStatus (trf ("플러그인 그룹 {0}이(가) 있는 마이크가 없습니다 (체인 열기 아래 '플러그인 그룹'에서 만듭니다)", juce::String (group + 1)), true);
         return;
     }
 
-    showStatus (ko ("플러그인 그룹 ") + juce::String (group + 1) + (switchedOff ? ko (" 끔") : ko (" 켬"))
-                + "  (" + ko ("마이크 ") + juce::String (channels) + ko ("개") + ")");
+    showStatus (trf ("플러그인 그룹 {0}{1}  (마이크 {2}개)", juce::String (group + 1), (switchedOff ? tr (" 끔") : tr (" 켬")), juce::String (channels)));
 }
 
 void MainComponent::layoutFxDrawer()
@@ -1816,10 +1813,10 @@ void MainComponent::muteGroupsChanged()
     fxDrawer.setMuteState (allFx, fxGroup);
 
     // everything of a kind says so before its group does
-    const auto mic = allMics ? ko ("모든 마이크") : micGroup ? ko ("마이크 뮤트그룹") : juce::String();
-    const auto fx = allFx ? ko ("모든 FX") : fxGroup ? ko ("FX 뮤트그룹") : juce::String();
-    showStatus (mic.isEmpty() && fx.isEmpty() ? ko ("뮤트 해제")
-                : (mic.isNotEmpty() && fx.isNotEmpty() ? mic + ko ("·") + fx : mic + fx) + ko (" 뮤트 중"));
+    const auto mic = allMics ? tr ("모든 마이크") : micGroup ? tr ("마이크 뮤트그룹") : juce::String();
+    const auto fx = allFx ? tr ("모든 FX") : fxGroup ? tr ("FX 뮤트그룹") : juce::String();
+    showStatus (mic.isEmpty() && fx.isEmpty() ? tr ("뮤트 해제")
+                : trf ("{0} 뮤트 중", (mic.isNotEmpty() && fx.isNotEmpty() ? mic + ko ("·") + fx : mic + fx)));
 }
 
 void MainComponent::hotkeyPressed (int id)
@@ -1877,13 +1874,13 @@ void MainComponent::toggleMuteGroup (MuteGroups::Group group)
     {
         if (group == MuteGroups::Group::fx)
         {
-            showStatus (ko ("FX 뮤트그룹에 넣은 FX가 없습니다 - FX마다 '뮤트그룹'을 켜세요"), true);
+            showStatus (tr ("FX 뮤트그룹에 넣은 FX가 없습니다 - FX마다 '뮤트그룹'을 켜세요"), true);
             if (drawer != Drawer::fx)
                 showDrawer (Drawer::fx);
         }
         else
         {
-            showStatus (ko ("마이크 뮤트그룹에 넣은 마이크가 없습니다 - 마이크 카드의 '뮤트그룹'을 켜세요"), true);
+            showStatus (tr ("마이크 뮤트그룹에 넣은 마이크가 없습니다 - 마이크 카드의 '뮤트그룹'을 켜세요"), true);
         }
         return;
     }
@@ -1918,7 +1915,8 @@ void MainComponent::showSettingsDialog()
                           {
                               return safe != nullptr ? TrackHotkeys::settingsRows (safe->document.getSession(), safe->settings)
                                                      : std::vector<TrackHotkeys::Track>();
-                          });
+                          },
+                          [safe] { if (safe != nullptr && safe->onRestartApp) safe->onRestartApp(); });
 }
 
 } // namespace gocue::livemix

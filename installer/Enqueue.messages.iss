@@ -18,3 +18,14 @@ english.UpdateDoneText=%1 has been updated to %2.
 english.UpdateDoneButton=Finish
 english.CoupangShortcutName=Coupang
 english.CoupangOtherShortcutName=쿠팡
+#ifdef LiveMixJapanese
+japanese.CoupangGroup=Coupangショートカット (任意)
+japanese.CoupangTask=デスクトップにCoupangのショートカットを追加します。(このショートカットはCoupang Partnersプログラムの一環です。)
+japanese.CoupangFinishAsk=デスクトップにCoupangのショートカットを追加しますか?
+japanese.CoupangFinishNote=(このショートカットはCoupang Partnersプログラムの一環です。)
+japanese.UpdateDoneTitle=%1の更新
+japanese.UpdateDoneText=%1を%2に更新しました。
+japanese.UpdateDoneButton=完了
+japanese.CoupangShortcutName=Coupang
+japanese.CoupangOtherShortcutName=쿠팡
+#endif

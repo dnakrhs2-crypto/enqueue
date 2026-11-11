@@ -1,3 +1,4 @@
+#include "app/UiTranslation.h"
 #include "PluginScan.h"
 #include <condition_variable>
 #include <cstring>
@@ -292,8 +293,7 @@ juce::String PluginScanCoordinator::getSkippedMessage() const
             files.addIfNotAlreadyThere (result.file);
     if (files.isEmpty()) return {};
     for (auto& file : files) file = juce::File (file).getFileName();
-    return juce::String::fromUTF8 ("스캔 중 튕기거나 멈춘 파일 ") + juce::String (files.size())
-         + juce::String::fromUTF8 ("개는 건너뛰었습니다: ") + files.joinIntoString (", ");
+    return sharedTrf ("스캔 중 튕기거나 멈춘 파일 {0}개는 건너뛰었습니다: {1}", juce::String (files.size()), files.joinIntoString (", "));
 }
 void PluginScanCoordinator::record (const Result& result)
 {

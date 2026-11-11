@@ -1,3 +1,4 @@
+#include "app/UiTranslation.h"
 #include "audio/PluginHost.h"
 
 namespace gocue
@@ -153,13 +154,13 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::createInstance (const juc
 {
     if (safeMode)
     {
-        error = juce::String::fromUTF8 ("안전 모드: 플러그인을 불러오지 않습니다 (") + description.name + ")";
+        error = sharedTrf ("안전 모드: 플러그인을 불러오지 않습니다 ({0})", description.name);
         return nullptr;
     }
 
     if (description.pluginFormatName == "VST" && ! vst2Enabled)
     {
-        error = juce::String::fromUTF8 ("VST2 사용이 꺼져 있습니다 (플러그인 관리에서 켜세요)");   // the callers name the plugin
+        error = sharedTr ("VST2 사용이 꺼져 있습니다 (플러그인 관리에서 켜세요)");   // the callers name the plugin
         return nullptr;
     }
 
@@ -172,7 +173,7 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::createInstance (const juc
     catch (...)
     {
         instance = nullptr;
-        error = juce::String::fromUTF8 ("플러그인을 만드는 중 오류가 났습니다: ") + description.name;
+        error = sharedTrf ("플러그인을 만드는 중 오류가 났습니다: {0}", description.name);
     }
 
     if (instance == nullptr && error.isEmpty())
@@ -242,21 +243,21 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHost::createInstance (const Plu
             description = *byId;   // the one plugin with this id: it moved and was renamed
         else if (idMatches > 1)
         {
-            error = juce::String::fromUTF8 ("같은 ID의 플러그인이 여러 개라 어느 것인지 알 수 없습니다 (저장된 파일과 이름이 목록에 없음): ") + description.name;
+            error = sharedTrf ("같은 ID의 플러그인이 여러 개라 어느 것인지 알 수 없습니다 (저장된 파일과 이름이 목록에 없음): {0}", description.name);
             return nullptr;
         }
     }
 
     if (description.fileOrIdentifier.isEmpty())
     {
-        error = juce::String::fromUTF8 ("저장된 플러그인 파일 경로가 없습니다");
+        error = sharedTr ("저장된 플러그인 파일 경로가 없습니다");
         return nullptr;
     }
 
     // a file-based plugin whose file is gone (another PC, uninstalled): say so instead of JUCE's "no compatible format"
     if (juce::File::isAbsolutePath (description.fileOrIdentifier) && ! juce::File (description.fileOrIdentifier).exists())
     {
-        error = juce::String::fromUTF8 ("이 PC에 없는 플러그인 파일입니다: ") + description.fileOrIdentifier;
+        error = sharedTrf ("이 PC에 없는 플러그인 파일입니다: {0}", description.fileOrIdentifier);
         return nullptr;
     }
 

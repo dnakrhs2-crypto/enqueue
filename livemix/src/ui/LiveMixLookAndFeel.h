@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LiveMixPalette.h"
+#include "Localisation.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -15,7 +16,7 @@ public:
               Palette::background, Palette::card, Palette::card2, Palette::line, Palette::text,
               Palette::card2, juce::Colours::white, Palette::accent, Palette::text))
     {
-        setDefaultSansSerifTypefaceName ("Malgun Gothic");
+        setDefaultSansSerifTypefaceName (uiTypefaceFor (currentLanguage()));
 
         setColour (juce::TextButton::buttonColourId, Palette::card2);
         setColour (juce::TextButton::buttonOnColourId, Palette::accent);

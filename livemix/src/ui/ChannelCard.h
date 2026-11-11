@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Localisation.h"
 #include "MixDocument.h"
 #include "Widgets.h"
 
@@ -82,10 +83,10 @@ private:
     juce::Label groupsCaption;
     std::array<std::unique_ptr<juce::TextButton>, (size_t) MixSession::maxPluginGroups> groupButtons;   // 1..5 under the chain: enabled once the group exists, lit (red) while it is off
     static constexpr int chainFooter = 1 + 30 + 6 + 30;   // after the chip row step: chain actions, then group actions
-    static constexpr int groupRowWidth = 112 + 8 + 66 + 5 * 30 + 4 * 4;
+    int groupRowWidth() const;   // the group button, its caption and the five numbers on one line
     std::vector<std::unique_ptr<SendRow>> sends;
     int sendNameWidth() const;   // the send rows' shared name width
-    Chip masterChip, directChip, muteGroupChip { ko ("뮤트그룹") };
+    Chip masterChip, directChip, muteGroupChip { tr ("뮤트그룹") };
     juce::ComboBox directCombo;
     MeterBar meter_;
     bool refreshing = false;

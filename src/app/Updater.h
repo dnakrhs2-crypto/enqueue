@@ -29,10 +29,12 @@ public:
         A message-thread caller runs inline and must reply synchronously; it cannot wait on its own UI. */
     static bool askOnMessageThread (std::function<void (std::function<void (bool)> reply)> question);
 
-    /** Call once the main window is visible. Starts the automatic (daily) background check. */
+    /** Call once the main window is visible. Starts the automatic (daily) background check.
+        'language': WinSparkle's own windows speak it ("ko", "en", "ja"); empty leaves them in Windows' display language. */
     static void initialise (const juce::String& companyName, const juce::String& appName,
                             const juce::String& version, Callbacks callbacks,
-                            const juce::String& registryPath = "Software\\GoCue\\GoCue\\WinSparkle");
+                            const juce::String& registryPath = "Software\\GoCue\\GoCue\\WinSparkle",
+                            const juce::String& language = {});
 
     /** Manual check with WinSparkle's own UI (menu item). */
     static void checkForUpdatesWithUI();

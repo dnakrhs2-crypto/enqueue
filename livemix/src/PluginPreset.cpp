@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "PluginPreset.h"
 
 #include "model/ProjectSerializer.h"
@@ -36,31 +37,31 @@ juce::Result PluginPreset::fromJson (const juce::String& json, PluginPreset& out
     const auto root = juce::JSON::parse (json);
 
     if (root.getDynamicObject() == nullptr)
-        return juce::Result::fail (k ("플러그인 프리셋 파일이 아닙니다 (JSON이 아닙니다)"));
+        return juce::Result::fail (tr ("플러그인 프리셋 파일이 아닙니다 (JSON이 아닙니다)"));
 
     if (root.getProperty ("app", "").toString() != "LiveMix" || root.getProperty ("kind", "").toString() != "pluginPreset")
-        return juce::Result::fail (k ("LiveMix 플러그인 프리셋 파일이 아닙니다"));
+        return juce::Result::fail (tr ("LiveMix 플러그인 프리셋 파일이 아닙니다"));
 
     const auto versionVar = root.getProperty ("version", juce::var());
 
     if (versionVar.isVoid())
-        return juce::Result::fail (k ("프리셋 파일에 버전 표시가 없습니다"));
+        return juce::Result::fail (tr ("프리셋 파일에 버전 표시가 없습니다"));
 
     if (! (versionVar.isInt() || versionVar.isInt64() || versionVar.isDouble()))
-        return juce::Result::fail (k ("프리셋 파일의 버전 표시가 잘못됐습니다"));
+        return juce::Result::fail (tr ("프리셋 파일의 버전 표시가 잘못됐습니다"));
 
     const double versionNumber = (double) versionVar;
 
     if (! std::isfinite (versionNumber) || versionNumber != std::floor (versionNumber) || versionNumber < 1.0 || versionNumber > 1.0e6)
-        return juce::Result::fail (k ("프리셋 파일의 버전 표시가 잘못됐습니다: ") + versionVar.toString());
+        return juce::Result::fail (trf ("프리셋 파일의 버전 표시가 잘못됐습니다: {0}", versionVar.toString()));
 
     const int version = (int) versionNumber;
 
     if (version > currentVersion)
-        return juce::Result::fail (k ("더 새로운 LiveMix로 저장한 프리셋입니다 (파일 버전 ") + juce::String (version) + k ("). LiveMix를 업데이트하세요."));
+        return juce::Result::fail (trf ("더 새로운 LiveMix로 저장한 프리셋입니다 (파일 버전 {0}). LiveMix를 업데이트하세요.", juce::String (version)));
 
     if (ProjectSerializer::hasTrailingJsonData (json))
-        return juce::Result::fail (k ("프리셋 파일 뒤에 알 수 없는 내용이 붙어 있습니다"));
+        return juce::Result::fail (tr ("프리셋 파일 뒤에 알 수 없는 내용이 붙어 있습니다"));
 
     // the plugin list: an array of objects, each with a decodable state - a wrong shape is refused, not quietly
     // shortened to a preset that loads as something else than what was saved
@@ -68,12 +69,12 @@ juce::Result PluginPreset::fromJson (const juce::String& json, PluginPreset& out
     const auto* pluginsArray = pluginsVar.getArray();
 
     if (pluginsArray == nullptr)
-        return juce::Result::fail (k ("프리셋 파일에 플러그인 목록이 없습니다"));
+        return juce::Result::fail (tr ("프리셋 파일에 플러그인 목록이 없습니다"));
 
     for (const auto& item : *pluginsArray)
     {
         if (item.getDynamicObject() == nullptr)
-            return juce::Result::fail (k ("프리셋 파일의 플러그인 항목이 잘못됐습니다"));
+            return juce::Result::fail (tr ("프리셋 파일의 플러그인 항목이 잘못됐습니다"));
 
         const auto state = item.getProperty ("state", "").toString();
 
@@ -82,7 +83,7 @@ juce::Result PluginPreset::fromJson (const juce::String& json, PluginPreset& out
             juce::MemoryOutputStream decoded;
 
             if (! juce::Base64::convertFromBase64 (decoded, state))
-                return juce::Result::fail (k ("프리셋 파일의 플러그인 설정 데이터를 읽을 수 없습니다: ") + item.getProperty ("name", "").toString());
+                return juce::Result::fail (trf ("프리셋 파일의 플러그인 설정 데이터를 읽을 수 없습니다: {0}", item.getProperty ("name", "").toString()));
         }
     }
 
@@ -103,7 +104,7 @@ juce::Result PluginPreset::save (const juce::File& target) const
     const auto bytes = (juce::int64) json.getNumBytesAsUTF8();
 
     if (bytes > maxFileBytes)
-        return juce::Result::fail (k ("프리셋이 너무 커서 저장하지 않았습니다 (") + juce::File::descriptionOfSizeInBytes (bytes) + ")");
+        return juce::Result::fail (trf ("프리셋이 너무 커서 저장하지 않았습니다 ({0})", juce::File::descriptionOfSizeInBytes (bytes)));
 
     target.getParentDirectory().createDirectory();
     return SafeFileWrite::writeTextVerified (target, json, [] (const juce::String& readBack) -> juce::Result
@@ -116,10 +117,10 @@ juce::Result PluginPreset::save (const juce::File& target) const
 juce::Result PluginPreset::load (const juce::File& file, PluginPreset& out)
 {
     if (! file.existsAsFile())
-        return juce::Result::fail (k ("파일이 없습니다: ") + file.getFullPathName());
+        return juce::Result::fail (trf ("파일이 없습니다: {0}", file.getFullPathName()));
 
     if (file.getSize() > maxFileBytes)
-        return juce::Result::fail (k ("프리셋 파일이 너무 큽니다 (") + juce::File::descriptionOfSizeInBytes (file.getSize()) + k ("): 프리셋 파일이 아닙니다"));
+        return juce::Result::fail (trf ("프리셋 파일이 너무 큽니다 ({0}): 프리셋 파일이 아닙니다", juce::File::descriptionOfSizeInBytes (file.getSize())));
 
     const auto result = fromJson (file.loadFileAsString(), out);
 

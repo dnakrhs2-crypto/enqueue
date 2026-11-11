@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "MasterCard.h"
 
 #include <cmath>
@@ -19,35 +20,35 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     badge.setColour (juce::Label::backgroundColourId, Palette::text);
     badge.setColour (juce::Label::textColourId, Palette::background);
     addAndMakeVisible (badge);
-    title.setText (ko ("마스터"), juce::dontSendNotification);
+    title.setText (tr ("마스터"), juce::dontSendNotification);
     title.setFont (titleFont());
     addAndMakeVisible (title);
-    styleCaption (note, ko ("마이크 + FX 전부 여기로"));
+    styleCaption (note, tr ("마이크 + FX 전부 여기로"));
     note.setFont (bodyFont (12.5f));
     addAndMakeVisible (note);
 
-    styleCaption (chainCaption, ko ("VST3 체인"));
+    styleCaption (chainCaption, tr ("VST3 체인"));
     addAndMakeVisible (chainCaption);
-    openChainButton.setButtonText (ko ("체인 열기"));
+    openChainButton.setButtonText (tr ("체인 열기"));
     openChainButton.setWantsKeyboardFocus (false);
     openChainButton.onClick = [this] { if (onOpenChain) onOpenChain(); };
     addAndMakeVisible (openChainButton);
-    addPluginButton.setButtonText (ko ("+ 추가"));
+    addPluginButton.setButtonText (tr ("+ 추가"));
     addPluginButton.setWantsKeyboardFocus (false);
     addPluginButton.onClick = [this] { if (onAddPlugin) onAddPlugin(); };
     addAndMakeVisible (addPluginButton);
     lufsButton.setButtonText ("LUFS");
-    lufsButton.setTooltip (ko ("마스터 출력의 라우드니스 미터 (LUFS, 트루 피크)"));
+    lufsButton.setTooltip (tr ("마스터 출력의 라우드니스 미터 (LUFS, 트루 피크)"));
     lufsButton.setWantsKeyboardFocus (false);
     lufsButton.onClick = [this] { if (onOpenLoudness) onOpenLoudness(); };
     addAndMakeVisible (lufsButton);
     recordingButton.setComponentID ("recording");
-    recordingButton.setButtonText (ko ("녹음"));
+    recordingButton.setButtonText (tr ("녹음"));
     recordingButton.setWantsKeyboardFocus (false);
     recordingButton.onClick = [this] { if (onOpenRecording) onOpenRecording(); };
     addAndMakeVisible (recordingButton);
 
-    styleCaption (latencyCaption, ko ("지연"));
+    styleCaption (latencyCaption, tr ("지연"));
     addAndMakeVisible (latencyCaption);
     latencyValue.setFont (juce::Font (juce::FontOptions (pt (26.0f), juce::Font::bold)));
     latencyValue.setText ("-", juce::dontSendNotification);
@@ -60,7 +61,7 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     compactLatency.setJustificationType (juce::Justification::centredRight);
     addChildComponent (compactLatency);
 
-    styleCaption (outputCaption, ko ("메인 출력"));
+    styleCaption (outputCaption, tr ("메인 출력"));
     addAndMakeVisible (outputCaption);
     outputCombo.setWantsKeyboardFocus (false);
     outputCombo.onChange = [this]
@@ -70,8 +71,8 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     };
     addAndMakeVisible (outputCombo);
 
-    obsToggle.setButtonText (ko ("OBS로 보내기"));
-    obsToggle.setTooltip (ko ("OBS에서 반드시 소스 추가(+)로 'LiveMix'를 추가해 주세요"));
+    obsToggle.setButtonText (tr ("OBS로 보내기"));
+    obsToggle.setTooltip (tr ("OBS에서 반드시 소스 추가(+)로 'LiveMix'를 추가해 주세요"));
     obsToggle.setWantsKeyboardFocus (false);
     obsToggle.onClick = [this]
     {
@@ -93,7 +94,7 @@ MasterCard::MasterCard (MixDocument& doc) : document (doc)
     addAndMakeVisible (obsSourceHint);
     refreshObsStatus();
 
-    styleCaption (meterCaption, ko ("출력 미터 L / R"));
+    styleCaption (meterCaption, tr ("출력 미터 L / R"));
     addAndMakeVisible (meterCaption);
     addAndMakeVisible (meter_);
     refresh();
@@ -108,15 +109,15 @@ void MasterCard::setDeviceChannels (const juce::StringArray& outs)
 void MasterCard::setLatency (double ms, int bufferSize, double sampleRate)
 {
     latencyValue.setText (ms > 0.0 ? juce::String (ms, 1) + " ms" : "-", juce::dontSendNotification);
-    latencyNote.setText (bufferSize > 0 ? juce::String (bufferSize) + ko (" 샘플") + " · " + juce::String (sampleRate / 1000.0, 1) + " kHz" : ko ("장치 없음"),
+    latencyNote.setText (bufferSize > 0 ? trf ("{0} 샘플 · {1} kHz", juce::String (bufferSize), juce::String (sampleRate / 1000.0, 1)) : tr ("장치 없음"),
                          juce::dontSendNotification);
     // its room is 134 px: a four-digit buffer ("지연 21.3 ms · 1024 샘플") did not fit and was cut - the word 샘플 goes
     // first. Measured as the label cuts (text + its border), not labelWidthForText's extra margin: "· 480 샘플" fits
-    const auto latency = ko ("지연 ") + juce::String (ms, 1) + " ms · " + juce::String (bufferSize);
-    const auto withWord = latency + ko (" 샘플");
+    const auto latency = trf ("지연 {0} ms · {1}", juce::String (ms, 1), juce::String (bufferSize));
+    const auto withWord = trf ("{0} 샘플", latency);
     const bool wordFits = juce::GlyphArrangement::getStringWidthInt (compactLatency.getFont(), withWord)
                         + compactLatency.getBorderSize().getLeftAndRight() <= compactLatencyWidth;
-    compactLatency.setText (ms <= 0.0 ? ko ("장치 없음") : wordFits ? withWord : latency, juce::dontSendNotification);
+    compactLatency.setText (ms <= 0.0 ? tr ("장치 없음") : wordFits ? withWord : latency, juce::dontSendNotification);
 }
 
 void MasterCard::setStrip (bool folded)
@@ -133,7 +134,7 @@ void MasterCard::setStrip (bool folded)
 void MasterCard::setRecordingSnapshot (const recording::Snapshot& snapshot)
 {
     const bool live = snapshot.state == recording::State::recording || snapshot.state == recording::State::stopping;
-    const auto text = live ? recordingElapsedText (snapshot.elapsedSeconds) : ko ("녹음");
+    const auto text = live ? recordingElapsedText (snapshot.elapsedSeconds) : tr ("녹음");
     if (recordingButton.red == live && recordingButton.getButtonText() == text) return;
     recordingButton.red = live;
     recordingButton.setButtonText (text);
@@ -179,22 +180,22 @@ void MasterCard::setObsInstalling (bool installing)
 
 void MasterCard::refreshObsToggle()
 {
-    obsToggle.setButtonText (obsInstalling ? ko ("설치 중...") : strip ? juce::String ("OBS") : ko ("OBS로 보내기"));
+    obsToggle.setButtonText (obsInstalling ? tr ("설치 중...") : strip ? juce::String ("OBS") : tr ("OBS로 보내기"));
 }
 
 juce::String MasterCard::obsStatusText (ObsStatus status)
 {
     switch (status)
     {
-        case ObsStatus::audioStopped: return ko ("오디오 멈춤");
-        case ObsStatus::sendFailed: return ko ("OBS 보내기 실패");
-        case ObsStatus::installNeeded: return ko ("OBS 플러그인 설치 필요");
-        case ObsStatus::restartObs: return ko ("OBS를 다시 시작하세요");
-        case ObsStatus::connected: return ko ("OBS 연결됨");
-        case ObsStatus::addSource: return ko ("OBS에 소스 추가 필요");
-        case ObsStatus::updateObs: return ko ("OBS 31.1 이상 필요");
-        case ObsStatus::portableObs: return ko ("휴대용 OBS: 플러그인 복사 필요");
-        case ObsStatus::waiting: return ko ("OBS 대기 중");
+        case ObsStatus::audioStopped: return tr ("오디오 멈춤");
+        case ObsStatus::sendFailed: return tr ("OBS 보내기 실패");
+        case ObsStatus::installNeeded: return tr ("OBS 플러그인 설치 필요");
+        case ObsStatus::restartObs: return tr ("OBS를 다시 시작하세요");
+        case ObsStatus::connected: return tr ("OBS 연결됨");
+        case ObsStatus::addSource: return tr ("OBS에 소스 추가 필요");
+        case ObsStatus::updateObs: return tr ("OBS 31.1 이상 필요");
+        case ObsStatus::portableObs: return tr ("휴대용 OBS: 플러그인 복사 필요");
+        case ObsStatus::waiting: return tr ("OBS 대기 중");
     }
     return {};
 }
@@ -210,16 +211,16 @@ MasterCard::ObsAdvice MasterCard::obsStatusFor (const juce::String& sendError, b
     if (restartNeeded) return advice (ObsStatus::restartObs);
     if (! deviceRunning) return advice (ObsStatus::audioStopped);
     if (reader == ObsSender::ReaderState::idle)
-        return advice (ObsStatus::addSource, ko ("OBS에 LiveMix 플러그인은 올라와 있지만 소리를 받는 곳이 없습니다. OBS 소스(+)에서 'LiveMix'를 추가하세요."));
+        return advice (ObsStatus::addSource, tr ("OBS에 LiveMix 플러그인은 올라와 있지만 소리를 받는 곳이 없습니다. OBS 소스(+)에서 'LiveMix'를 추가하세요."));
     for (const auto& obs : runningObs)
         if (obs.needsUpdate())
-            return advice (ObsStatus::updateObs, ko ("실행 중인 OBS ") + obs.versionString() + ko ("에서는 LiveMix 플러그인을 읽을 수 없습니다. OBS를 31.1 이상으로 업데이트하세요."));
+            return advice (ObsStatus::updateObs, trf ("실행 중인 OBS {0}에서는 LiveMix 플러그인을 읽을 수 없습니다. OBS를 31.1 이상으로 업데이트하세요.", obs.versionString()));
     for (const auto& obs : runningObs)
         if (obs.portable)
-            return advice (ObsStatus::portableObs, ko ("휴대용(포터블) OBS는 자동 설치 대상이 아닙니다. LiveMix 설치 폴더의 obs-plugin\\livemix-obs\\livemix-obs.dll을 포터블 OBS 폴더의 obs-plugins\\64bit\\에, obs-plugin\\livemix-obs\\data\\locale\\을 data\\obs-plugins\\livemix-obs\\locale\\에 복사한 뒤 OBS를 다시 시작하세요."));
+            return advice (ObsStatus::portableObs, tr ("휴대용(포터블) OBS는 자동 설치 대상이 아닙니다. LiveMix 설치 폴더의 obs-plugin\\livemix-obs\\livemix-obs.dll을 포터블 OBS 폴더의 obs-plugins\\64bit\\에, obs-plugin\\livemix-obs\\data\\locale\\을 data\\obs-plugins\\livemix-obs\\locale\\에 복사한 뒤 OBS를 다시 시작하세요."));
     if (! runningObs.empty())
-        return advice (ObsStatus::restartObs, ko ("켜져 있는 OBS가 LiveMix 플러그인을 읽지 않았습니다. OBS를 완전히 끄고 다시 켜세요."));
-    return advice (ObsStatus::waiting, ko ("OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요."));
+        return advice (ObsStatus::restartObs, tr ("켜져 있는 OBS가 LiveMix 플러그인을 읽지 않았습니다. OBS를 완전히 끄고 다시 켜세요."));
+    return advice (ObsStatus::waiting, tr ("OBS를 켜고 소스(+)에서 'LiveMix'를 추가하세요."));
 }
 
 void MasterCard::refreshObsStatus()
@@ -248,7 +249,7 @@ void MasterCard::refresh()
     else
     {
         outputCombo.clear (juce::dontSendNotification);
-        outputCombo.addItem (device.output.isEmpty() ? ko ("없음 (OBS로만)") : juce::String ("1-2"), 1);
+        outputCombo.addItem (device.output.isEmpty() ? tr ("없음 (OBS로만)") : juce::String ("1-2"), 1);
         outputCombo.setSelectedId (1, juce::dontSendNotification);
         outputCombo.setColour (juce::ComboBox::textColourId, Palette::text);
     }
@@ -265,7 +266,7 @@ void MasterCard::rebuildChain()
     for (int i = 0; i < chain.getNumSlots(); ++i)
     {
         const auto& slot = chain.getSlot (i);
-        auto chip = std::make_unique<juce::TextButton> (juce::String (i + 1) + "  " + (slot.plugin != nullptr ? slot.plugin->getName() : slot.state.name + ko (" (없음)")));
+        auto chip = std::make_unique<juce::TextButton> (juce::String (i + 1) + "  " + (slot.plugin != nullptr ? slot.plugin->getName() : trf ("{0} (없음)", slot.state.name)));
         chip->setWantsKeyboardFocus (false);
         chip->setColour (juce::TextButton::buttonColourId, Palette::slotBg);
         chip->setColour (juce::TextButton::textColourOffId, slot.bypassed.load() ? Palette::dimText : Palette::text);
@@ -293,7 +294,7 @@ int MasterCard::obsControlsHeight (int width, int hintGap) const
 {
     // measured with the unfolded toggle text even while folded (the strip says only 'OBS'), so the unfolded height
     // the main window compares against does not change with the fold itself
-    const int controls = obsToggleWidthFor (obsInstalling ? ko ("설치 중...") : ko ("OBS로 보내기")) + 8
+    const int controls = obsToggleWidthFor (obsInstalling ? tr ("설치 중...") : tr ("OBS로 보내기")) + 8
                          + labelWidthForText (obsStatusLabel, obsStatusText (obsStatus));
     return (controls <= width ? obsRowHeight : 2 * obsRowHeight + obsRowGap) + hintGap + obsHintHeight (width);
 }
@@ -471,7 +472,7 @@ void MasterCard::resized()
         recordingButton.setBounds (latency.removeFromLeft (recordWidth));
         area.removeFromTop (8);
         auto output = area.removeFromTop (30);
-        outputCaption.setBounds (output.removeFromLeft (60));
+        outputCaption.setBounds (output.removeFromLeft (captionWidth (outputCaption, 60)));
         output.removeFromLeft (6);
         outputCombo.setBounds (output);
         area.removeFromTop (8);
@@ -505,7 +506,7 @@ void MasterCard::resized()
         auto out = lower.removeFromLeft (372);
         lower.removeFromLeft (18);
         auto outputRow = out.removeFromTop (30);
-        outputCaption.setBounds (outputRow.removeFromLeft (60));
+        outputCaption.setBounds (outputRow.removeFromLeft (captionWidth (outputCaption, 60)));
         outputRow.removeFromLeft (6);
         outputCombo.setBounds (outputRow);
         out.removeFromTop (8);
@@ -524,7 +525,7 @@ void MasterCard::resized()
 
     auto out = content.withLeft (getWidth() - 264);   // under the cards' 250 px output column
     auto outputRow = out.removeFromTop (26);
-    outputCaption.setBounds (outputRow.removeFromLeft (60));
+    outputCaption.setBounds (outputRow.removeFromLeft (captionWidth (outputCaption, 60)));
     outputRow.removeFromLeft (6);
     outputCombo.setBounds (outputRow.expanded (0, 2));
     out.removeFromTop (8);

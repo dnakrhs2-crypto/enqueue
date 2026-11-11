@@ -1,3 +1,4 @@
+#include "Localisation.h"
 #include "ChannelCard.h"
 
 namespace gocue::livemix
@@ -12,7 +13,7 @@ struct ChannelCard::SendRow : public juce::Component
         badge.setColour (juce::Label::textColourId, juce::Colours::white);
         badge.setColour (juce::Label::backgroundColourId, Palette::accent);
         badge.setJustificationType (juce::Justification::centred);
-        badge.setTooltip (ko ("더블클릭: 이 FX 채널의 이름 바꾸기"));
+        badge.setTooltip (tr ("더블클릭: 이 FX 채널의 이름 바꾸기"));
         badge.onDoubleClick = [this] { fxName.showEditor(); };
         addAndMakeVisible (badge);
         fxName.setNameFont (juce::Font (juce::FontOptions (pt (13.0f), juce::Font::bold)));
@@ -44,10 +45,10 @@ struct ChannelCard::SendRow : public juce::Component
 
         preToggle.setClickingTogglesState (true);
         preToggle.setWantsKeyboardFocus (false);
-        preToggle.setTooltip (ko ("프리 = VST3 체인 전 원음을 보냄, 포스트 = 체인을 거친 소리를 보냄"));
+        preToggle.setTooltip (tr ("프리 = VST3 체인 전 원음을 보냄, 포스트 = 체인을 거친 소리를 보냄"));
         preToggle.onClick = [this]
         {
-            preToggle.setButtonText (preToggle.getToggleState() ? ko ("프리") : ko ("포스트"));
+            preToggle.setButtonText (preToggle.getToggleState() ? tr ("프리") : tr ("포스트"));
 
             if (! owner.refreshing)
                 owner.document.setSend (owner.channelId, fxId, fader.getValue() / 100.0, preToggle.getToggleState());
@@ -62,11 +63,11 @@ struct ChannelCard::SendRow : public juce::Component
         if (! fxName.isBeingEdited())
             fxName.setText (fx.name.trim() == "FX " + juce::String (index + 1) ? juce::String() : fx.name, juce::dontSendNotification);   // the default name repeats the badge
 
-        fxName.setTooltip (fx.name + "   " + ko ("(더블클릭: 이름 바꾸기)"));
+        fxName.setTooltip (trf ("{0}   (더블클릭: 이름 바꾸기)", fx.name));
         fader.setValue (send.amount * 100.0, juce::dontSendNotification);
         value.setText (juce::String ((int) std::lround (send.amount * 100.0)) + "%", juce::dontSendNotification);
         preToggle.setToggleState (send.pre, juce::dontSendNotification);
-        preToggle.setButtonText (send.pre ? ko ("프리") : ko ("포스트"));
+        preToggle.setButtonText (send.pre ? tr ("프리") : tr ("포스트"));
         resized();
     }
 
@@ -100,7 +101,7 @@ struct ChannelCard::SendRow : public juce::Component
     NameLabel fxName;
     juce::Label value;
     juce::Slider fader;
-    Chip preToggle { ko ("포스트") };
+    Chip preToggle { tr ("포스트") };
     bool editingName = false;
 };
 
@@ -141,8 +142,8 @@ ChannelCard::~ChannelCard() = default;
 
 ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (doc), channelId (id)
 {
-    masterChip.setButtonText (ko ("마스터"));
-    directChip.setButtonText (ko ("직접 출력"));
+    masterChip.setButtonText (tr ("마스터"));
+    directChip.setButtonText (tr ("직접 출력"));
     number.setFont (juce::Font (juce::FontOptions (pt (14.0f), juce::Font::bold)));
     number.setJustificationType (juce::Justification::centred);
     number.setColour (juce::Label::backgroundColourId, Palette::card2);
@@ -154,42 +155,42 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     addAndMakeVisible (name);
 
     menuButton.setWantsKeyboardFocus (false);
-    menuButton.setTooltip (ko ("채널 메뉴"));
+    menuButton.setTooltip (tr ("채널 메뉴"));
     menuButton.onClick = [this] { showMenu(); };
     addAndMakeVisible (menuButton);
 
     micButton.onClick = [this] { document.setChannelOn (channelId, ! micButton.isOn()); };
     addAndMakeVisible (micButton);
 
-    styleCaption (inputCaption, ko ("입력"));
+    styleCaption (inputCaption, tr ("입력"));
     addAndMakeVisible (inputCaption);
     inputCombo.setWantsKeyboardFocus (false);
     inputCombo.onChange = [this] { commitInput(); };
     addAndMakeVisible (inputCombo);
-    stereoToggle.setButtonText (ko ("스테레오"));
+    stereoToggle.setButtonText (tr ("스테레오"));
     stereoToggle.setWantsKeyboardFocus (false);
-    stereoToggle.setTooltip (ko ("켜면 입력 두 개(왼쪽·오른쪽)를 한 채널로 씁니다"));
+    stereoToggle.setTooltip (tr ("켜면 입력 두 개(왼쪽·오른쪽)를 한 채널로 씁니다"));
     stereoToggle.onClick = [this] { commitInput(); };
     addAndMakeVisible (stereoToggle);
 
-    styleCaption (chainCaption, ko ("VST3 체인") + "   " + ko ("순서대로 통과"));
+    styleCaption (chainCaption, tr ("VST3 체인   순서대로 통과"));
     addAndMakeVisible (chainCaption);
     chainArrows.setVisible (false);
-    openChainButton.setButtonText (ko ("체인 열기"));
+    openChainButton.setButtonText (tr ("체인 열기"));
     openChainButton.setWantsKeyboardFocus (false);
     openChainButton.onClick = [this] { if (onOpenChain) onOpenChain (channelId); };
     addAndMakeVisible (openChainButton);
-    addPluginButton.setButtonText (ko ("+ 추가"));
+    addPluginButton.setButtonText (tr ("+ 추가"));
     addPluginButton.setWantsKeyboardFocus (false);
     addPluginButton.onClick = [this] { if (onAddPlugin) onAddPlugin (channelId); };
     addAndMakeVisible (addPluginButton);
-    pluginGroupsButton.setButtonText (ko ("플러그인 그룹"));
-    pluginGroupsButton.setTooltip (ko ("이 채널의 플러그인 그룹: 체인의 플러그인 중 골라 그룹으로 묶어 두면, 아래 번호 한 번으로 그것들만 끄고 켭니다 (최대 5개)"));
+    pluginGroupsButton.setButtonText (tr ("플러그인 그룹"));
+    pluginGroupsButton.setTooltip (tr ("이 채널의 플러그인 그룹: 체인의 플러그인 중 골라 그룹으로 묶어 두면, 아래 번호 한 번으로 그것들만 끄고 켭니다 (최대 5개)"));
     pluginGroupsButton.setWantsKeyboardFocus (false);
     pluginGroupsButton.onClick = [this] { if (onOpenPluginGroups) onOpenPluginGroups (channelId); };
     addAndMakeVisible (pluginGroupsButton);
 
-    styleCaption (groupsCaption, ko ("그룹 OFF"));
+    styleCaption (groupsCaption, tr ("그룹 OFF"));
     addAndMakeVisible (groupsCaption);
 
     for (int i = 0; i < MixSession::maxPluginGroups; ++i)
@@ -208,21 +209,21 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
         groupButtons[(size_t) i] = std::move (b);
     }
 
-    styleCaption (fxCaption, ko ("이펙터") + "   " + ko ("FX 채널로 보내는 양"));
+    styleCaption (fxCaption, tr ("이펙터   FX 채널로 보내는 양"));
     addAndMakeVisible (fxCaption);
 
-    styleCaption (outputCaption, ko ("출력"));
+    styleCaption (outputCaption, tr ("출력"));
     addAndMakeVisible (outputCaption);
-    masterChip.setTooltip (ko ("마스터를 거쳐 메인 출력으로"));
+    masterChip.setTooltip (tr ("마스터를 거쳐 메인 출력으로"));
     masterChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (masterChip);
-    directChip.setTooltip (ko ("장치 출력 쌍으로 직접 (OBS 등에서 따로 받을 때)"));
+    directChip.setTooltip (tr ("장치 출력 쌍으로 직접 (OBS 등에서 따로 받을 때)"));
     directChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (directChip);
     directCombo.setWantsKeyboardFocus (false);
     directCombo.onChange = [this] { commitOutput (true); };
     addAndMakeVisible (directCombo);
-    muteGroupChip.setTooltip (ko ("켜 두면 마이크 뮤트그룹 핫키가 이 마이크를 함께 뮤트합니다 (핫키는 설정에서)"));
+    muteGroupChip.setTooltip (tr ("켜 두면 마이크 뮤트그룹 핫키가 이 마이크를 함께 뮤트합니다 (핫키는 설정에서)"));
     muteGroupChip.onClick = [this]
     {
         if (! refreshing)
@@ -230,7 +231,7 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     };
     addAndMakeVisible (muteGroupChip);
 
-    styleCaption (panCaption, ko ("팬"));
+    styleCaption (panCaption, tr ("팬"));
     addAndMakeVisible (panCaption);
     panSlider.onValueChange = [this]
     {
@@ -245,7 +246,7 @@ ChannelCard::ChannelCard (MixDocument& doc, const juce::Uuid& id) : document (do
     panValue.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (panValue);
 
-    styleCaption (meterCaption, ko ("입력 미터"));
+    styleCaption (meterCaption, tr ("입력 미터"));
     addAndMakeVisible (meterCaption);
     addAndMakeVisible (meter_);
 
@@ -284,7 +285,7 @@ void ChannelCard::refresh()
     if (! name.isBeingEdited())
         name.setText (c->name, juce::dontSendNotification);
 
-    name.setTooltip (c->name + "\n" + ko ("더블클릭해서 이름 바꾸기"));
+    name.setTooltip (trf ("{0}\n더블클릭해서 이름 바꾸기", c->name));
     micButton.setOn (c->on);
 
     fillChannelCombo (inputCombo, inputNames, c->stereo, MixSession::maxDeviceChannels);
@@ -302,8 +303,7 @@ void ChannelCard::refresh()
     meter_.setStereo (c->stereo);
     panSlider.setValue (c->pan, juce::dontSendNotification);
     panValue.setText (panSlider.getTextFromValue (c->pan), juce::dontSendNotification);
-    panSlider.setTooltip (ko ("팬: 왼쪽/오른쪽 배치. 더블클릭하면 가운데")
-                          + (c->stereo ? ko (". 스테레오 채널은 좌우 균형") : juce::String()));
+    panSlider.setTooltip (trf ("팬: 왼쪽/오른쪽 배치. 더블클릭하면 가운데{0}", (c->stereo ? tr (". 스테레오 채널은 좌우 균형") : juce::String())));
 
     for (int i = 0; i < MixSession::maxPluginGroups; ++i)
     {
@@ -312,9 +312,8 @@ void ChannelCard::refresh()
         const bool off = exists && c->pluginGroups[(size_t) i].off;
         b.setEnabled (exists);
         b.setToggleState (off, juce::dontSendNotification);
-        b.setTooltip (exists ? ko ("플러그인 그룹 ") + juce::String (i + 1) + " (" + juce::String ((int) c->pluginGroups[(size_t) i].slots.size()) + ko ("개)")
-                                   + (off ? ko (": 꺼져 있음 - 누르면 켭니다") : ko (": 누르면 이 그룹의 플러그인을 끕니다"))
-                             : ko ("플러그인 그룹 ") + juce::String (i + 1) + ko ("은 아직 없습니다 ('플러그인 그룹'에서 만듭니다)"));
+        b.setTooltip (exists ? trf ("플러그인 그룹 {0} ({1}개){2}", juce::String (i + 1), juce::String ((int) c->pluginGroups[(size_t) i].slots.size()), (off ? tr (": 꺼져 있음 - 누르면 켭니다") : tr (": 누르면 이 그룹의 플러그인을 끕니다")))
+                             : trf ("플러그인 그룹 {0}은 아직 없습니다 ('플러그인 그룹'에서 만듭니다)", juce::String (i + 1)));
     }
 
     rebuildChain();
@@ -341,7 +340,7 @@ void ChannelCard::showMuted()
 {
     if (const auto* c = channel())
     {
-        micButton.setMutedText (allMuted ? ko ("전체 뮤트 중") : ko ("뮤트그룹 - 뮤트 중"));
+        micButton.setMutedText (allMuted ? tr ("전체 뮤트 중") : tr ("뮤트그룹 - 뮤트 중"));
         micButton.setMuted (allMuted || (groupOn && c->muteGroup));
     }
 }
@@ -357,7 +356,7 @@ void ChannelCard::rebuildChain()
     for (int i = 0; i < chain->getNumSlots(); ++i)
     {
         const auto& slot = chain->getSlot (i);
-        const auto text = slot.plugin != nullptr ? slot.plugin->getName() : slot.state.name + ko (" (없음)");
+        const auto text = slot.plugin != nullptr ? slot.plugin->getName() : trf ("{0} (없음)", slot.state.name);
         auto chip = std::make_unique<ChainChip> (i, text, slot.bypassed.load() || slot.plugin == nullptr);
         chip->setTooltip (text);   // a narrow card cuts the name short
         chip->onClick = [this, i] { if (onOpenPluginEditor) onOpenPluginEditor (channelId, i); };
@@ -456,10 +455,10 @@ void ChannelCard::commitOutput (bool pairSelected)
 void ChannelCard::showMenu()
 {
     juce::PopupMenu menu;
-    menu.addItem (1, ko ("이름 바꾸기"));
-    menu.addItem (2, ko ("체인 열기"));
+    menu.addItem (1, tr ("이름 바꾸기"));
+    menu.addItem (2, tr ("체인 열기"));
     menu.addSeparator();
-    menu.addItem (3, ko ("이 채널 삭제"), document.getSession().channels.size() > 1);
+    menu.addItem (3, tr ("이 채널 삭제"), document.getSession().channels.size() > 1);
 
     juce::Component::SafePointer<ChannelCard> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuButton), [safeThis] (int result)
@@ -499,11 +498,13 @@ int ChannelCard::chainWidthForWidth (int width) const
     return juce::jmax (1, chainW);
 }
 
+int ChannelCard::groupRowWidth() const { return 112 + 8 + captionWidth (groupsCaption, 66) + 5 * 30 + 4 * 4; }
+
 int ChannelCard::chainHeightForWidth (int width) const
 {
     const int chainW = chainWidthForWidth (width);
     const int rows = ChipFlow::layout (chips, juce::Rectangle<int> (0, 0, chainW, 1), 44, false);
-    return 27 + rows * ChipFlow::rowStep + chainFooter + (chainW < groupRowWidth ? 36 : 0);
+    return 27 + rows * ChipFlow::rowStep + chainFooter + (chainW < groupRowWidth() ? 36 : 0);
 }
 
 int ChannelCard::getPreferredHeight (int width) const
@@ -546,7 +547,7 @@ void ChannelCard::resized()
         if (stacked)
         {
             auto row = r.removeFromTop (30);
-            inputCaption.setBounds (row.removeFromLeft (34));
+            inputCaption.setBounds (row.removeFromLeft (captionWidth (inputCaption, 34)));
             stereoToggle.setBounds (row.removeFromRight (88));
             row.removeFromRight (4);
             inputCombo.setBounds (row);
@@ -555,7 +556,7 @@ void ChannelCard::resized()
         else
         {
             auto row = r.removeFromTop (26);
-            inputCaption.setBounds (row.removeFromLeft (34));
+            inputCaption.setBounds (row.removeFromLeft (captionWidth (inputCaption, 34)));
             stereoToggle.setBounds (row.removeFromRight (88).expanded (0, 2));
             r.removeFromTop (2);
             inputCombo.setBounds (r.removeFromTop (30));
@@ -579,12 +580,12 @@ void ChannelCard::resized()
         auto groupsRow = r.removeFromTop (30);
         pluginGroupsButton.setBounds (groupsRow.removeFromLeft (112));
         groupsRow.removeFromLeft (8);
-        if (r.getWidth() < groupRowWidth)
+        if (r.getWidth() < groupRowWidth())
         {
             r.removeFromTop (6);
             groupsRow = r.removeFromTop (30);
         }
-        groupsCaption.setBounds (groupsRow.removeFromLeft (66).reduced (0, 2));
+        groupsCaption.setBounds (groupsRow.removeFromLeft (captionWidth (groupsCaption, 66)).reduced (0, 2));
 
         for (auto& b : groupButtons)
         {

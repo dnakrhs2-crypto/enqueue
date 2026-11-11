@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Localisation.h"
 #include "LiveMixPalette.h"
 #include "MixEngine.h"
 #include "ui/UiUtils.h"   // ko()
@@ -28,6 +29,32 @@ inline juce::String ellipsisedText (const juce::Font& font, const juce::String& 
 inline int labelWidthForText (const juce::Label& label, const juce::String& text)
 {
     return juce::GlyphArrangement::getStringWidthInt (label.getFont(), text) + label.getBorderSize().getLeftAndRight() + 4;
+}
+
+/** A caption's column: its width on the Korean screen, or what the text of another language needs when that is
+    longer ('Input', 'Main output', 'Group OFF'). Korean rows stay exactly where they were. */
+inline int captionWidth (const juce::Label& label, int korean)
+{
+    if (currentLanguage() == Language::ko) return korean;
+    const int text = juce::GlyphArrangement::getStringWidthInt (label.getFont(), label.getText()) + label.getBorderSize().getLeftAndRight();
+    return text <= korean ? korean : text + 4;
+}
+
+/** The same for a text button ('Delete this FX'), at the height it is placed with. */
+inline int textButtonWidth (juce::TextButton& button, int korean, int height)
+{
+    if (currentLanguage() == Language::ko) return korean;
+    const auto font = button.getLookAndFeel().getTextButtonFont (button, height);
+    return juce::jmax (korean, juce::GlyphArrangement::getStringWidthInt (font, button.getButtonText()) + 24);
+}
+
+/** And for a tick box ('Remember on this PC'): LiveMixLookAndFeel::drawToggleButton's tick, then the text in its size. */
+inline int tickBoxWidth (const juce::ToggleButton& button, int korean, int height)
+{
+    if (currentLanguage() == Language::ko) return korean;
+    const float size = juce::jmin (pt (15.0f), (float) height * 0.75f);
+    return juce::jmax (korean, juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (size)), button.getButtonText())
+                                   + juce::roundToInt (size * 1.1f) + 12);
 }
 
 /** An alert's text box takes the keyboard once the window is up (typing replaces the suggested text). */
@@ -60,7 +87,7 @@ class PanSlider : public juce::Slider
 public:
     PanSlider()
     {
-        setName (ko ("팬"));
+        setName (tr ("팬"));
         setSliderStyle (juce::Slider::LinearHorizontal);
         setRange (-1.0, 1.0, 0.01);
         setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
@@ -280,7 +307,7 @@ public:
 
 private:
     bool on = true, muted = false;
-    juce::String textOn { ko ("마이크 ON") }, textOff { ko ("마이크 OFF") }, textMuted { ko ("뮤트그룹 - 뮤트 중") };
+    juce::String textOn { tr ("마이크 ON") }, textOff { tr ("마이크 OFF") }, textMuted { tr ("뮤트그룹 - 뮤트 중") };
 };
 
 /** A window's bounds (its inside, the native frame not counted) for 'size': centred on 'centre' with the frame inside
@@ -475,7 +502,7 @@ public:
         setEditable (false, true, false);
         setMinimumHorizontalScale (1.0f);
         setColour (juce::Label::textColourId, Palette::text);
-        setTooltip (ko ("더블클릭해서 이름 바꾸기"));
+        setTooltip (tr ("더블클릭해서 이름 바꾸기"));
     }
 
     std::function<void (const juce::String&)> onRenamed;
@@ -634,7 +661,7 @@ public:
             onRejectionChanged ({});
 
         if (! capturing)
-            setButtonText (hotkey.isEmpty() ? ko ("없음 (눌러서 지정)") : hotkey);
+            setButtonText (hotkey.isEmpty() ? tr ("없음 (눌러서 지정)") : hotkey);
     }
 
     const juce::String& getHotkey() const noexcept { return hotkey; }
@@ -650,7 +677,7 @@ public:
         capturing = true;
         setWantsKeyboardFocus (true);
         grabKeyboardFocus();
-        setButtonText (ko ("키를 누르세요... (Esc 취소)"));
+        setButtonText (tr ("키를 누르세요... (Esc 취소)"));
 
         if (onCaptureChanged)
             onCaptureChanged (true);
@@ -809,15 +836,15 @@ inline void fillDirectOutputCombo (juce::ComboBox& combo, juce::Button& toggle, 
     {
         fillChannelCombo (combo, names, true, MixSession::maxDeviceChannels);
         combo.setSelectedId (requested + 1, juce::dontSendNotification);
-        if (combo.getSelectedId() == 0) combo.setText (ko ("없음"), juce::dontSendNotification);
+        if (combo.getSelectedId() == 0) combo.setText (tr ("없음"), juce::dontSendNotification);
     }
     else
     {
         combo.clear (juce::dontSendNotification);
-        combo.addItem (hasOutput ? juce::String ("1-2") : ko ("없음"), 1);
+        combo.addItem (hasOutput ? juce::String ("1-2") : tr ("없음"), 1);
         combo.setSelectedId (1, juce::dontSendNotification);
         if (requested != 0)
-            combo.setTooltip (ko ("ASIO에서는 ") + juce::String (requested + 1) + "-" + juce::String (requested + 2) + ko ("로 나갑니다"));
+            combo.setTooltip (trf ("ASIO에서는 {0}-{1}로 나갑니다", juce::String (requested + 1), juce::String (requested + 2)));
     }
     toggle.setEnabled (asio || hasOutput);
     combo.setEnabled ((asio || hasOutput) && enabled);
