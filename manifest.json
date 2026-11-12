@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "name": "DVW-Setup-20261112-1718.exe",
+  "size": 51015660,
+  "sha256": "b0fd66bac8333c823e08016ab67c9e7ce5eb1eb1dd0ac744b0bcb075cb5b5c0a",
+  "date": "2026-11-12T08:18:44Z",
+  "kdf": {
+    "name": "PBKDF2",
+    "hash": "SHA-256",
+    "iterations": 600000,
+    "salt": "2iLaMKqYp27FvZZu+NfdnA=="
+  },
+  "check": {
+    "iv": "J2Yp4V3TAU6tEVjB",
+    "ct": "Ad5/5P4QSzQfsR22QVF13IPpEg2QVSnbrVmkujL/TQ=="
+  },
+  "parts": [
+    {
+      "path": "parts/1efdb048051679db.bin",
+      "size": 16777232,
+      "iv": "cAZ4S39eBUK46MSD"
+    },
+    {
+      "path": "parts/605193e547435efc.bin",
+      "size": 16777232,
+      "iv": "S09hWmVocRoeiyys"
+    },
+    {
+      "path": "parts/48b05e96c10f9ff3.bin",
+      "size": 16777232,
+      "iv": "ouFRk4BTQYF2e4hM"
+    },
+    {
+      "path": "parts/2b68ceab7dbb7ce7.bin",
+      "size": 684028,
+      "iv": "IPIcgpcYT4WoRDmF"
+    }
+  ]
+}
