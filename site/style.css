@@ -387,12 +387,13 @@ ol.features > li::before {
   :root { --gutter: 16px; }
   body { font-size: 15.5px; }
   .site-header { padding-top: 16px; }
-  .deck { display: flex; gap: 8px; padding: 10px; border-radius: 20px; }
-  .key { flex: 1 1 0; width: auto; height: auto; aspect-ratio: 1 / 1; padding: 4px; border-radius: 15px; }
-  .lcd { border-radius: 11px; }
-  .lcd img { width: 34px; height: 34px; margin-top: -14px; }
-  .lcd .label { bottom: 6px; font-size: 11px; }
-  .key-brand .lcd .label { font-size: 15px; }
+  /* 2026-11-12 키 5개(DVW 추가): 360px 폰에서 키 약 58px — 아이콘·글자를 줄여 겹침·잘림 없이 */
+  .deck { display: flex; gap: 6px; padding: 8px; border-radius: 18px; }
+  .key { flex: 1 1 0; width: auto; height: auto; aspect-ratio: 1 / 1; padding: 3px; border-radius: 13px; }
+  .lcd { border-radius: 10px; }
+  .lcd img { width: 30px; height: 30px; margin-top: -13px; }
+  .lcd .label { bottom: 5px; font-size: 10px; }
+  .key-brand .lcd .label { font-size: 14px; }
 
   .product-head { grid-template-columns: 56px minmax(0, 1fr); gap: 14px; margin-top: 34px; align-items: start; }
   .product-head .app-icon { width: 56px; height: 56px; margin-top: 2px; }
@@ -509,13 +510,15 @@ main > article > p { max-width: 780px; }
 a.key.is-current .lcd img { opacity: 1; filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.18)); }
 a.key.is-current .lcd .label { color: #FFFFFF; }
 
-/* Astra review 2026-10-01: at 320px the key LCD is ~53px, so the 34px icon ran into the label -> smaller icon, higher */
+/* 320px: five keys leave an LCD of ~44px -> smaller icon and labels so nothing clips or touches */
 @media (max-width: 340px) {
-  .lcd img { width: 28px; height: 28px; margin-top: -18px; }
+  .lcd img { width: 24px; height: 24px; margin-top: -14px; }
+  .lcd .label { font-size: 9px; }
+  .key-brand .lcd .label { font-size: 12px; }
 }
 /* Safari/iOS before 15 has no aspect-ratio: without it the mobile keys lose their height */
 @supports not (aspect-ratio: 1 / 1) {
-  @media (max-width: 760px) { .key { height: 72px; } }
+  @media (max-width: 760px) { .key { height: 60px; } }
 }
 
 @media (max-width: 760px) {
@@ -687,9 +690,6 @@ button.dl-button[aria-busy="true"] > .dl-progress { opacity: 0.85; }
 .dl-error { min-height: 1.6em; margin: 12px 0 0; padding: 0 4px; font-size: 14.5px; font-weight: 700; line-height: 1.6; color: #B42318; }
 @media (prefers-reduced-motion: reduce) { .dl-button > .dl-progress { transition: none; } }
 @media (max-width: 760px) {
-  /* 키가 둘뿐이라 휴대폰의 '키를 폭에 나눠 채우기'를 쓰면 키 하나가 화면 반을 차지한다 → 다른 페이지 키 크기(약 72px)로 고정 */
-  .page-dvw .deck { display: inline-flex; }
-  .page-dvw .key { flex: none; width: 72px; height: 72px; }
   .dl-form { grid-template-columns: 1fr; gap: 12px; }
   .dl-pass { padding: 12px 18px; border-width: 6px; border-radius: 22px; }
   .dl-pass input { font-size: 20px; }
