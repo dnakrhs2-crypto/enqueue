@@ -610,3 +610,87 @@ details.trouble > summary h3 { margin: 0; font: inherit; }   /* 제목 구조는
   .subkey { grid-template-columns: 40px minmax(0, 1fr); column-gap: 14px; justify-self: stretch; padding: 10px 16px 10px 12px; border-width: 6px; border-radius: 22px; font-size: 17px; }
   .subkey::before { width: 40px; height: 40px; border-radius: 11px; background-size: 20px; }
 }
+
+/* ── 2026-11-12 DVW 다운로드(dvw/): 비밀번호 흰 키 + 검은 다운로드 키 ─────────────────────
+   파일은 비밀번호로 암호화돼 있고 dvw/dl.js 가 브라우저에서 풀어 저장한다. 받는 동안 검은 키 아래쪽에 진행 막대. */
+.dl-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  gap: 16px;
+  align-items: stretch;
+}
+.dl-pass {
+  display: grid;
+  align-content: center;
+  padding: 14px 22px;
+  border: 7px solid #E4E4E0;
+  border-radius: 24px;
+  background: var(--paper);
+  box-shadow: 0 0 0 1px #CFCFCA, 0 3px 0 #C4C4BF, 0 18px 30px -24px rgba(0, 0, 0, 0.35);
+  cursor: text;
+}
+.dl-pass-label { font-size: 13.5px; font-weight: 700; line-height: 1.4; color: var(--mute); }
+.dl-pass input {
+  width: 100%;
+  min-width: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.06em;
+  outline: none;
+}
+.dl-pass:focus-within { outline: 3px solid var(--link); outline-offset: 3px; }
+/* 크롬이 저장된 비밀번호를 채우면 칸 배경이 연파랑 사각형이 된다 — 흰 키 안에 띠처럼 보이지 않게 */
+.dl-pass input:-webkit-autofill,
+.dl-pass input:-webkit-autofill:hover,
+.dl-pass input:-webkit-autofill:focus { box-shadow: 0 0 0 40px var(--paper) inset; -webkit-text-fill-color: var(--ink); caret-color: var(--ink); }
+.dl-pass:has(input[aria-invalid="true"]) { border-color: #F3D3CF; box-shadow: 0 0 0 1px #D9584C, 0 3px 0 #C4C4BF, 0 18px 30px -24px rgba(0, 0, 0, 0.35); }
+
+button.dl-button {
+  position: relative;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+button.dl-button:focus-visible { outline: 3px solid var(--link); outline-offset: 3px; }
+button.dl-button[aria-busy="true"] { cursor: progress; }
+.dl-button > span#dl-meta { display: flex; flex-wrap: wrap; column-gap: 14px; font-variant-numeric: tabular-nums; }
+#dl-label { font-variant-numeric: tabular-nums; }   /* '받는 중 NN%' 숫자가 바뀔 때 % 가 좌우로 흔들리지 않게 */
+.dl-button > .dl-progress {
+  position: absolute;
+  grid-column: auto;   /* .download-button > span 의 grid-column: 2 를 끊어야 막대가 키 왼쪽 끝부터 찬다 */
+  grid-row: auto;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  margin: 0;
+  background: #FFFFFF;
+  transform: scaleX(var(--p, 0));
+  transform-origin: 0 50%;
+  opacity: 0;
+  transition: transform 160ms linear, opacity 200ms ease;
+}
+button.dl-button[aria-busy="true"] > .dl-progress { opacity: 0.85; }
+.dl-error { min-height: 1.6em; margin: 12px 0 0; padding: 0 4px; font-size: 14.5px; font-weight: 700; line-height: 1.6; color: #B42318; }
+@media (prefers-reduced-motion: reduce) { .dl-button > .dl-progress { transition: none; } }
+@media (max-width: 760px) {
+  /* 키가 둘뿐이라 휴대폰의 '키를 폭에 나눠 채우기'를 쓰면 키 하나가 화면 반을 차지한다 → 다른 페이지 키 크기(약 72px)로 고정 */
+  .page-dvw .deck { display: inline-flex; }
+  .page-dvw .key { flex: none; width: 72px; height: 72px; }
+  .dl-form { grid-template-columns: 1fr; gap: 12px; }
+  .dl-pass { padding: 12px 18px; border-width: 6px; border-radius: 22px; }
+  .dl-pass input { font-size: 20px; }
+}
