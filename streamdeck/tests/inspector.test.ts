@@ -25,6 +25,58 @@ class Socket {
   close(): void { this.onclose(); }
   receive(value: unknown): void { this.onmessage({ data: JSON.stringify(value) }); }
 }
+
+for (const language of ["ko", "en"] as const) test(`plugin-window ${language} PI: all-mics first, union/counts, per-mic groups, modes and fallback visibility`, async () => {
+  const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
+  const fields = ["channel", "fx", "group", "mode", "step", "target", "press", "display", "fallback", "title"];
+  const elements = Object.fromEntries([...fields.flatMap(id => [id, `${id}-row`, `${id}-label`]), "short-title", "status", "note"].map(id => [id, new Element()]));
+  const document = { documentElement: new Element(), getElementById: (id: string) => elements[id], createElement: () => new Element() };
+  const window: Record<string, any> = { addEventListener() {} }, environment = { window, document, WebSocket: Socket };
+  runInNewContext(strings!, environment); runInNewContext(script!, environment);
+  window.connectElgatoStreamDeckSocket(1234, "pi", "registerPropertyInspector", JSON.stringify({ application: { language } }),
+    JSON.stringify({ context: "key", action: "com.gomtwigim.livemix.plugin-window", payload: { settings: {} } }));
+  const socket = Socket.current; socket.onopen(); const locale = window.LiveMixStrings[language];
+  assert.deepEqual(fields.filter(id => !elements[`${id}-row`]!.hidden), ["channel", "group", "mode", "title"]);
+  assert.equal(elements.channel!.children[0]!.textContent, locale.allMicsShort); assert.equal(elements.channel!.value, "all");
+  assert.equal(elements.group!.value, "1"); assert.equal(elements.mode!.value, "toggle");
+  assert.equal(elements.channel!.disabled, true); assert.equal(elements.group!.disabled, true);
+  assert.deepEqual(elements.mode!.children.map(e => [e.value, e.textContent]), [["toggle", locale.windowToggle], ["open", locale.windowOpen], ["close", locale.windowClose]]);
+  assert.equal(elements.note!.textContent, locale.groupNote);
+  const live = { op: "options", context: "key", requestId: "pi1", sequence: 1, connection: "ready", instanceId: "i", sessionId: "s", revision: 1,
+    message: locale.connected, channels: [{ id: "a", name: "A <&>", groupIndices: [1, 5] }, { id: "b", name: "B", groupIndices: [1, 2] }, { id: "c", name: "C", groupIndices: [] }], groupIndices: [] };
+  socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: live });
+  assert.equal(elements.channel!.disabled, false);
+  assert.deepEqual(elements.channel!.children.map(e => e.value), ["all", "a", "b", "c"]);
+  assert.deepEqual(elements.group!.children.map(e => e.value), ["1", "2", "5"]);
+  assert.deepEqual(elements.group!.children.map(e => e.textContent), language === "ko"
+    ? ["그룹 1 · 마이크 2개", "그룹 2 · 마이크 1개", "그룹 5 · 마이크 1개"] : ["Group 1 · 2 mics", "Group 2 · 1 mic", "Group 5 · 1 mic"]);
+  elements.channel!.value = "b"; elements.channel!.listeners.get("change")!();
+  assert.deepEqual(socket.sent.at(-1)!.payload, { settingsVersion: 1, channelId: "b", channelName: "B", windowTarget: "mic" });
+  assert.equal(elements["fallback-row"]!.hidden, false); assert.equal(elements.channel!.children[0]!.value, "all");
+  assert.deepEqual(elements.group!.children.map(e => e.textContent), [locale.group + " 1", locale.group + " 2"]);
+  elements.group!.value = "2"; elements.group!.listeners.get("change")!();
+  elements.mode!.value = "open"; elements.mode!.listeners.get("change")!();
+  elements.fallback!.checked = false; elements.fallback!.listeners.get("change")!();
+  elements["short-title"]!.value = "방송 <&>"; elements["short-title"]!.listeners.get("input")!();
+  const saved = { settingsVersion: 1, channelId: "b", channelName: "B", windowTarget: "mic", groupIndex: 2, mode: "open", nameFallback: false, shortTitle: "방송 <&>" };
+  assert.deepEqual(socket.sent.at(-1)!.payload, saved);
+  elements.channel!.value = "all"; elements.channel!.listeners.get("change")!();
+  assert.deepEqual(socket.sent.at(-1)!.payload, { ...saved, windowTarget: "all" });
+  assert.equal(elements["fallback-row"]!.hidden, true); assert.equal(elements.group!.value, "2");
+  assert.deepEqual(elements.group!.children.map(e => e.value), ["1", "2", "5"]);
+  assert.equal(elements.note!.textContent, locale.groupNote);
+  socket.receive({ event: "didReceiveSettings", context: "pi", payload: { settings: saved } });
+  socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...live, sequence: 2, channels: [live.channels[0]], groupIndices: [] } });
+  assert.equal(elements.channel!.children[0]!.textContent, locale.allMicsShort); assert.equal(elements.channel!.value, "b");
+  assert.equal(elements.channel!.children[1]!.textContent, "B"); assert.equal(elements.group!.children[0]!.disabled, true);
+  assert.equal(elements["fallback-row"]!.hidden, false);
+  socket.receive({ event: "sendToPropertyInspector", context: "pi", payload: { ...live, sequence: 3, isInMultiAction: true, message: locale.emptyGroup } });
+  assert.equal(elements.note!.textContent, locale.groupNote + "\n" + locale.multiActionNote); assert.equal(elements.status!.textContent, locale.emptyGroup);
+  socket.close(); assert.equal(elements.channel!.disabled, true); assert.equal(elements.channel!.value, "b");
+  assert.equal(elements.channel!.children[0]!.textContent, locale.allMicsShort); assert.equal(elements.group!.value, "2");
+  assert.equal(elements.group!.children[0]!.textContent, locale.group + " 2"); assert.equal(elements.mode!.value, "open");
+  elements.mode!.value = "close"; elements.mode!.listeners.get("change")!(); assert.equal(socket.sent.at(-1)!.payload.mode, "close");
+});
 test("multi-action PI appends the exact ko/en note for all eleven keys and preserves existing notes across updates/offline", async () => {
   const [strings, script] = await Promise.all(["strings.js", "inspector.js"].map(file => readFile(resolve(pluginRoot, "ui", file), "utf8")));
   const notes = {

@@ -171,6 +171,43 @@ bool PluginWindowManager::isInUse (const juce::AudioPluginInstance& plugin) cons
    #endif
 }
 
+bool PluginWindowManager::isInFront (const juce::AudioPluginInstance& plugin) const
+{
+    const auto* window = findWindow (plugin);
+    if (window == nullptr)
+        return false;
+    if (isWindowInUse)
+        return isWindowInUse (*window);   // hidden-desktop tests have no OS foreground or meaningful Z comparison
+    if (isInUse (plugin))
+        return true;
+
+   #if JUCE_WINDOWS
+    const auto handle = (HWND) window->getPeer()->getNativeHandle();
+    if (! IsWindowVisible (handle) || IsIconic (handle))
+        return false;
+    if (const auto foreground = GetForegroundWindow())
+        for (auto above = GetWindow (foreground, GW_HWNDPREV); above != nullptr; above = GetWindow (above, GW_HWNDPREV))
+            if (above == handle)
+                return true;
+   #endif
+    return false;
+}
+
+void PluginWindowManager::raiseWithoutActivating (juce::AudioPluginInstance& plugin)
+{
+    if (auto* window = findWindow (plugin))
+    {
+       #if JUCE_WINDOWS
+        const auto handle = (HWND) window->getPeer()->getNativeHandle();
+        constexpr UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        SetWindowPos (handle, HWND_TOPMOST, 0, 0, 0, 0, flags);
+        SetWindowPos (handle, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+       #else
+        window->toFront (false);
+       #endif
+    }
+}
+
 bool PluginWindowManager::closeByUser (juce::AudioPluginInstance& plugin)
 {
     if (auto* window = findWindow (plugin))

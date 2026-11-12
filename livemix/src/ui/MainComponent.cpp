@@ -12,6 +12,10 @@
 #include <atomic>
 #include <utility>
 
+#if JUCE_WINDOWS
+ #include <windows.h>
+#endif
+
 namespace gocue::livemix
 {
 
@@ -1794,6 +1798,88 @@ void MainComponent::togglePluginGroupEverywhere (int group)
     }
 
     showStatus (trf ("플러그인 그룹 {0}{1}  (마이크 {2}개)", juce::String (group + 1), (switchedOff ? tr (" 끔") : tr (" 켬")), juce::String (channels)));
+}
+
+void MainComponent::sendPluginWindowMouseInput()
+{
+   #if JUCE_WINDOWS
+    // No movement, buttons or keys: TCP commands have no foreground grant from a hotkey.
+    INPUT input {};
+    input.type = INPUT_MOUSE;
+    SendInput (1, &input, sizeof (input));
+   #endif
+}
+
+ControlDispatcher::PluginGroupWindowsResponse MainComponent::controlPluginGroupWindows (const ControlDispatcher::PluginGroupWindowsRequest& request)
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    using P = ControlProtocol;
+    using Code = P::ErrorCode;
+    if (hotkeysHeld > 0)
+        return Code::serverBusy;   // the model and graph do not agree while a session is being applied
+    if (request.index < 1 || request.index > MixSession::maxPluginGroups || (request.channelId && request.channelId->isNull()))
+        return Code::invalidArgument;
+    if (request.channelId && document.getSession().findChannel (*request.channelId) == nullptr)
+        return Code::channelNotFound;
+
+    const auto group = (size_t) (request.index - 1);
+    struct Target { juce::AudioPluginInstance* plugin; juce::String title; };
+    std::vector<Target> targets;
+    bool hasGroup = false;
+    for (const auto& channel : document.getSession().channels)
+    {
+        if ((request.channelId && channel.id != *request.channelId) || group >= channel.pluginGroups.size())
+            continue;
+        hasGroup = true;
+        if (auto* chain = engine.getChannelChain (channel.id))
+        {
+            const auto& members = channel.pluginGroups[group].slots;
+            for (int i = 0; i < chain->getNumSlots(); ++i)
+            {
+                const auto& slot = chain->getSlot (i);
+                if (slot.plugin != nullptr && std::find (members.begin(), members.end(), slot.state.slotId) != members.end())
+                    targets.push_back ({ slot.plugin.get(), channel.name + " - " + slot.plugin->getName() });
+            }
+        }
+    }
+
+    if (! hasGroup)
+    {
+        showStatus (trf ("플러그인 그룹 {0}이(가) 있는 마이크가 없습니다 (체인 열기 아래 '플러그인 그룹'에서 만듭니다)", juce::String (request.index)), true);
+        return Code::pluginGroupNotFound;
+    }
+    if (targets.empty())
+    {
+        showStatus (trf ("플러그인 그룹 {0}에 넣은 플러그인이 없습니다", juce::String (request.index)), true);
+        return Code::pluginGroupEmpty;
+    }
+
+    const bool open = request.open ? *request.open
+        : ! std::any_of (targets.begin(), targets.end(), [this] (const Target& target) { return windows.isInFront (*target.plugin); });
+    int count = 0;
+    if (open)
+    {
+        preparePluginWindowForeground();   // exactly once, including when recalling existing editors
+        for (const auto& target : targets)
+        {
+            windows.openInForeground (*target.plugin, target.title);
+            ++count;
+        }
+        // UIPI can block SendInput, e.g. when elevated OBS is in front. Still show the editors above it.
+        if (! std::any_of (targets.begin(), targets.end(), [this] (const Target& target) { return windows.isInUse (*target.plugin); }))
+            for (const auto& target : targets)
+                windows.raiseWithoutActivating (*target.plugin);
+    }
+    else
+    {
+        for (const auto& target : targets)
+            if (windows.closeByUser (*target.plugin))
+                ++count;
+    }
+
+    showStatus (open ? trf ("플러그인 그룹 {0} 화면 열림", juce::String (request.index))
+                     : trf ("플러그인 그룹 {0} 화면 닫힘", juce::String (request.index)));
+    return P::PluginGroupWindowsResult { request.index, open, count };
 }
 
 void MainComponent::togglePluginGroupWindows (int group)

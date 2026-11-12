@@ -26,7 +26,7 @@ public:
         invalidJson, invalidUtf8, messageTooLarge, stateTooLarge, unsupportedVersion,
         authRequired, authFailed, handshakeTimeout, invalidArgument, unknownCommand, unknownMessage,
         channelNotFound, fxNotFound, pluginGroupNotFound, instanceChanged, sessionChanged, revisionConflict,
-        duplicateId, controlDisabled, serverStopping, commandExpired, rateLimited, serverBusy, internalError
+        duplicateId, controlDisabled, serverStopping, commandExpired, rateLimited, serverBusy, pluginGroupEmpty, internalError
     };
 
     struct Error
@@ -54,10 +54,12 @@ public:
     struct SetFxOn { juce::Uuid fxId; bool on = false; };
     struct ToggleMuteAll { MuteGroup group = MuteGroup::mic; };
     struct SetMuteAll { MuteGroup group = MuteGroup::mic; bool muted = false; };
+    struct TogglePluginGroupWindows { int index = 1; std::optional<juce::Uuid> channelId; };
+    struct SetPluginGroupWindows { int index = 1; std::optional<juce::Uuid> channelId; bool open = false; };
     struct RequestState {};
     using CommandArgs = std::variant<SetChannelOn, ToggleChannel, SetAllChannelsOn, ToggleMuteGroup,
                                      SetMuteGroup, SetPluginGroupOff, SetPluginGroupOffEverywhere, SetSend, ToggleFx, SetFxOn,
-                                     ToggleMuteAll, SetMuteAll, RequestState>;
+                                     ToggleMuteAll, SetMuteAll, TogglePluginGroupWindows, SetPluginGroupWindows, RequestState>;
     struct Command
     {
         juce::String id;
@@ -196,10 +198,11 @@ public:
     struct MuteGroupResult { MuteGroup group = MuteGroup::mic; bool muted = false; };
     struct PluginGroupResult { int index = 1; bool off = false; };
     struct PluginGroupEverywhereResult { int index = 1; bool off = false; int count = 0; };
+    struct PluginGroupWindowsResult { int index = 1; bool open = false; int count = 0; };
     struct SendResult { double amount = 0.0; bool pre = false; };
     struct RequestStateResult { juce::int64 snapshotRevision = 0; };
     using CommandResult = std::variant<OnResult, AllChannelsResult, MuteGroupResult, PluginGroupResult,
-                                       PluginGroupEverywhereResult, SendResult, RequestStateResult>;
+                                       PluginGroupEverywhereResult, PluginGroupWindowsResult, SendResult, RequestStateResult>;
     struct Ack { juce::String id; Context context; bool changed = false; CommandResult result; };
     struct ErrorResponse
     {

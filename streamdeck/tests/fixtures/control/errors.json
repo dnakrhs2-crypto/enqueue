@@ -2,5 +2,9 @@
   {"v":1,"type":"error","id":"1","code":"AUTH_FAILED","message":"Authentication failed","retryable":true},
   {"v":1,"type":"error","id":"1","code":"UNSUPPORTED_VERSION","message":"Unsupported protocol version","retryable":false,"supportedVersions":[1]},
   {"v":1,"type":"serverStatus","instanceId":"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa","status":"disabled","reason":"controlDisabled"},
-  {"v":1,"type":"serverStatus","instanceId":"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa","status":"stopping","reason":"shutdown"}
+  {"v":1,"type":"serverStatus","instanceId":"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa","status":"stopping","reason":"shutdown"},
+  {"v":1,"type":"error","id":"2","code":"CHANNEL_NOT_FOUND","message":"Channel does not exist","retryable":false},
+  {"v":1,"type":"error","id":"2","code":"PLUGIN_GROUP_NOT_FOUND","message":"Plugin group does not exist","retryable":false},
+  {"v":1,"type":"error","id":"2","code":"PLUGIN_GROUP_EMPTY","message":"Plugin group has no plugins","retryable":false},
+  {"v":1,"type":"error","id":"2","code":"SERVER_BUSY","message":"Server is busy","retryable":true}
 ]

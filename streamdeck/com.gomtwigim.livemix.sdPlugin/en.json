@@ -108,6 +108,15 @@
       }
     ]
   },
+  "com.gomtwigim.livemix.plugin-window": {
+    "Name": "Plugin Group Windows",
+    "Tooltip": "Open or close the windows of the plugins in a numbered plugin group (LiveMix 0.22.0+).",
+    "States": [
+      {
+        "Name": "Open/Close"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.fx-send": {
     "Name": "FX Send Amount",
     "Tooltip": "Rotate to adjust the send amount; short press and release to toggle pre/post.",
@@ -190,6 +199,12 @@
     "pluginGroupTooltip": "Toggle an existing numbered plugin group on a microphone.",
     "pluginGroupAll": "Plugin Group (All Mics)",
     "pluginGroupAllTooltip": "Switch a numbered plugin group off or on across every microphone at once (LiveMix 0.10.0+).",
+    "pluginWindow": "Plugin Group Windows",
+    "pluginWindowTooltip": "Open or close the windows of the plugins in a numbered plugin group (LiveMix 0.22.0+).",
+    "windowToggle": "Open/Close",
+    "windowOpen": "Open",
+    "windowClose": "Close",
+    "emptyGroup": "No plugins in this group",
     "allMicsShort": "All mics",
     "groupMicCount": "{count} mics",
     "groupMicCountOne": "{count} mic",

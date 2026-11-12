@@ -47,6 +47,10 @@ public:
     void openInForeground (juce::AudioPluginInstance& plugin, const juce::String& title);
     bool isOpen (const juce::AudioPluginInstance& plugin) const;
     bool isInUse (const juce::AudioPluginInstance& plugin) const;
+    /** External control: also counts visible, restored editors above the OS foreground window. */
+    bool isInFront (const juce::AudioPluginInstance& plugin) const;
+    /** External control fallback when activation is refused; does not leave the editor topmost. */
+    void raiseWithoutActivating (juce::AudioPluginInstance& plugin);
     /** Same notification and lifetime as the window's close button; false if already closed. */
     bool closeByUser (juce::AudioPluginInstance& plugin);
     /** In-memory positions only. Off by default (Enqueue); disabling forgets any stored positions. */

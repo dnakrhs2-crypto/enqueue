@@ -96,9 +96,9 @@ test("release images have localized labels, distinct group shapes and independen
   }
 });
 
-test("twelve manifest actions have required controllers/states, translated triggers and all assets", async () => {
+test("thirteen manifest actions have required controllers/states, translated triggers and all assets", async () => {
   const manifest = JSON.parse(await readFile(resolve(pluginRoot, "manifest.json"), "utf8"));
-  assert.equal(manifest.Version, "1.4.0.0");
+  assert.equal(manifest.Version, "1.5.0.0");
   // The actual static previews and runtime rendering share the same geometry.
   const samples = [
     ["mic/on", micSvg("on", strings.en)],
@@ -135,13 +135,13 @@ test("twelve manifest actions have required controllers/states, translated trigg
     }
   }
   assert.notEqual(glyph("plugin-group-all"), glyph("plugin-group"), "Distinct white menu glyph");
-  assert.deepEqual(manifest.Actions.map((a: any) => a.UUID), ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-all", "fx-send", "fx-send-step", "status"].map(id => `com.gomtwigim.livemix.${id}`));
+  assert.deepEqual(manifest.Actions.map((a: any) => a.UUID), ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-all", "plugin-window", "fx-send", "fx-send-step", "status"].map(id => `com.gomtwigim.livemix.${id}`));
   const ko = JSON.parse(await readFile(resolve(pluginRoot, "ko.json"), "utf8")), en = JSON.parse(await readFile(resolve(pluginRoot, "en.json"), "utf8"));
   assert.deepEqual(Object.keys(ko.Localization).sort(), Object.keys(en.Localization).sort());
   for (const a of manifest.Actions) {
     const dial = a.UUID.endsWith(".fx-send"), sendStep = a.UUID.endsWith(".fx-send-step");
     assert.deepEqual(a.Controllers, [dial ? "Encoder" : "Keypad"]);
-    assert.equal(a.States.length, dial || sendStep ? 1 : 2);
+    assert.equal(a.States.length, dial || sendStep || a.UUID.endsWith(".plugin-window") ? 1 : 2);
     if (sendStep) { assert.equal(a.Name, "FX Send ±"); assert.equal(ko[a.UUID].Name, "FX 보내는 양 ±"); }
     if (a.UUID.endsWith(".fx")) {
       assert.equal(a.Name, "FX On/Off"); assert.equal(ko[a.UUID].Name, "FX ON/OFF");

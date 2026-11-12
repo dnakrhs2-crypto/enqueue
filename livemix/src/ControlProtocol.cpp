@@ -39,6 +39,7 @@ namespace
         { "COMMAND_EXPIRED", "Command expired before execution", false },
         { "RATE_LIMITED", "Request rate limit exceeded", true },
         { "SERVER_BUSY", "Server is busy", true },
+        { "PLUGIN_GROUP_EMPTY", "Plugin group has no plugins", false },
         { "INTERNAL_ERROR", "Control operation failed", true }
     };
     static_assert (std::size (errors) == (size_t) Code::internalError + 1);
@@ -268,6 +269,7 @@ namespace
             if constexpr (std::is_same_v<T, P::MuteGroupResult>) { put (v, "group", groupName (r.group)); put (v, "muted", r.muted); }
             if constexpr (std::is_same_v<T, P::PluginGroupResult> || std::is_same_v<T, P::PluginGroupEverywhereResult>) { put (v, "index", r.index); put (v, "off", r.off); }
             if constexpr (std::is_same_v<T, P::PluginGroupEverywhereResult>) put (v, "count", r.count);
+            if constexpr (std::is_same_v<T, P::PluginGroupWindowsResult>) { put (v, "index", r.index); put (v, "open", r.open); put (v, "count", r.count); }
             if constexpr (std::is_same_v<T, P::SendResult>) { put (v, "amount", r.amount); put (v, "pre", r.pre); }
             if constexpr (std::is_same_v<T, P::RequestStateResult>) put (v, "snapshotRevision", r.snapshotRevision);
         }, result);
@@ -406,6 +408,22 @@ ControlProtocol::ValidationResult ControlProtocol::validate (const juce::var& v)
             c.args = SetMuteAll { readGroup (a["group"]), (bool) a["muted"] };
         }
     }
+    else if (name == "togglePluginGroupWindows" || name == "setPluginGroupWindows")
+    {
+        if (! integer (a["index"], 1, 5)) return fail (Code::invalidArgument);
+        std::optional<juce::Uuid> channelId;
+        if (a.hasProperty ("channelId"))
+        {
+            if (! uuid (a["channelId"])) return fail (Code::invalidArgument);
+            channelId = juce::Uuid (a["channelId"].toString());
+        }
+        if (name == "togglePluginGroupWindows") c.args = TogglePluginGroupWindows { (int) a["index"], channelId };
+        else
+        {
+            if (! a["open"].isBool()) return fail (Code::invalidArgument);
+            c.args = SetPluginGroupWindows { (int) a["index"], channelId, (bool) a["open"] };
+        }
+    }
     else if (name != "requestState") return fail (Code::unknownCommand);
     if (const auto error = validateCommand (c)) return *error;
     return ClientMessage { std::move (c) };
@@ -424,6 +442,8 @@ std::optional<ControlProtocol::Error> ControlProtocol::validateCommand (const Co
         else if constexpr (std::is_same_v<T, ToggleFx> || std::is_same_v<T, SetFxOn>) return ! a.fxId.isNull();
         else if constexpr (std::is_same_v<T, SetPluginGroupOff>) return ! a.channelId.isNull() && a.index >= 1 && a.index <= 5;
         else if constexpr (std::is_same_v<T, SetPluginGroupOffEverywhere>) return a.index >= 1 && a.index <= 5;
+        else if constexpr (std::is_same_v<T, TogglePluginGroupWindows> || std::is_same_v<T, SetPluginGroupWindows>)
+            return a.index >= 1 && a.index <= 5 && (! a.channelId || ! a.channelId->isNull());
         else if constexpr (std::is_same_v<T, SetSend>) return ! a.channelId.isNull() && ! a.fxId.isNull()
             && (a.amount || a.pre) && (! a.amount || amount (*a.amount));
         else if constexpr (std::is_same_v<T, SetMuteGroup> || std::is_same_v<T, ToggleMuteGroup>
@@ -566,7 +586,7 @@ ControlProtocol::EncodeResult ControlProtocol::encode (const ServerMessage& mess
             put (v, "type", "helloAck"); put (v, "id", m.id); put (v, "instanceId", m.instanceId.toString());
             auto server = object(); put (server, "name", "LiveMix"); put (server, "version", m.serverVersion); put (v, "server", server);
             juce::Array<juce::var> capabilities;
-            for (const auto* name : { "stateDelta", "mic", "muteGroups", "pluginGroups", "sends", "pluginGroupsEverywhere", "fxOn", "muteAll" }) capabilities.add (name);
+            for (const auto* name : { "stateDelta", "mic", "muteGroups", "pluginGroups", "sends", "pluginGroupsEverywhere", "fxOn", "muteAll", "pluginGroupWindows" }) capabilities.add (name);
             put (v, "capabilities", capabilities); put (v, "eventIntervalMs", 100); put (v, "heartbeatIntervalMs", 5000);
         }
         else if constexpr (std::is_same_v<T, State>)

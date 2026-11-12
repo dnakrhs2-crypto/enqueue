@@ -1,0 +1,8 @@
+[
+  {"command":{"command":"togglePluginGroupWindows","args":{"index":1}},"result":{"index":1,"open":true,"count":3}},
+  {"command":{"command":"setPluginGroupWindows","args":{"index":1,"open":true}},"result":{"index":1,"open":true,"count":3}},
+  {"command":{"command":"setPluginGroupWindows","args":{"index":1,"open":false}},"result":{"index":1,"open":false,"count":3}},
+  {"command":{"command":"togglePluginGroupWindows","args":{"index":1,"channelId":"11111111111141118111111111111111"}},"result":{"index":1,"open":true,"count":1}},
+  {"command":{"command":"setPluginGroupWindows","args":{"index":1,"channelId":"11111111111141118111111111111111","open":true}},"result":{"index":1,"open":true,"count":1}},
+  {"command":{"command":"setPluginGroupWindows","args":{"index":1,"channelId":"11111111111141118111111111111111","open":false}},"result":{"index":1,"open":false,"count":1}}
+]

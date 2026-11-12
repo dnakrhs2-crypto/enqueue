@@ -11,8 +11,9 @@ namespace gocue::livemix
 {
 
 ControlDispatcher::ControlDispatcher (MixDocument& doc, MuteGroups& muteGroups, ControlState& controlState,
-                                      juce::Uuid instance, std::function<bool()> running)
-    : document (doc), groups (muteGroups), state (controlState), instanceId (instance), audioRunning (std::move (running))
+                                      juce::Uuid instance, std::function<bool()> running, PluginGroupWindowsHandler windowHandler)
+    : document (doc), groups (muteGroups), state (controlState), instanceId (instance), audioRunning (std::move (running)),
+      pluginGroupWindows (std::move (windowHandler))
 {
     jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
     jassert (! instanceId.isNull() && audioRunning);
@@ -43,6 +44,16 @@ ControlDispatcher::Result ControlDispatcher::dispatch (const ControlProtocol::Co
         const auto& session = document.getSession();
         if constexpr (std::is_same_v<T, P::RequestState>)
             return P::CommandResult { P::RequestStateResult { state.getCurrent().revision } };
+        else if constexpr (std::is_same_v<T, P::TogglePluginGroupWindows> || std::is_same_v<T, P::SetPluginGroupWindows>)
+        {
+            if (! pluginGroupWindows) return Code::internalError;
+            PluginGroupWindowsRequest request { a.index, a.channelId, {} };
+            if constexpr (std::is_same_v<T, P::SetPluginGroupWindows>) request.open = a.open;
+            const auto response = pluginGroupWindows (request);
+            if (const auto* error = std::get_if<Code> (&response)) return *error;
+            // Editor visibility is not document state: no changed flag or reserved revision.
+            return P::CommandResult { std::get<P::PluginGroupWindowsResult> (response) };
+        }
         else
         {
             // Reserve a revision before edits; equal-value sets still succeed at the safe-integer bound.

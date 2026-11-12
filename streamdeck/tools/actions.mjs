@@ -9,6 +9,7 @@ export const actions = [
   { id: "fx-mute-all", name: "fxMuteAll", tooltip: "fxMuteAllTooltip", states: ["unmuteState", "muteState"] },
   { id: "plugin-group", name: "pluginGroup", tooltip: "pluginGroupTooltip", states: ["off", "on"] },
   { id: "plugin-group-all", name: "pluginGroupAll", tooltip: "pluginGroupAllTooltip", states: ["allOff", "allOn"] },
+  { id: "plugin-window", name: "pluginWindow", tooltip: "pluginWindowTooltip", states: ["windowToggle"] },
   { id: "fx-send", name: "fxSend", tooltip: "fxSendTooltip", states: ["fxSend"] },
   { id: "fx-send-step", name: "fxSendStep", tooltip: "fxSendStepTooltip", states: ["fxSendStep"] },
   { id: "status", name: "statusAction", tooltip: "statusTooltip", states: ["disconnected", "connected"] }

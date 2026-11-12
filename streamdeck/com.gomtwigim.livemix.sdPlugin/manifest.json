@@ -3,7 +3,7 @@
   "UUID": "com.gomtwigim.livemix",
   "Name": "LiveMix",
   "Author": "Gomtwigim",
-  "Version": "1.4.0.0",
+  "Version": "1.5.0.0",
   "Description": "Control LiveMix microphones, FX channels, mute groups, mute-all, plugin groups and FX sends on this Windows PC.",
   "Category": "LiveMix",
   "CategoryIcon": "imgs/category",
@@ -279,6 +279,29 @@
         {
           "Name": "All ON",
           "Image": "imgs/actions/plugin-group-all/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.plugin-window",
+      "Name": "Plugin Group Windows",
+      "Tooltip": "Open or close the windows of the plugins in a numbered plugin group (LiveMix 0.22.0+).",
+      "Icon": "imgs/actions/plugin-window/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": true,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "Open/Close",
+          "Image": "imgs/actions/plugin-window/off",
           "TitleAlignment": "bottom",
           "FontSize": 12
         }

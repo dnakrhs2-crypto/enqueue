@@ -24,13 +24,14 @@ public:
         juce::Uuid instance;
         bool running = false;
         ControlState state { ControlState::capture (document, groups, running) };
-        ControlDispatcher dispatcher { document, groups, state, instance, [this] { return running; } };
+        ControlDispatcher dispatcher;
         int valueCalls = 0, structureCalls = 0, groupCalls = 0;
         bool callbacksOnMessageThread = true;
         juce::int64 nextId = 1;
         juce::Uuid generation = document.getSessionGeneration();
 
-        Fixture()
+        Fixture (ControlDispatcher::PluginGroupWindowsHandler windowHandler = {})
+            : dispatcher (document, groups, state, instance, [this] { return running; }, std::move (windowHandler))
         {
             engine.prepare (48000.0, 256);
             document.applyToEngine();
@@ -508,6 +509,81 @@ public:
             expectEquals (all.context.revision, emptyRevision); expect (! f.document.isDirty()); expectEquals (f.valueCalls, 0);
             error (f, f.command (P::SetPluginGroupOffEverywhere { 1, true }), P::ErrorCode::pluginGroupNotFound);
             expectEquals (f.state.getCurrent().revision, emptyRevision);
+        }
+
+        beginTest ("plugin window commands forward scope and intent without changing the projection or revision");
+        {
+            std::vector<ControlDispatcher::PluginGroupWindowsRequest> requests;
+            Fixture f ([&] (const auto& request) -> ControlDispatcher::PluginGroupWindowsResponse
+            {
+                expect (juce::MessageManager::getInstance()->isThisTheMessageThread());
+                requests.push_back (request);
+                return P::PluginGroupWindowsResult { request.index, request.open.value_or (true), request.open == false ? 0 : 3 };
+            });
+            f.clean();
+            const auto before = f.state.getCurrent();
+            const P::CommandArgs commands[] { P::TogglePluginGroupWindows { 1, {} }, P::TogglePluginGroupWindows { 5, f.channel() },
+                P::SetPluginGroupWindows { 5, {}, true }, P::SetPluginGroupWindows { 1, f.channel(), false } };
+            for (const auto& command : commands)
+            {
+                const auto response = ack (f, command);
+                expect (! response.changed);
+                expectEquals (response.context.revision, before.revision);
+                const auto r = result<P::PluginGroupWindowsResult> (response);
+                expectEquals (r.index, requests.back().index);
+                expect (r.open == requests.back().open.value_or (true));
+                expectEquals (r.count, requests.back().open == false ? 0 : 3);
+            }
+            expectEquals ((int) requests.size(), 4);
+            expect (! requests[0].channelId && ! requests[0].open);
+            expect (requests[1].channelId == f.channel() && ! requests[1].open);
+            expect (! requests[2].channelId && requests[2].open == true);
+            expect (requests[3].channelId == f.channel() && requests[3].open == false);
+            expect (f.state.getCurrent().projection == before.projection);
+            expect (! f.document.isDirty());
+            expectEquals (f.valueCalls, 0); expectEquals (f.structureCalls, 0); expectEquals (f.groupCalls, 0);
+        }
+
+        beginTest ("plugin window callback errors and missing handlers preserve state");
+        {
+            auto failure = P::ErrorCode::channelNotFound;
+            int calls = 0;
+            Fixture f ([&] (const auto&) -> ControlDispatcher::PluginGroupWindowsResponse { ++calls; return failure; });
+            f.clean();
+            const auto revision = f.state.getCurrent().revision;
+            for (const auto code : { P::ErrorCode::channelNotFound, P::ErrorCode::pluginGroupNotFound,
+                                     P::ErrorCode::pluginGroupEmpty, P::ErrorCode::serverBusy })
+            {
+                failure = code;
+                error (f, f.command (P::TogglePluginGroupWindows { 1, f.channel() }), code);
+                error (f, f.command (P::SetPluginGroupWindows { 1, {}, false }), code);
+                expectEquals (f.state.getCurrent().revision, revision);
+            }
+            expectEquals (calls, 8);
+            Fixture withoutHandler;
+            withoutHandler.clean();
+            error (withoutHandler, withoutHandler.command (P::TogglePluginGroupWindows { 1, {} }), P::ErrorCode::internalError);
+            error (withoutHandler, withoutHandler.command (P::SetPluginGroupWindows { 1, {}, true }), P::ErrorCode::internalError);
+        }
+
+        beginTest ("plugin window validation and stale contexts reject before calling the UI handler");
+        {
+            int calls = 0;
+            Fixture f ([&] (const auto& request) -> ControlDispatcher::PluginGroupWindowsResponse
+            {
+                ++calls;
+                return P::PluginGroupWindowsResult { request.index, true, 1 };
+            });
+            f.clean();
+            error (f, f.command (P::TogglePluginGroupWindows { 0, {} }), P::ErrorCode::invalidArgument);
+            error (f, f.command (P::SetPluginGroupWindows { 6, {}, true }), P::ErrorCode::invalidArgument);
+            error (f, f.command (P::TogglePluginGroupWindows { 1, juce::Uuid::null() }), P::ErrorCode::invalidArgument);
+            auto c = f.command (P::SetPluginGroupWindows { 1, {}, true });
+            c.instanceId = juce::Uuid(); error (f, c, P::ErrorCode::instanceChanged);
+            c.instanceId = f.instance; c.sessionId = juce::Uuid(); error (f, c, P::ErrorCode::sessionChanged);
+            c.sessionId = f.document.getSessionGeneration(); c.ifRevision = f.state.getCurrent().revision + 1;
+            error (f, c, P::ErrorCode::revisionConflict);
+            expectEquals (calls, 0);
         }
 
         beginTest ("invalid typed arguments, missing targets and stale instance/session/revision never invoke setters");

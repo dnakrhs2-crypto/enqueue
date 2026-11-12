@@ -9,6 +9,7 @@ type Intent = {
   computed: boolean; retries: number; retrying: boolean;
   rotation?: { channelId: string; fxId: string; last: number };
   expiryTimer?: ReturnType<typeof setTimeout>;
+  pausedAt?: number;
 };
 type TargetQueue = { waiting: Intent[]; active?: Intent; ack?: Ack; timer?: ReturnType<typeof setTimeout>; wake?: ReturnType<typeof setTimeout> };
 
@@ -18,17 +19,36 @@ export class CommandQueue {
   private readonly targets = new Map<string, TargetQueue>();
   private readonly boundary = (): void => this.clear("STALE_INPUT");
   private readonly changed = (): void => { for (const [target, queue] of this.targets) this.advance(target, queue); };
+  private readonly windowsChanged = (): void => {
+    const paused = this.connection.pluginWindowsBusy, now = performance.now();
+    for (const [target, queue] of this.targets) {
+      clearTimeout(queue.timer);
+      for (const intent of [...queue.waiting, ...(queue.active ? [queue.active] : [])]) {
+        if (paused) { intent.pausedAt = now; clearTimeout(intent.expiryTimer); }
+        else if (intent.pausedAt !== undefined) { intent.expires += now - intent.pausedAt; intent.pausedAt = undefined; }
+      }
+    }
+    if (paused) return;
+    for (const [target, queue] of this.targets) {
+      if (this.connection.pluginWindowsBusy) return;
+      for (const intent of queue.waiting) this.armExpiry(target, queue, intent);
+      this.armResponseWait(target, queue); this.advance(target, queue);
+    }
+  };
   constructor(private readonly connection: LiveMixConnection) {
     connection.store.on("boundary", this.boundary);
     connection.store.on("change", this.changed);
     connection.on("status", this.changed);
+    connection.on("pluginWindows", this.windowsChanged);
   }
   dispose(): void {
     this.clear("STOPPED"); this.connection.store.off("boundary", this.boundary);
     this.connection.store.off("change", this.changed); this.connection.off("status", this.changed);
+    this.connection.off("pluginWindows", this.windowsChanged);
   }
   enqueue(target: string, owner: string, compute: Intent["compute"], computed = false, retries = 0): Promise<void> {
     if (!this.connection.ready) return Promise.reject(new ConnectionError("DISCONNECTED"));
+    if (target === this.connection.pluginWindowTarget) return Promise.resolve();
     const queue = this.target(target);
     const keys = queue.waiting.filter(i => !i.rotation);
     if (keys.length >= 2) {
@@ -49,7 +69,7 @@ export class CommandQueue {
     const queue = this.target(target), now = performance.now();
     const rotations = queue.waiting.filter(i => i.rotation);
     const unsent = rotations.reduce((sum, i) => sum + i.parts.reduce((n, p) => n + Math.abs(p.ticks), 0), 0);
-    if (unsent + Math.abs(ticks) > 50 || rotations.some(i => i.expires <= now)) {
+    if (unsent + Math.abs(ticks) > 50 || rotations.some(i => i.expires <= (i.pausedAt ?? now))) {
       queue.waiting = queue.waiting.filter(i => { if (!i.rotation) return true; this.reject(i, "INPUT_BUSY"); return false; });
       this.advance(target, queue);
       return Promise.reject(new ConnectionError("INPUT_BUSY"));
@@ -87,11 +107,22 @@ export class CommandQueue {
     return queue;
   }
   private push(target: string, queue: TargetQueue, intent: Intent): void {
+    if (this.connection.pluginWindowsBusy) intent.pausedAt = performance.now();
+    else this.armExpiry(target, queue, intent);
+    queue.waiting.push(intent); this.advance(target, queue);
+  }
+  private armExpiry(target: string, queue: TargetQueue, intent: Intent): void {
+    clearTimeout(intent.expiryTimer);
     intent.expiryTimer = setTimeout(() => {
       const index = queue.waiting.indexOf(intent);
       if (index >= 0) { queue.waiting.splice(index, 1); this.reject(intent, "INPUT_EXPIRED"); this.advance(target, queue); }
     }, Math.max(1, intent.expires - performance.now()));
-    queue.waiting.push(intent); this.advance(target, queue);
+  }
+  private armResponseWait(target: string, queue: TargetQueue): void {
+    clearTimeout(queue.timer);
+    if (this.connection.pluginWindowsBusy) return;
+    if (queue.ack) queue.timer = setTimeout(() => { this.failTarget(target, queue, "STATE_TIMEOUT"); this.connection.requestState(); }, 2000);
+    else if (queue.active?.retrying) queue.timer = setTimeout(() => this.failTarget(target, queue, "INPUT_EXPIRED"), Math.max(1, queue.active.expires - performance.now()));
   }
   private reject(intent: Intent, code: string): void {
     clearTimeout(intent.expiryTimer); for (const p of intent.parts) p.reject(new ConnectionError(code));
@@ -110,13 +141,14 @@ export class CommandQueue {
     }
     if (queue.active) {
       if (queue.active.retrying) {
-        if (!queue.active.parts.length || queue.active.expires < performance.now()) { this.failTarget(target, queue, "INPUT_EXPIRED"); return; }
+        if (this.connection.resynchronizing) return;
+        if (!queue.active.parts.length || queue.active.expires < (queue.active.pausedAt ?? performance.now())) { this.failTarget(target, queue, "INPUT_EXPIRED"); return; }
         this.dispatch(target, queue, snapshot);
       }
       return;
     }
     const now = performance.now();
-    while (queue.waiting[0] && (queue.waiting[0].epoch !== this.epoch || queue.waiting[0].expires <= now)) this.reject(queue.waiting.shift()!, "INPUT_EXPIRED");
+    while (queue.waiting[0] && (queue.waiting[0].epoch !== this.epoch || queue.waiting[0].expires <= (queue.waiting[0].pausedAt ?? now))) this.reject(queue.waiting.shift()!, "INPUT_EXPIRED");
     const intent = queue.waiting[0];
     if (!intent) { this.targets.delete(target); return; }
     if (intent.notBefore > now) {
@@ -132,8 +164,13 @@ export class CommandQueue {
     catch (error) { this.failTarget(target, queue, error instanceof ConnectionError ? error.code : "COMMAND_FAILED"); return; }
     void this.connection.command(command, active.computed ? snapshot.revision : undefined).then(ack => {
       if (active.epoch !== this.epoch || this.targets.get(target) !== queue) return;
+      // Editor visibility has no projection/delta; the ACK completes this input.
+      if (command.command === "togglePluginGroupWindows" || command.command === "setPluginGroupWindows") {
+        for (const p of active.parts) p.resolve();
+        queue.active = undefined; this.advance(target, queue); return;
+      }
       queue.ack = ack;
-      queue.timer = setTimeout(() => { this.failTarget(target, queue, "STATE_TIMEOUT"); this.connection.requestState(); }, 2000);
+      this.armResponseWait(target, queue);
       this.advance(target, queue);
     }).catch((error: unknown) => {
       if (this.targets.get(target) !== queue) return;
@@ -141,7 +178,7 @@ export class CommandQueue {
       if (code === "REVISION_CONFLICT" && active.retries > 0 && active.parts.length) {
         active.retries--; active.retrying = true;
         // Connection's conflict path requests a snapshot before this continuation runs.
-        queue.timer = setTimeout(() => this.failTarget(target, queue, "INPUT_EXPIRED"), Math.max(1, active.expires - performance.now()));
+        this.armResponseWait(target, queue);
         this.advance(target, queue);
       } else this.failTarget(target, queue, code);
     });

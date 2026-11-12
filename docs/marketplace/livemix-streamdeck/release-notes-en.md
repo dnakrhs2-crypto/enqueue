@@ -1,3 +1,10 @@
+# LiveMix 1.5.0
+
+- Added Plugin Group Windows to open or close the plugin windows of a numbered plugin group, like LiveMix's Plugin group 1–5 windows hotkeys. Choose all mics or one mic, the group and Open/Close, Open or Close, including in Multi Actions.
+- The windows come to the front even while LiveMix is minimized, in the tray or behind a game or OBS. Open/Close closes them when one is in use or in front, otherwise opens them or brings them to the front.
+- A group without plugins shows an alert on press; a missing group or microphone shows the existing missing feedback.
+- This key requires LiveMix 0.22.0+ with External Control enabled. Older versions show an update message and send no window command. Existing action requirements are unchanged.
+
 # LiveMix 1.4.0
 
 - Added Mute All Mics and Mute All FX, matching LiveMix's top bar mute switches without mute-group marks. Choose Toggle, Mute or Unmute, including in Multi Actions.

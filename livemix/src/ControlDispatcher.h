@@ -15,7 +15,17 @@ class ControlDispatcher
 {
 public:
     using Result = std::variant<ControlProtocol::Ack, ControlProtocol::ErrorResponse>;
-    ControlDispatcher (MixDocument&, MuteGroups&, ControlState&, juce::Uuid instanceId, std::function<bool()> audioRunning);
+    struct PluginGroupWindowsRequest
+    {
+        int index = 1;   // wire numbering: 1..5
+        std::optional<juce::Uuid> channelId;   // absent: every mic
+        std::optional<bool> open;             // absent: toggle
+    };
+    using PluginGroupWindowsResponse = std::variant<ControlProtocol::PluginGroupWindowsResult, ControlProtocol::ErrorCode>;
+    using PluginGroupWindowsHandler = std::function<PluginGroupWindowsResponse (const PluginGroupWindowsRequest&)>;
+    /** Optional UI handler; window commands fail with INTERNAL_ERROR when it is absent. */
+    ControlDispatcher (MixDocument&, MuteGroups&, ControlState&, juce::Uuid instanceId, std::function<bool()> audioRunning,
+                       PluginGroupWindowsHandler = {});
     Result dispatch (const ControlProtocol::Command&);
 
 private:
@@ -24,6 +34,7 @@ private:
     ControlState& state;
     const juce::Uuid instanceId;
     std::function<bool()> audioRunning;
+    PluginGroupWindowsHandler pluginGroupWindows;
 };
 
 } // namespace gocue::livemix

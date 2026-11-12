@@ -108,6 +108,7 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
     if (code === "DISCONNECTED") return this.connection.status === "disabled" ? "disabled" : "disconnected";
     const keys: Record<string, StringKey> = { INVALID_SETTINGS: "invalidSettings", CHANNEL_NOT_FOUND: "missing", FX_NOT_FOUND: "missingFx",
       SEND_NOT_FOUND: "missingFx", GROUP_NOT_FOUND: "missingGroup", PLUGIN_GROUP_NOT_FOUND: "missingGroup", NO_CHANNELS: "noMics", DUPLICATE_NAME: "duplicate",
+      PLUGIN_GROUP_EMPTY: "emptyGroup",
       INPUT_BUSY: "delayed", INPUT_EXPIRED: "delayed", REVISION_CONFLICT: "conflict", UNSUPPORTED: "unsupported" };
     return keys[code] ?? "failure";
   }

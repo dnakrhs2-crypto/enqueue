@@ -82,25 +82,29 @@ export class FxBinding {
   }
 }
 
-export type ActionKind = "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
+export type ActionKind = "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "plugin-window" | "fx-send" | "fx-send-step" | "status";
 export type ActionSettings = Omit<MicSettings, "mode"> & {
-  mode: "toggle" | "on" | "off" | "mute" | "unmute" | "up" | "down" | "set";
+  mode: "toggle" | "on" | "off" | "mute" | "unmute" | "up" | "down" | "set" | "open" | "close";
+  windowTarget?: "all" | "mic";
   fxId: string; fxName: string; groupIndex: number;
   stepPercent: 1 | 5 | 10; targetPercent: number; pressMode: "pre-post" | "none"; display: "connection" | "session" | "audio";
 };
 export function actionSettings(kind: ActionKind, value: unknown): { settings: ActionSettings; valid: boolean; changed: boolean } {
   const o = isObject(value) ? value : {}, mute = kind.endsWith("mute-group") || kind.endsWith("mute-all"), sendStep = kind === "fx-send-step";
-  const modes = sendStep ? ["up", "down", "set"] : mute ? ["toggle", "mute", "unmute"] : ["toggle", "on", "off"];
+  const window = kind === "plugin-window";
+  const modes = window ? ["toggle", "open", "close"] : sendStep ? ["up", "down", "set"] : mute ? ["toggle", "mute", "unmute"] : ["toggle", "on", "off"];
   const steps = sendStep ? [1, 5, 10] : [1, 5];
   const validTarget = typeof o.targetPercent === "number" && Number.isInteger(o.targetPercent) && o.targetPercent >= 0 && o.targetPercent <= 100;
   const base = migrateSettings({ ...o, mode: "toggle" });
   const valid = base.valid && (o.mode === undefined || modes.includes(String(o.mode)))
-    && (!(kind === "plugin-group" || kind === "plugin-group-all") || o.groupIndex === undefined || (Number.isInteger(o.groupIndex) && Number(o.groupIndex) >= 1 && Number(o.groupIndex) <= 5))
+    && (!(kind === "plugin-group" || kind === "plugin-group-all" || window) || o.groupIndex === undefined || (Number.isInteger(o.groupIndex) && Number(o.groupIndex) >= 1 && Number(o.groupIndex) <= 5))
+    && (!window || o.windowTarget === undefined || o.windowTarget === "all" || o.windowTarget === "mic")
     && (!(kind === "fx-send" || sendStep) || o.stepPercent === undefined || steps.includes(o.stepPercent as number))
     && (kind !== "fx-send" || o.pressMode === undefined || o.pressMode === "pre-post" || o.pressMode === "none")
     && (!sendStep || o.targetPercent === undefined || validTarget)
     && (kind !== "status" || o.display === undefined || ["connection", "session", "audio"].includes(String(o.display)));
   const settings: ActionSettings = { ...base.settings,
+    ...(window ? { windowTarget: o.windowTarget === "mic" ? "mic" as const : "all" as const } : {}),
     mode: modes.includes(String(o.mode)) ? o.mode as ActionSettings["mode"] : sendStep ? "up" : "toggle",
     fxId: isUuid(o.fxId) ? o.fxId : "", fxName: typeof o.fxName === "string" ? o.fxName : "",
     groupIndex: Number.isInteger(o.groupIndex) && Number(o.groupIndex) >= 1 && Number(o.groupIndex) <= 5 ? Number(o.groupIndex) : 1,

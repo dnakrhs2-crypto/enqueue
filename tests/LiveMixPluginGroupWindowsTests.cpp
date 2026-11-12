@@ -19,6 +19,7 @@ namespace
     struct Windows { using Type = PluginWindowManager MainComponent::*; friend Type member (Windows); };
     struct Status { using Type = juce::Label MainComponent::*; friend Type member (Status); };
     struct Held { using Type = int MainComponent::*; friend Type member (Held); };
+    struct PrepareForeground { using Type = std::function<void()> MainComponent::*; friend Type member (PrepareForeground); };
     struct Register { using Type = void (MainComponent::*)(); friend Type member (Register); };
     struct Settings { using Type = void (MainComponent::*)(); friend Type member (Settings); };
     struct Positions
@@ -29,6 +30,7 @@ namespace
     template struct Access<Windows, &MainComponent::windows>;
     template struct Access<Status, &MainComponent::statusLeft>;
     template struct Access<Held, &MainComponent::hotkeysHeld>;
+    template struct Access<PrepareForeground, &MainComponent::preparePluginWindowForeground>;
     template struct Access<Register, &MainComponent::registerHotkeys>;
     template struct Access<Settings, &MainComponent::showSettingsDialog>;
     template struct Access<Positions, &PluginWindowManager::positions>;
@@ -101,6 +103,7 @@ namespace
         MixDocument document { engine };
         std::unique_ptr<MainComponent> main;
         const juce::AudioPluginInstance* active = nullptr;
+        int foregroundInputs = 0;
 
         Rig()
         {
@@ -115,6 +118,7 @@ namespace
             actions.roots = [path = folder.path] { return ObsPluginInstaller::Roots { path, path, path, [] { return false; }, {} }; };
             actions.elevate = [] (juce::String&) { return ObsPluginInstaller::Result::needsElevation; };
             main = std::make_unique<MainComponent> (document, settings, actions);
+            (*main).*member (PrepareForeground()) = [this] { ++foregroundInputs; };
             main->setSize (1440, 900);
             windows().isWindowInUse = [this] (const PluginEditorWindow& window) { return &window.getPlugin() == active; };
         }
@@ -161,6 +165,27 @@ class LiveMixPluginGroupWindowsTests : public juce::UnitTest
 {
 public:
     LiveMixPluginGroupWindowsTests() : UnitTest ("LiveMix plugin group windows", "LiveMix") {}
+
+    void windowResult (Rig& rig, const ControlDispatcher::PluginGroupWindowsRequest& request, bool open, int count)
+    {
+        const auto response = rig.main->controlPluginGroupWindows (request);
+        const auto* result = std::get_if<ControlProtocol::PluginGroupWindowsResult> (&response);
+        expect (result != nullptr);
+        if (result != nullptr)
+        {
+            expectEquals (result->index, request.index);
+            expect (result->open == open);
+            expectEquals (result->count, count);
+        }
+    }
+
+    void windowError (Rig& rig, const ControlDispatcher::PluginGroupWindowsRequest& request, ControlProtocol::ErrorCode code)
+    {
+        const auto response = rig.main->controlPluginGroupWindows (request);
+        const auto* error = std::get_if<ControlProtocol::ErrorCode> (&response);
+        expect (error != nullptr);
+        if (error != nullptr) expect (*error == code);
+    }
 
     void runTest() override
     {
@@ -420,6 +445,212 @@ public:
             expectEquals (plugin.stateReads, reads + 1);
             expectEquals (other.stateReads, otherReads);
             expect (! rig.windows().isOpen (plugin));
+        }
+
+        beginTest ("external window requests distinguish missing mics, missing groups and groups without live plugins");
+        {
+            using Code = ControlProtocol::ErrorCode;
+            Rig rig;
+            windowError (rig, { 1, juce::Uuid(), {} }, Code::channelNotFound);
+            windowError (rig, { 1, rig.document.getSession().fx[0].id, true }, Code::channelNotFound);
+            windowError (rig, { 1, {}, {} }, Code::pluginGroupNotFound);
+            windowError (rig, { 1, rig.mic(), false }, Code::pluginGroupNotFound);
+            expectEquals (rig.status().getText(), trf ("플러그인 그룹 {0}이(가) 있는 마이크가 없습니다 (체인 열기 아래 '플러그인 그룹'에서 만듭니다)", "1"));
+            rig.document.addPluginGroup (rig.mic());
+            const auto otherMic = rig.document.addChannel();
+            rig.add (otherMic, "Ungrouped");
+            windowError (rig, { 1, otherMic, true }, Code::pluginGroupNotFound);
+            windowError (rig, { 1, {}, true }, Code::pluginGroupEmpty);
+            PluginSlotState missing;
+            missing.slotId = juce::Uuid();
+            rig.engine.getChannelChain (rig.mic())->addMissingSlot (missing);
+            rig.join (rig.mic(), 0, 0);
+            expect (rig.document.save (rig.file()).wasOk());
+            const auto session = rig.document.getSession().toJson();
+            for (const auto open : { std::optional<bool>(), std::optional<bool> (true), std::optional<bool> (false) })
+                windowError (rig, { 1, rig.mic(), open }, Code::pluginGroupEmpty);
+            expectEquals (rig.status().getText(), trf ("플러그인 그룹 {0}에 넣은 플러그인이 없습니다", "1"));
+            expectEquals (rig.foregroundInputs, 0);
+            expectEquals (rig.windows().getNumOpenWindows(), 0);
+            expectEquals (rig.document.getSession().toJson(), session);
+            expect (! rig.document.isDirty());
+        }
+
+        beginTest ("external toggle opens all matching mics including OFF groups, then closes only group editors");
+        {
+            Rig rig;
+            const auto secondMic = rig.document.addChannel();
+            const auto ungroupedMic = rig.document.addChannel();
+            auto& first = rig.add (rig.mic(), "First");
+            auto& outside = rig.add (rig.mic(), "Outside");
+            auto& second = rig.add (rig.mic(), "Second");
+            auto& third = rig.add (secondMic, "Third");
+            auto& ungrouped = rig.add (ungroupedMic, "Ungrouped");
+            rig.document.addPluginGroup (rig.mic());
+            rig.document.addPluginGroup (secondMic);
+            rig.join (rig.mic(), 0, 2);
+            rig.join (rig.mic(), 0, 0);
+            rig.join (secondMic, 0, 0);
+            rig.document.setPluginGroupOff (rig.mic(), 0, true);
+            rig.document.setChannelOn (secondMic, false);
+            expect (rig.document.save (rig.file()).wasOk());
+            const auto session = rig.document.getSession().toJson();
+            juce::StringArray opened;
+            for (auto* plugin : { &first, &second, &third })
+                plugin->onCreate = [&, plugin]
+                {
+                    expectEquals (rig.foregroundInputs, 1);   // before even the first editor, only once for all mics
+                    opened.add (plugin->getName());
+                };
+            rig.windows().open (outside, "Outside");
+            rig.active = &outside;
+            int closed = 0;
+            const auto onClosed = rig.windows().onWindowClosed;
+            rig.windows().onWindowClosed = [&] (juce::AudioPluginInstance& plugin) { ++closed; onClosed (plugin); };
+            windowResult (rig, { 1, {}, {} }, true, 3);
+            expectEquals (opened.joinIntoString (","), juce::String ("First,Second,Third"));
+            expectEquals (rig.foregroundInputs, 1);
+            expectEquals (rig.windows().getNumOpenWindows(), 4);
+            expect (! rig.windows().isOpen (ungrouped));
+            expect (! rig.main->isVisible());
+            expectEquals (rig.status().getText(), trf ("플러그인 그룹 {0} 화면 열림", "1"));
+            if (auto* window = editorFor (third))
+                expectEquals (window->getName(), rig.document.getSession().channels[1].name + " - Third");
+            else expect (false);
+            rig.active = &second;
+            windowResult (rig, { 1, {}, {} }, false, 3);
+            expectEquals (closed, 3);
+            expectEquals (rig.foregroundInputs, 1);
+            expectEquals (rig.windows().getNumOpenWindows(), 1);
+            expect (rig.windows().isOpen (outside));
+            expectEquals (rig.status().getText(), trf ("플러그인 그룹 {0} 화면 닫힘", "1"));
+            expectEquals (rig.document.getSession().toJson(), session);
+            expect (! rig.document.isDirty());
+        }
+
+        beginTest ("external window commands scope all five numbered groups to one mic");
+        {
+            Rig rig;
+            const auto secondMic = rig.document.addChannel();
+            for (int group = 0; group < 5; ++group)
+                for (const auto& mic : { rig.mic(), secondMic })
+                {
+                    rig.document.addPluginGroup (mic);
+                    rig.add (mic, "Group " + juce::String (group + 1));
+                    rig.join (mic, group, group);
+                }
+            auto& outside = *rig.engine.getChannelChain (rig.mic())->getSlot (0).plugin;
+            rig.windows().open (outside, "Other mic");
+            expect (rig.document.save (rig.file()).wasOk());
+            for (int group = 0; group < 5; ++group)
+            {
+                rig.active = &outside;
+                windowResult (rig, { group + 1, secondMic, {} }, true, 1);
+                auto& plugin = *rig.engine.getChannelChain (secondMic)->getSlot (group).plugin;
+                expect (rig.windows().isOpen (plugin));
+                expectEquals (rig.windows().getNumOpenWindows(), 2);
+                rig.active = &plugin;
+                windowResult (rig, { group + 1, secondMic, {} }, false, 1);
+                expectEquals (rig.windows().getNumOpenWindows(), 1);
+                expect (rig.windows().isOpen (outside));
+                expectEquals (rig.foregroundInputs, group + 1);
+            }
+            expect (! rig.document.isDirty());
+        }
+
+        beginTest ("external set recalls existing editors, toggle recalls covered or minimised editors, and close counts only open windows");
+        {
+            Rig rig;
+            auto& first = rig.add (rig.mic(), "First");
+            auto& second = rig.add (rig.mic(), "Second");
+            rig.document.addPluginGroup (rig.mic());
+            rig.join (rig.mic(), 0, 0);
+            rig.join (rig.mic(), 0, 1);
+            expect (rig.document.save (rig.file()).wasOk());
+            windowResult (rig, { 1, {}, false }, false, 0);
+            expectEquals (rig.foregroundInputs, 0);
+            windowResult (rig, { 1, rig.mic(), true }, true, 2);
+            expectEquals (rig.foregroundInputs, 1);
+            auto* firstWindow = editorFor (first);
+            auto* secondWindow = editorFor (second);
+            expect (firstWindow != nullptr && secondWindow != nullptr);
+            rig.active = &first;
+            expect (rig.windows().isInFront (first));
+            windowResult (rig, { 1, {}, true }, true, 2);   // set always recalls, even when already in use
+            expectEquals (rig.foregroundInputs, 2);
+            expect (editorFor (first) == firstWindow && editorFor (second) == secondWindow);
+            rig.active = nullptr;
+            expect (! rig.windows().isInFront (first));   // the test predicate overrides the OS Z order too
+            if (firstWindow != nullptr) firstWindow->setMinimised (true);
+            expect (rig.windows().closeByUser (second));
+            windowResult (rig, { 1, {}, {} }, true, 2);
+            expectEquals (rig.foregroundInputs, 3);
+            expect (editorFor (first) == firstWindow);
+            if (firstWindow != nullptr) expect (! firstWindow->isMinimised());
+            expect (rig.windows().closeByUser (second));
+            windowResult (rig, { 1, rig.mic(), false }, false, 1);
+            windowResult (rig, { 1, {}, false }, false, 0);
+            expectEquals (rig.foregroundInputs, 3);
+            expect (! rig.document.isDirty());
+        }
+
+        beginTest ("external window commands report SERVER_BUSY during session loading without input or window changes");
+        {
+            Rig rig;
+            auto& plugin = rig.add (rig.mic(), "Member");
+            rig.document.addPluginGroup (rig.mic());
+            rig.join (rig.mic(), 0, 0);
+            const auto before = rig.status().getText();
+            (*rig.main).*member (Held()) = 1;
+            for (const auto open : { std::optional<bool>(), std::optional<bool> (true), std::optional<bool> (false) })
+                windowError (rig, { 1, {}, open }, ControlProtocol::ErrorCode::serverBusy);
+            expectEquals (rig.foregroundInputs, 0);
+            expect (! rig.windows().isOpen (plugin));
+            expectEquals (rig.status().getText(), before);
+            (*rig.main).*member (Held()) = 0;
+            windowResult (rig, { 1, {}, true }, true, 1);
+            rig.active = &plugin;
+            (*rig.main).*member (Held()) = 1;
+            windowError (rig, { 1, rig.mic(), false }, ControlProtocol::ErrorCode::serverBusy);
+            expect (rig.windows().isOpen (plugin));
+            expectEquals (rig.foregroundInputs, 1);
+            (*rig.main).*member (Held()) = 0;
+            windowResult (rig, { 1, {}, {} }, false, 1);
+            expectEquals (rig.foregroundInputs, 1);
+            expect (ControlProtocol::isRetryable (ControlProtocol::ErrorCode::serverBusy));
+        }
+
+        beginTest ("external foreground fallback raises editors without activation or leaving them topmost");
+        {
+            Rig rig;
+            auto& plugin = rig.add (rig.mic(), "Member");
+            rig.document.addPluginGroup (rig.mic());
+            rig.join (rig.mic(), 0, 0);
+            windowResult (rig, { 1, {}, true }, true, 1);
+            auto* window = editorFor (plugin);
+            expect (window != nullptr);
+           #if JUCE_WINDOWS
+            if (window != nullptr)
+            {
+                const auto handle = (HWND) window->getPeer()->getNativeHandle();
+                juce::DocumentWindow other ("Cover", juce::Colours::black, juce::DocumentWindow::closeButton);
+                other.setSize (200, 100);
+                other.setVisible (true);
+                const auto foreground = GetForegroundWindow();
+                rig.windows().raiseWithoutActivating (plugin);
+                expect (GetForegroundWindow() == foreground);
+                expect ((GetWindowLongPtrW (handle, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0);
+                bool above = false;
+                for (auto h = GetWindow ((HWND) other.getPeer()->getNativeHandle(), GW_HWNDPREV); h != nullptr; h = GetWindow (h, GW_HWNDPREV))
+                    if (h == handle) above = true;
+                expect (above);
+                expect (! rig.windows().isInFront (plugin));
+                rig.active = &plugin;
+                expect (rig.windows().isInFront (plugin));
+            }
+           #endif
+            windowResult (rig, { 1, {}, false }, false, 1);
+            expectEquals (rig.foregroundInputs, 1);
         }
 
         beginTest ("isOpen and closeByUser share the close button callback; ordinary open stays centred by default");

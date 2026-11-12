@@ -94,6 +94,8 @@ public:
     void attachControlServer (ControlServer*);
     void detachControlServer();
     ControlServer::Status getExternalControlStatus() const;
+    /** Message-thread external control only; the hotkey path keeps its existing foreground handling. */
+    ControlDispatcher::PluginGroupWindowsResponse controlPluginGroupWindows (const ControlDispatcher::PluginGroupWindowsRequest&);
     std::function<void (bool)> onExternalControlEnabled;
     /** The notice bar under the top bar, with a close button - never a modal dialog: a modal alert freezes the whole
         window (no resizing, no mic buttons) until it is dismissed, which is wrong for a live tool. Three lines that
@@ -200,6 +202,8 @@ private:
     GlobalHotkeys hotkeys;
     int hotkeysHeld = 0;   // > 0: a session is going into the engine (see HotkeysHeld)
     PluginWindowManager windows;
+    static void sendPluginWindowMouseInput();
+    std::function<void()> preparePluginWindowForeground = sendPluginWindowMouseInput;   // replaceable in hidden-desktop tests
     WebDavBackup backup;
     std::unique_ptr<PluginManagerWindow> pluginManagerWindow;   // made on first use, hidden on close
     std::unique_ptr<LoudnessWindow> loudnessWindow;             // the same

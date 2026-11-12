@@ -129,8 +129,9 @@ struct ControlServer::Impl : private juce::Timer
         int connectedCountLocked() const;
     };
 
-    Impl (MixDocument& doc, MuteGroups& mute, std::function<bool()> running)
-        : document (doc), groups (mute), audioRunning (std::move (running)), gate (std::make_shared<Gate>())
+    Impl (MixDocument& doc, MuteGroups& mute, std::function<bool()> running, ControlDispatcher::PluginGroupWindowsHandler windowHandler)
+        : document (doc), groups (mute), audioRunning (std::move (running)), pluginGroupWindows (std::move (windowHandler)),
+          gate (std::make_shared<Gate>())
     {
         messageThread();
         jassert (audioRunning);
@@ -156,6 +157,7 @@ struct ControlServer::Impl : private juce::Timer
     MixDocument& document;
     MuteGroups& groups;
     std::function<bool()> audioRunning;
+    ControlDispatcher::PluginGroupWindowsHandler pluginGroupWindows;
     std::shared_ptr<Gate> gate;
     Options options;
     bool started = false, enabled = false, shuttingDown = false, ready = false, disablePending = false, captureScheduled = false;
@@ -410,7 +412,7 @@ void ControlServer::Impl::openListener()
     state = std::make_unique<ControlState> (ControlState::capture (document, groups, audioRunning()));
     ingress = std::make_shared<Ingress> (gate, gate->generation, discoveryStatus.instanceId, token, options.appVersion, log);
     ingress->context = { ingress->instance, state->getCurrent().sessionId, state->getCurrent().revision };
-    dispatcher = std::make_unique<ControlDispatcher> (document, groups, *state, ingress->instance, audioRunning);
+    dispatcher = std::make_unique<ControlDispatcher> (document, groups, *state, ingress->instance, audioRunning, pluginGroupWindows);
     socket = std::make_unique<ControlSocket> (log);
     port = socket->start (options.preferredPort, [queue = ingress] (auto connection) { return queue->connect (std::move (connection)); });
     if (port == 0) { fail ("BIND_FAILED"); return; }
@@ -667,8 +669,9 @@ ControlServer::Status ControlServer::Impl::getStatus() const
     return result;
 }
 
-ControlServer::ControlServer (MixDocument& document, MuteGroups& groups, std::function<bool()> running)
-    : impl (std::make_unique<Impl> (document, groups, std::move (running))) {}
+ControlServer::ControlServer (MixDocument& document, MuteGroups& groups, std::function<bool()> running,
+                              ControlDispatcher::PluginGroupWindowsHandler windowHandler)
+    : impl (std::make_unique<Impl> (document, groups, std::move (running), std::move (windowHandler))) {}
 ControlServer::~ControlServer() = default;
 void ControlServer::start (Options options) { impl->start (std::move (options)); }
 void ControlServer::setEnabled (bool enabled) { impl->setEnabled (enabled); }

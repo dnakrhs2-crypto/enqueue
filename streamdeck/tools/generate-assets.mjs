@@ -4,7 +4,7 @@ import { resolve, dirname } from "node:path";
 import { locales } from "./locales.mjs";
 import { actions, triggers } from "./actions.mjs";
 import { brandPng } from "./brand-png.mjs";
-import { brandSvg, categorySvg, glyph, svgDocument, micSvg, actionSvg, sendSvg, encoderSvg, palette } from "../src/ui/artwork.ts";
+import { brandSvg, categorySvg, glyph, svgDocument, micSvg, actionSvg, windowSvg, sendSvg, encoderSvg, palette } from "../src/ui/artwork.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plugin = resolve(root, "com.gomtwigim.livemix.sdPlugin");
@@ -47,6 +47,9 @@ function states(id, size) {
       [name, actionSvg(state, en, count, 3, false, "mic", size)],
       ...[1, 2, 3, 4, 5].map(index => ["group-" + index + "-" + name, actionSvg(state, en, count, 3, false, "mic", size, index)])
     ]));
+    case "plugin-window": return { off: windowSvg("toggle", true, 1, en, false, size),
+      ...Object.fromEntries([true, false].flatMap(all => ["toggle", "open", "close"].flatMap(mode =>
+        [1, 2, 3, 4, 5].map(index => [`group-${index}-${all ? "all" : "mic"}-${mode}`, windowSvg(mode, all, index, en, false, size)])))) };
     case "fx-send": return { off: emptySend(id, size), on: svgDocument(size, '<rect width="144" height="144" rx="12" fill="' + palette.background + '"/><g transform="translate(48 8) scale(2)">' + glyph(id, palette.accent) + '</g><text x="72" y="98" text-anchor="middle" font-family="Segoe UI,sans-serif" font-size="25" fill="' + palette.text + '">35%</text>') };
     case "fx-send-step": return { off: emptySend(id, size), on: sendSvg(35, "+5", en, false, false, size),
       increase: sendSvg(35, "+5", en, false, false, size), decrease: sendSvg(35, "−5", en, false, false, size),

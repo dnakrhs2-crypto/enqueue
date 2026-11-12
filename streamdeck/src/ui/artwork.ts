@@ -9,12 +9,14 @@ export const palette = {
   lampOn: "#35D07F", lampOff: "#3A3F47", brand: "#E5302D", danger: "#FF5A5F",
   warning: "#FFB454", white: "#FFFFFF"
 } as const;
-export type IconKind = "mic" | "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "fx-send" | "fx-send-step" | "status";
+export type IconKind = "mic" | "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "plugin-window" | "plugin-window-all" | "fx-send" | "fx-send-step" | "status";
 export type Lamp = "on" | "off" | "muted-on" | "muted-off" | "disconnected" | "disabled" | "checking" | "version" | "missing" | "duplicate";
 export type ActionLamp = "all-on" | "all-off" | "mixed" | "group-muted" | "group-clear" | "mute-every-muted" | "mute-every-clear" | "plugin-on" | "plugin-off" | "plugin-all-on" | "plugin-all-off" | "plugin-all-mixed" | "status-on" | "status-off";
 export type Labels = { [key: string]: string };
 /** Why a mic/FX/send is silent: its mute group, or the whole-mute switch (1.4.0 / LiveMix 0.18.0), named first. */
 export type MuteCause = "group" | "all";
+/** What a plugin-window key does when pressed (1.5.0 / LiveMix 0.22.0). */
+export type WindowMode = "toggle" | "open" | "close";
 export const xml = (s: string): string => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
 export const svgDocument = (size: number, body: string, viewBox = 144): string =>
   '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + viewBox + ' ' + viewBox + '">' + body + '</svg>';
@@ -32,6 +34,9 @@ const digits = [
   "M9 7h6l-4 5h1a3 3 0 0 1 0 6H9", "M14 18V7l-6 7h9",
   "M15 7H9v5h3a3 3 0 0 1 0 6H9"
 ];
+// A group number shrunk into a window's content area; the stroke is scaled back so it matches the frame.
+const windowDigit = (index: number, cx: number, cy: number, scale: number): string =>
+  '<g transform="translate(' + cx + ' ' + cy + ') scale(' + scale + ') translate(-12 -12.5)" stroke-width="' + (1.8 / scale).toFixed(2) + '"><path d="' + digits[Math.max(1, Math.min(5, index))] + '"/></g>';
 export function glyph(kind: IconKind, color: string = palette.white, index = 1): string {
   let body: string;
   switch (kind) {
@@ -44,6 +49,8 @@ export function glyph(kind: IconKind, color: string = palette.white, index = 1):
     case "fx-mute-all": body = '<g transform="translate(2 2) scale(.833)">' + fx + '</g>'; break;
     case "plugin-group": body = '<rect x="5" y="4" width="14" height="16" rx="3"/><path d="M2 8h3M2 16h3M19 8h3M19 16h3M9 1v3M15 1v3M9 20v3M15 20v3"/><path d="' + digits[Math.max(1, Math.min(5, index))] + '"/>'; break;
     case "plugin-group-all": body = '<path d="M7 2h11a3 3 0 0 1 3 3v13"/><rect x="4" y="5" width="14" height="16" rx="3"/><path d="M1 9h3M1 17h3M18 9h3M18 17h3M8 2v3M14 2v3"/><g transform="translate(-1 1)"><path d="' + digits[Math.max(1, Math.min(5, index))] + '"/></g>'; break;
+    case "plugin-window": body = '<rect x="2.5" y="3" width="19" height="18" rx="3"/><path d="M2.5 7.5h19"/>' + windowDigit(index, 12, 14.3, 0.8); break;
+    case "plugin-window-all": body = '<path d="M6 2.5h12.5a3 3 0 0 1 3 3v12"/><rect x="2.5" y="5.5" width="16" height="16" rx="3"/><path d="M2.5 9.5h16"/>' + windowDigit(index, 10.5, 15.6, 0.75); break;
     case "fx-send": body = '<path d="M5 16a8 8 0 1 1 14 0M12 12l4-5M9 21h6"/><circle cx="12" cy="12" r="1"/>'; break;
     case "fx-send-step": body = '<path d="M3 7h7M6.5 3.5v7M15 7h6M4 15h16v6H4zM8 16v4M12 16v4"/>'; break;
     case "status": body = '<circle cx="12" cy="12" r="9"/><path d="M12 3v8M6 10a6 6 0 1 0 12 0"/>'; break;
@@ -114,6 +121,14 @@ export function actionSvg(lamp: ActionLamp, labels: Labels, count = 0, total = 0
     label = labels[off ? "audioStopped" : "connected"]!;
   }
   return key(body + pause(stopped, labels) + text(label, 82, 16) + text(detail, 102, 13, palette.dimText), size);
+}
+
+/** Plugin-group window key: no on/off lamp (LiveMix does not publish window state), so the glyph stays neutral white.
+ *  One window = one microphone, two stacked windows = every microphone, as the plugin-group / plugin-group-all keys. */
+export function windowSvg(mode: WindowMode, all: boolean, index: number, labels: Labels, stopped = false, size = 144): string {
+  index = Math.max(1, bounded(index, 5));
+  const label = labels[mode === "open" ? "windowOpen" : mode === "close" ? "windowClose" : "windowToggle"]!;
+  return key(placed(glyph(all ? "plugin-window-all" : "plugin-window", palette.white, index), 43, 7, 58) + pause(stopped, labels) + text(label, 82, 16), size);
 }
 
 export function sendSvg(percent: number, badge: string, labels: Labels, muted = false, stopped = false, size = 144, mutedBy: MuteCause = "group"): string {

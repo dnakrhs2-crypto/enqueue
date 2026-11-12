@@ -1,5 +1,23 @@
 # LiveMix Stream Deck changelog
 
+## 1.5.0 - 2026-11-13
+
+### 한국어
+
+- 플러그인 그룹 화면 키를 추가했습니다. LiveMix 설정의 ‘플러그인 그룹 1~5 화면’ 핫키처럼 그 번호의 플러그인 그룹에 넣은 플러그인 화면을 열고 닫습니다. 전체 마이크 또는 마이크 하나, 그룹 번호, 동작(화면 열기/닫기 · 화면 열기 · 화면 닫기)을 고르며 다중 동작에서도 사용할 수 있습니다. 키를 뗄 때는 명령을 보내지 않습니다.
+- LiveMix가 최소화·트레이 상태여도, 게임이나 OBS를 쓰는 중이어도 화면이 앞으로 나옵니다. 화면 열기/닫기는 화면을 쓰는 중이거나 앞에 보이면 닫고, 아니면 열거나 앞으로 냅니다.
+- 그룹에 플러그인이 없으면 누를 때 알림과 설정 창 메시지를 표시하고, 그룹이나 마이크가 없으면 기존 ‘그룹 없음’·‘마이크 없음’ 표시를 씁니다.
+- 화면이 뜨는 동안(보통 1~2초) 누른 다른 키는 화면이 뜬 뒤 차례로 처리합니다. 그사이 같은 그룹 화면 키를 또 누르면 한 번만 처리해 열리자마자 닫히지 않습니다.
+- 이 키에는 LiveMix 0.22.0+의 `pluginGroupWindows` 기능이 필요합니다. 이전 버전에서는 기존 업데이트 안내만 표시하고 명령을 보내지 않으며, 다른 키의 요구 버전은 그대로입니다.
+
+### English
+
+- Added Plugin Group Windows. Like LiveMix's Plugin group 1–5 windows hotkeys, it opens or closes the plugin windows of a numbered plugin group. Choose all mics or one mic, the group and Open/Close, Open or Close; Multi Actions are supported. Key release sends nothing.
+- The windows come to the front even while LiveMix is minimized, in the tray or behind a game or OBS. Open/Close closes them when one is in use or in front, otherwise opens them or brings them to the front.
+- A group without plugins shows an alert and an inspector message on press; a missing group or microphone uses the existing missing feedback.
+- Other keys pressed while the windows open (usually 1-2 seconds) run in order once they are up. Pressing the same group's window key again in that time is handled once, so the windows do not close right after opening.
+- This key requires LiveMix 0.22.0+ and `pluginGroupWindows`. Older versions show the existing update message and send no command; other actions keep their requirements.
+
 ## 1.4.0 - 2026-10-30
 
 ### 한국어

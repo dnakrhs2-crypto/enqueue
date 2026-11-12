@@ -1,9 +1,9 @@
 import { performance } from "node:perf_hooks";
 import type { Language } from "./i18n.js";
 import { strings } from "./strings.js";
-import { micSvg, sendSvg, actionSvg, type Lamp, type ActionLamp, type MuteCause } from "./artwork.js";
+import { micSvg, sendSvg, actionSvg, windowSvg, type Lamp, type ActionLamp, type MuteCause, type WindowMode } from "./artwork.js";
 export { xml } from "./artwork.js";
-export type { Lamp, ActionLamp, MuteCause } from "./artwork.js";
+export type { Lamp, ActionLamp, MuteCause, WindowMode } from "./artwork.js";
 
 export interface KeyOutput {
   setState(state: 0 | 1): Promise<void>;
@@ -49,6 +49,15 @@ export function actionImage(lamp: ActionLamp, language: Language, count = 0, tot
   const key = [lamp, language, count, total, audioStopped, group, index].join("/");
   const cached = images.get(key); if (cached) return cached;
   const image = dataUrl(actionSvg(lamp, strings[language], count, total, audioStopped, group, 144, index));
+  images.set(key, image); return image;
+}
+
+/** Plugin-group window key (3 modes × one/all × 5 groups × 2 languages × audio state: bounded, cached). */
+export function windowImage(mode: WindowMode, all: boolean, index: number, language: Language, audioStopped = false): string {
+  index = Number.isFinite(index) ? Math.max(1, Math.min(5, Math.trunc(index))) : 1;
+  const key = ["window", mode, all, index, language, audioStopped].join("/");
+  const cached = images.get(key); if (cached) return cached;
+  const image = dataUrl(windowSvg(mode, all, index, strings[language], audioStopped));
   images.set(key, image); return image;
 }
 

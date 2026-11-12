@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { fixture } from "./helpers.mjs";
 
 export class FakeLiveMix extends EventEmitter {
@@ -13,16 +14,24 @@ export class FakeLiveMix extends EventEmitter {
   discoveryPath = "";
   clients = new Set();
   received = [];
+  sent = [];
+  pluginWindows = new Map(); // Test-only editor counts/visibility, never part of the projection.
+  work = [];
+  windowTimer = undefined;
+  deltaTimer = undefined;
+  deltaPending = false;
   errors = [];
   connections = 0;
   heartbeat = 0;
   publication = Promise.resolve();
   discoveryState = "ready";
   token = randomBytes(32).toString("base64url");
-  behavior = { omitState: false, omitDelta: false, omitAck: false, omitPong: false, holdCommands: false, holdHello: false, split: false, version: 1, rejectAuth: false, helloInstance: "" };
-  constructor({ pluginGroupsEverywhere = true, legacyFx = false, fxOn = !legacyFx, legacyMuteAll = legacyFx, muteAll = !legacyMuteAll } = {}) {
+  behavior = { omitState: false, omitDelta: false, omitAck: false, omitPong: false, holdCommands: false, holdHello: false, split: false, version: 1, rejectAuth: false, helloInstance: "", sessionLoading: false,
+    windowDelayMs: 0, commandMaxAgeMs: 1000 };
+  constructor({ pluginGroupsEverywhere = true, legacyFx = false, fxOn = !legacyFx, legacyMuteAll = legacyFx, muteAll = !legacyMuteAll, pluginGroupWindows = muteAll } = {}) {
     super(); this.pluginGroupsEverywhere = pluginGroupsEverywhere; this.fxOn = fxOn; this.legacyFx = legacyFx;
     this.muteAll = muteAll; this.legacyMuteAll = legacyMuteAll;
+    this.pluginGroupWindows = pluginGroupWindows;
   }
   async start() {
     this.appdata = await mkdtemp(join(tmpdir(), "livemix-sd-"));
@@ -32,11 +41,12 @@ export class FakeLiveMix extends EventEmitter {
     this.snapshot = await fixture("initial-state"); this.helloFixture = await fixture("hello-ack");
     if (this.legacyFx) for (const fx of this.snapshot.state.fx) delete fx.on;
     if (this.legacyMuteAll) delete this.snapshot.state.muteAll;
-    this.helloFixture.capabilities = this.helloFixture.capabilities.filter(c => !["pluginGroupsEverywhere", "fxOn", "muteAll"].includes(c));
+    this.helloFixture.capabilities = this.helloFixture.capabilities.filter(c => !["pluginGroupsEverywhere", "fxOn", "muteAll", "pluginGroupWindows"].includes(c));
     if (this.pluginGroupsEverywhere) this.helloFixture.capabilities.push("pluginGroupsEverywhere");
     if (this.fxOn) this.helloFixture.capabilities.push("fxOn");
     if (this.muteAll) this.helloFixture.capabilities.push("muteAll");
-    this.helloFixture.server.version = this.muteAll ? "0.18.0" : this.fxOn ? "0.17.7" : this.pluginGroupsEverywhere ? "0.15.5" : "0.9.0";
+    if (this.pluginGroupWindows) this.helloFixture.capabilities.push("pluginGroupWindows");
+    this.helloFixture.server.version = this.pluginGroupWindows ? "0.22.0" : this.muteAll ? "0.18.0" : this.fxOn ? "0.17.7" : this.pluginGroupsEverywhere ? "0.15.5" : "0.9.0";
     this.ordering = await fixture("ordering"); this.errorsFixture = await fixture("errors"); this.clientHello = await fixture("hello");
     await this.listen(); await this.publishDiscovery();
     this.heartbeatTimer = setInterval(() => { void this.publishDiscovery().catch(error => this.errors.push(error)); }, 5000);
@@ -75,6 +85,31 @@ export class FakeLiveMix extends EventEmitter {
       if (!this.behavior.omitState) this.sendState(client, "initial");
       return;
     }
+    this.work.push({ client, message: m, at: performance.now() }); this.drain();
+  }
+  drain() {
+    if (this.windowTimer) return;
+    while (this.work.length) {
+      const { client, message, at } = this.work.shift();
+      if (client.socket.destroyed) continue;
+      if (message.type === "command" && performance.now() - at > this.behavior.commandMaxAgeMs) {
+        this.error(client, message.id, "COMMAND_EXPIRED"); continue;
+      }
+      if (this.behavior.windowDelayMs > 0 && ["togglePluginGroupWindows", "setPluginGroupWindows"].includes(message.command)) {
+        this.windowTimer = setTimeout(() => {
+          this.windowTimer = undefined;
+          try {
+            this.execute(client, message); this.emit("windowEnd", message);
+            this.drain();
+            if (this.deltaPending) this.publishDelta();
+          } catch (error) { this.errors.push(error); client.socket.destroy(); this.emit("failure"); }
+        }, this.behavior.windowDelayMs);
+        this.emit("windowStart", message); return;
+      }
+      this.execute(client, message);
+    }
+  }
+  execute(client, m) {
     assert.equal(m.instanceId, this.snapshot.instanceId);
     if (m.type === "ping") {
       if (!this.behavior.omitPong) this.send(client, { v: 1, type: "pong", id: m.id, ...this.context() });
@@ -111,6 +146,26 @@ export class FakeLiveMix extends EventEmitter {
       if (!targets.length) { this.error(client, m.id, "PLUGIN_GROUP_NOT_FOUND"); return; }
       for (const group of targets) group.off = a.off;
       result = { index: a.index, off: a.off, count: targets.length };
+    } else if (m.command === "togglePluginGroupWindows" || m.command === "setPluginGroupWindows") {
+      if (!this.pluginGroupWindows) { this.error(client, m.id, "UNKNOWN_COMMAND"); return; }
+      if (this.behavior.sessionLoading) { this.error(client, m.id, "SERVER_BUSY"); return; }
+      if (!a || !Number.isInteger(a.index) || a.index < 1 || a.index > 5
+        || (a.channelId !== undefined && (typeof a.channelId !== "string" || !/^[0-9a-f]{32}$/.test(a.channelId) || !/[1-9a-f]/.test(a.channelId)))
+        || (m.command === "setPluginGroupWindows" && typeof a.open !== "boolean")) { this.error(client, m.id, "INVALID_ARGUMENT"); return; }
+      if (a.channelId !== undefined && !channel) { this.error(client, m.id, "CHANNEL_NOT_FOUND"); return; }
+      const channels = a.channelId === undefined ? state.channels : [channel];
+      const groups = channels.filter(c => c.pluginGroups.some(g => g.index === a.index));
+      if (!groups.length) { this.error(client, m.id, "PLUGIN_GROUP_NOT_FOUND"); return; }
+      const targets = groups.map(c => {
+        const key = `${c.id}/${a.index}`;
+        if (!this.pluginWindows.has(key)) this.pluginWindows.set(key, { count: 1, open: 0 });
+        return this.pluginWindows.get(key);
+      });
+      if (!targets.some(g => g.count > 0)) { this.error(client, m.id, "PLUGIN_GROUP_EMPTY"); return; }
+      const open = m.command === "togglePluginGroupWindows" ? !targets.some(g => g.open > 0) : a.open;
+      const count = targets.reduce((n, g) => n + (open ? g.count : g.open), 0);
+      for (const g of targets) g.open = open ? g.count : 0;
+      result = { index: a.index, open, count };
     } else if (m.command === "toggleMuteAll" || m.command === "setMuteAll") {
       if (!this.muteAll) { this.error(client, m.id, "UNKNOWN_COMMAND"); return; }
       if (!a || typeof a !== "object" || Array.isArray(a) || !["mic", "fx"].includes(a.group)
@@ -150,11 +205,16 @@ export class FakeLiveMix extends EventEmitter {
     const changed = JSON.stringify(state) !== before;
     if (changed) this.snapshot.revision++;
     if (!this.behavior.omitAck) this.send(client, { ...this.ordering[2], ...this.context(), id: m.id, changed, result });
-    if (changed && !this.behavior.omitDelta) this.publishDelta();
+    if (changed && !this.behavior.omitDelta) {
+      if (this.behavior.windowDelayMs > 0) {
+        if (!this.deltaTimer) this.deltaTimer = setTimeout(() => { this.deltaTimer = undefined; this.publishDelta(); }, 100);
+      } else this.publishDelta();
+    }
     this.emit("command", m);
   }
   context() { return { instanceId: this.snapshot.instanceId, sessionId: this.snapshot.sessionId, revision: this.snapshot.revision }; }
   send(client, message) {
+    this.sent.push(message);
     const bytes = Buffer.from(JSON.stringify(message) + "\n");
     if (this.behavior.split) {
       // Split inside the first multibyte code point and yield to the socket between pieces.
@@ -173,6 +233,8 @@ export class FakeLiveMix extends EventEmitter {
   }
   broadcastState(reason = "structureChanged") { for (const c of this.clients) if (c.authenticated) this.sendState(c, reason); }
   publishDelta() {
+    if (this.windowTimer) { this.deltaPending = true; return; }
+    this.deltaPending = false;
     for (const c of this.clients) if (c.authenticated && c.published.revision !== this.snapshot.revision) {
       const changes = {};
       const channels = this.snapshot.state.channels.filter(ch => JSON.stringify(ch) !== JSON.stringify(c.published.state.channels.find(old => old.id === ch.id)));
@@ -191,7 +253,10 @@ export class FakeLiveMix extends EventEmitter {
     if (full) this.broadcastState(); else this.publishDelta();
     this.emit("mutation");
   }
-  error(client, id, code) { this.send(client, { v: 1, type: "error", id, code, message: "Test command rejected", retryable: false, ...this.context() }); }
+  error(client, id, code) {
+    const fixture = this.errorsFixture.find(m => m.type === "error" && m.code === code);
+    this.send(client, { v: 1, type: "error", code, message: "Test command rejected", retryable: false, ...fixture, id, ...this.context() });
+  }
   publishDiscovery(overrides = {}) {
     const value = { schemaVersion: 1, app: "LiveMix", appVersion: this.helloFixture.server.version, instanceId: this.snapshot.instanceId, pid: process.pid,
       state: this.discoveryState, host: "127.0.0.1", updatedAt: new Date().toISOString(), heartbeat: ++this.heartbeat, leaseMs: 15000,
@@ -218,6 +283,7 @@ export class FakeLiveMix extends EventEmitter {
   }
   async close() {
     clearInterval(this.heartbeatTimer);
+    clearTimeout(this.windowTimer); clearTimeout(this.deltaTimer); this.work = [];
     for (const c of this.clients) c.socket.destroy();
     if (this.server?.listening) await new Promise(resolve => this.server.close(resolve));
     await this.publication;

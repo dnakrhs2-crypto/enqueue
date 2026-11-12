@@ -8,6 +8,7 @@ import { MicrophoneMuteAllAction } from "./actions/mic-mute-all.js";
 import { FxMuteAllAction } from "./actions/fx-mute-all.js";
 import { PluginGroupAction } from "./actions/plugin-group.js";
 import { PluginGroupEverywhereAction } from "./actions/plugin-group-all.js";
+import { PluginWindowAction } from "./actions/plugin-window.js";
 import { FxSendAction } from "./actions/fx-send.js";
 import { FxSendStepAction } from "./actions/fx-send-step.js";
 import { StatusAction } from "./actions/status.js";
@@ -19,7 +20,7 @@ streamDeck.logger.setLevel("info");
 const connection = new LiveMixConnection();
 const queue = new CommandQueue(connection);
 const language = languageOf(streamDeck.info.application.language);
-for (const Action of [MicrophoneAction, FxAction, AllMicrophonesAction, MicrophoneMuteGroupAction, FxMuteGroupAction, MicrophoneMuteAllAction, FxMuteAllAction, PluginGroupAction, PluginGroupEverywhereAction, FxSendAction, FxSendStepAction, StatusAction]) {
+for (const Action of [MicrophoneAction, FxAction, AllMicrophonesAction, MicrophoneMuteGroupAction, FxMuteGroupAction, MicrophoneMuteAllAction, FxMuteAllAction, PluginGroupAction, PluginGroupEverywhereAction, PluginWindowAction, FxSendAction, FxSendStepAction, StatusAction]) {
   streamDeck.actions.registerAction(new Action(connection, queue, language));
 }
 let lastFailure = -Infinity;

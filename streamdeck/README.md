@@ -1,12 +1,13 @@
-# LiveMix Stream Deck 1.4.0
+# LiveMix Stream Deck 1.5.0
 
-Windows release `com.gomtwigim.livemix`, manifest version `1.4.0.0`
-(npm package `1.4.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64;
+Windows release `com.gomtwigim.livemix`, manifest version `1.5.0.0`
+(npm package `1.5.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64;
 the **Plugin Group (All Mics)** key requires **LiveMix 0.10.0+**, and
 the **FX On/Off** key requires **LiveMix 0.16.0+**.
 **Mute All Mics** and **Mute All FX** require **LiveMix 0.18.0+**.
+**Plugin Group Windows** requires **LiveMix 0.22.0+**.
 The other eight actions still work with LiveMix 0.6.0+.
-This package implements twelve actions, a shared LiveMix connection and a
+This package implements thirteen actions, a shared LiveMix connection and a
 hardware-free test harness. Node 24 and Stream Deck 7.1+ are the runtime baseline.
 It does not install, launch or change LiveMix or Stream Deck profiles.
 
@@ -25,7 +26,7 @@ npm.cmd run pack -- -f
 The build commands require the prepared dependency directory; retain it and the
 existing lockfile. Do not run npm install or rewrite package-lock.json for
 this release. Its preview package metadata is intentionally retained under that
-constraint; package.json, manifest and runtime hello advertise 1.4.0.
+constraint; package.json, manifest and runtime hello advertise 1.5.0.
 All direct dependencies use exact versions.
 The test script builds the actual distributable first, compiles the TypeScript
 tests with `tsconfig.test.json`, then runs `node:test` serially. No physical Stream
@@ -71,6 +72,7 @@ the new artwork and physical Stream Deck + remain separate visual/device checks.
 | Mute All FX / FX 전체 뮤트 | LiveMix 0.18.0+. Toggle / Mute / Unmute every FX channel, matching the top bar FX Mute button without group marks. Same states, with a plain FX glyph and total FX count. |
 | Plugin Group | Toggle / ON / OFF an existing numbered slot. Deleted slots show Group missing. Deleting earlier groups shifts later numbers. |
 | Plugin Group (All Mics) / 플러그인 그룹 (전체 마이크) | LiveMix 0.10.0+. Switch slot 1–5 across every microphone that has it. Toggle: any ON → all OFF; all OFF → all ON. ON/OFF modes set every matching group explicitly. Accent All ON (state 1), red All OFF or warning Some ON (state 0), group digit and ON/total count; stopped-audio badge remains visible. No matching group → Group missing and no command. |
+| Plugin Group Windows / 플러그인 그룹 화면 | LiveMix 0.22.0+. Toggle / Open / Close the plugin windows in group 1–5 across all microphones (default) or one microphone. Toggle closes the target windows if any is in use, otherwise opens them. The windows come forward even when LiveMix is minimized or in the tray. Shows the configured action and group number, always state 0, with the stopped-audio badge. |
 | FX Send Amount (Encoder only) | Rotate adjusts amount by 1% (default) or 5% per tick, clamped to 0–100%. Down only records the press; release within 600 ms without rotation toggles pre/post when enabled. Rotating while pressed changes amount only. Long press, tap and long touch issue no command. |
 | FX Send ± / FX 보내는 양 ± (Keypad, including Mobile) | Key down increases (default), decreases or sets the send amount. Steps: 1%, 5% (default), 10%; set target: 0–100% (default 50%). Amount-only CAS preserves pre/post, clamps to 0–100%, and recomputes once on an explicit conflict. Shows the current percentage, channel → FX title and +5 / −5 / =50 mode badge. |
 | Status | Connection / session and dirty `*` / audio display. Key down only requests a snapshot, at most once per two seconds per key. |
@@ -79,14 +81,14 @@ All keypad releases are inert. The PI saves changes immediately and preserves
 selected channel/FX/slot values while offline. Offline send keys and encoders show
 `—`; encoders also disable the bar. Amount and pre/post commands update only their respective fields.
 
-All eleven Keypad actions are available in Stream Deck Multi Actions. FX Send
+All twelve Keypad actions are available in Stream Deck Multi Actions. FX Send
 Amount remains excluded because Multi Actions accept keys, not Encoder actions.
 Within a Multi Action, each step executes its existing PI Mode setting and
 sends no key state, image or title; failures still call `showAlert` on the host.
 The host's `userDesiredState` is ignored: toggle, mute and amount modes do not map
 one-to-one to the two key states. The Korean/English PI explains this alongside
 the existing notes. Ordinary keys keep their normal artwork and state display.
-Key Logic support remains disabled for all twelve actions.
+Key Logic support remains disabled for all thirteen actions.
 
 Mute All Mics and Mute All FX expose only Mode (Toggle / Mute / Unmute) and
 Display name in their PI. The two latches are independent of mute groups and
@@ -110,9 +112,29 @@ microphones with each slot. The default title is `All mics · Group N` /
 `전체 마이크 · 그룹 N`. Without the `pluginGroupsEverywhere` capability,
 the key displays the existing update-LiveMix message and never sends this command.
 
+Plugin Group Windows reuses the microphone, group, mode and display-name fields.
+The first microphone choice is All mics; its group list combines existing slots
+and shows the microphone count, as on Plugin Group (All Mics). Selecting one
+microphone shows that microphone's groups and the existing same-name fallback
+checkbox. The group-number note remains unchanged. Default titles are
+`All mics · Group N` / `전체 마이크 · 그룹 N` or `<microphone name> · Group N`.
+Without `pluginGroupWindows`, the key shows the update-LiveMix message and alerts
+without sending a command. Missing microphones/groups use the existing errors;
+an empty group alerts and shows `emptyGroup` in the PI.
+
+This action adds `windowTarget: "all" | "mic"` and uses `groupIndex` (1–5),
+`mode: "toggle" | "open" | "close"`, `shortTitle`, and the existing
+`channelId` / `channelName` / `nameFallback` binding fields. Missing fields migrate
+to all microphones, group 1, toggle, an empty alias and enabled name fallback.
+A missing `windowTarget` means all microphones even if a saved channel exists;
+switching to all microphones retains that channel selection. Settings stay at
+version 1. Invalid enums, group numbers, fallback flags or future settings versions
+disable input without overwriting the saved settings. Existing actions do not gain
+the new target field or change their migration rules.
+
 ## Package structure
 
-- `src/plugin.ts`: registers twelve actions and makes one SDK connection; owns one
+- `src/plugin.ts`: registers thirteen actions and makes one SDK connection; owns one
   LiveMix TCP connection and one command queue for every visible key/device/PI.
 - `src/livemix/`: bounded discovery reads, lease validation, loopback NDJSON,
   handshake/heartbeat/reconnect, strict wire validation, state reducer, bindings
@@ -120,13 +142,15 @@ the key displays the existing update-LiveMix message and never sends this comman
 - `src/actions/mic.ts`: microphone toggle/ON/OFF, context lifecycle, settings
   migration and PI bridge using the SDK 2.x `ui.action` and
   `ui.sendToPropertyInspector` APIs. Key release sends no command.
-- `src/actions/base.ts`: the mic lifecycle/PI/binding pattern shared by the eleven
+- `src/actions/base.ts`: the mic lifecycle/PI/binding pattern shared by the twelve
   additional actions. `mute-group.ts` shares the microphone/FX latch behavior.
 - `src/actions/mute-all.ts`: shared all-mute behavior, with thin mic/FX actions,
   capability `muteAll` and separate queue targets. `micMuted` / `fxMuted` in
   `muted.ts` keep the mute rules shared by mic, FX and both send controls.
 - `src/actions/fx.ts`: the individual FX switch, gated by `fxOn`, using the shared
   lifecycle and the microphone lamp template with the FX glyph.
+- `src/actions/plugin-window.ts`: numbered plugin-group windows for all/one
+  microphone, gated by `pluginGroupWindows`, using the supplied `windowImage`.
 - `src/ui/`: finite SVG templates, safe display text, bundled ko/en strings and a
   shared rolling call history per key/encoder. The 10/s budget includes `showAlert`.
 - `com.gomtwigim.livemix.sdPlugin/`: manifest, local PI, local translations and
@@ -196,6 +220,17 @@ The all-mics group key queues by `plugin-group-all/<index>` and sends
 `ifRevision`. Channels without that slot are skipped. Its ACK contains
 `{ index, off, count }`; only the normal `channels[].pluginGroups` state update
 changes the displayed values.
+
+Plugin Group Windows queues by `plugin-window/<all|channelId>/<index>` and sends
+`togglePluginGroupWindows { index, channelId? }` or
+`setPluginGroupWindows { index, channelId?, open: true/false }` on key down.
+Omitting `channelId` targets all microphones; the current instance/session is
+always included. There is no `ifRevision` or conflict retry. The server applies
+the operation atomically and returns `{ index, open, count }`, `changed:false`,
+and its unchanged revision. The queue completes on ACK without waiting for a
+projection/delta; window visibility is never cached as key state. Missing
+microphones/groups and empty groups are non-retryable; `SERVER_BUSY` is retryable
+when a session is loading, but the key does not replay input automatically.
 
 FX On/Off queues by `fx/<fxId>`. Key down sends `toggleFx { fxId }` in Toggle
 mode or `setFxOn { fxId, on: true/false }` in ON/OFF mode, with the current

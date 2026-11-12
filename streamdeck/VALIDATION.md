@@ -1,3 +1,31 @@
+# 1.5.0 검증 - 2026-11-13
+
+작업 폴더 `C:\Users\claude\gocue-sdwin`(가지 `livemix-sd-plugwin`), LiveMix 0.22.0과 같이 배포.
+패키지·hello 판 **1.5.0**, 생성 manifest **1.5.0.0**. 새 키 `com.gomtwigim.livemix.plugin-window`(플러그인 그룹 화면).
+
+| 명령 (`streamdeck/`에서) | 결과 |
+|---|---|
+| `npm run typecheck` | 통과 |
+| `npm test` | 216개 통과, 실패 0 (새 `plugin-window.test.ts`·`plugin-window-wait.test.ts` 포함), 317.8초 |
+| `npm run validate` | manifest 그림 참조 39개 / 파일 78개, 묶음 그림 252개가 디자인 원본과 같음, ko/en 완비, CLI 검증 통과 |
+| `npm run pack` | `dist/com.gomtwigim.livemix.streamDeckPlugin` 258,415바이트, 항목 262개, manifest 1.5.0.0, SHA-256 `d4717c16dd7017d45bdb2e0e282275dea6354b1c90579d4ed7282e2ba7bd6c00` |
+
+## 실제 LiveMix 0.22.0과 맞춘 확인
+
+- 도구 `C:\Users\claude\tools\claude_harness\lm_sdwin_1113\sdwin_chain_check.mjs`: 숨은 바탕화면의 LiveMix 0.22.0 작업본에
+  가짜 Stream Deck 호스트로 빌드한 플러그인을 올려 확인 13개 통과(`SDWIN_CHAIN_OK`). 그룹 1(플러그인 2개) 화면 열기 응답 약 1.5초.
+  - 키 그림·제목, 열기·닫기, 토글, 마이크 하나, 빈 그룹 알림, 없는 그룹, 다중 동작 열기,
+    열리는 사이 누른 마이크 키, 다중 동작 두 그룹, 같은 토글 재누름, 토큰이 플러그인 기록에 없음.
+  - 수정 전 플러그인으로는 '열리는 사이 누른 마이크 키'·'다중 동작 두 그룹'·'같은 토글 재누름'이 실패했다.
+- 실제 Stream Deck 기기·Stream Deck 앱으로는 재지 못했다.
+
+## 검토
+
+- 아스트라 검토 2바퀴. 1바퀴째 FIX(화면 명령을 LiveMix가 처리하는 1~2초 동안 다른 키·다중 동작·연결이 실패) →
+  연결·대기열에서 화면 명령 동안 다른 요청을 붙잡았다가 순서대로 보내고, 기한을 멈췄다가 다시 세게 고침.
+- 2바퀴째: 앞 지적 해결 확인. 새 지적 1건 = 같은 그룹에 따로 만든 열기·닫기 키를 화면이 뜨는 동안(실제 플러그인은 보통 1초 안쪽)
+  연달아 누르면 닫기가 무시된다(닫기를 다시 누르면 닫힘). 1초 안쪽 우연 겹침이라 고치지 않았다.
+
 # 1.4.0 validation - 2026-10-30
 
 Implemented the Stream Deck half of all-mute in

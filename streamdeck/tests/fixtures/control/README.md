@@ -16,6 +16,11 @@ substituted; this is not a captured user session.
   empty coalesced delta, then the requestState ack/snapshot exchange.
 - `errors.json`: `handshake()` error cases and
   `ControlProtocol.cpp::encode(ErrorResponse/ServerStatus)`.
+- `plugin-windows.json`: LiveMix 0.22.0 `TogglePluginGroupWindows` /
+  `SetPluginGroupWindows` arguments and `PluginGroupWindowsResult` in
+  `ControlProtocol.{h,cpp}` / `ControlDispatcher.cpp`; three microphones with
+  one plugin each in group 1, initially closed. This is a normalized command/result
+  sequence, with the current instance/session and request ID added by the fake server.
 
 LiveMix 0.16.0 adds the boolean `fx[].on` field (initially `true`) and the
 `fxOn` helloAck capability after `pluginGroupsEverywhere`. These two fixtures
@@ -28,9 +33,22 @@ omit the object; the plugin fills absent mic/FX keys with false. A present
 non-object or non-boolean key is invalid. Deltas carry only changed keys and
 merge independently of `muteGroups`.
 
+LiveMix 0.22.0 adds the `pluginGroupWindows` capability. Window commands return
+`{ index, open, count }` with `changed:false` and the current revision, without
+publishing window visibility in a snapshot or delta. Opening counts targeted
+plugins; closing counts editors actually closed, so an already closed group
+returns zero. `errors.json` includes missing microphone/group, empty group
+(`PLUGIN_GROUP_EMPTY`, not retryable) and loading-session (`SERVER_BUSY`, retryable).
+
 The fake server loads these files, substitutes the live port/instance/token and
 current document values, and sends the same envelopes. It implements hello,
 ping, requestState and the mic, FX, mute-group, mute-all, plugin-group and send commands.
+It also implements toggle/set plugin-group windows. Its `pluginWindows` map holds
+test-only plugin counts and open-editor counts by `channelId/index`; a group has
+one plugin by default. Set its count to zero to model an empty group. These values
+never enter the projection. `behavior.sessionLoading` returns `SERVER_BUSY`.
+`pluginGroupWindows:false` omits the capability and rejects the commands.
+The capability defaults to `muteAll`, retaining legacy fake-server configurations.
 `fxOn:false` omits that capability; `legacyFx:true` also omits FX `on` fields
 and defaults `fxOn` to false, serving a LiveMix 0.15.5-shaped snapshot.
 `pluginGroupsEverywhere:false` independently omits that capability.

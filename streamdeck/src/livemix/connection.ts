@@ -63,12 +63,14 @@ export class DiscoveryLease {
 }
 export const reconnectDelay = (attempt: number, random = Math.random): number => Math.round(Math.min(8000, 250 * 2 ** Math.min(attempt, 5)) * (0.8 + random() * 0.4));
 export class ConnectionError extends Error { constructor(readonly code: string) { super(code); } }
-type Pending = { command: Command; sessionId?: string; resolve: (ack: Ack) => void; reject: (error: ConnectionError) => void; timer: ReturnType<typeof setTimeout> };
+const isWindowCommand = (command: Command) => command.command === "togglePluginGroupWindows" || command.command === "setPluginGroupWindows";
+type Pending = { command: Command; sessionId?: string; ifRevision?: number; sent: boolean;
+  resolve: (ack: Ack) => void; reject: (error: ConnectionError) => void; timer?: ReturnType<typeof setTimeout> };
 export type ConnectionOptions = {
   // Dependency injection is for in-process tests only. The plugin always uses the fixed APPDATA location.
   discoveryPath?: string;
   random?: () => number;
-  timing?: Partial<{ poll: number; request: number; hello: number; ping: number; pong: number; stable: number }>;
+  timing?: Partial<{ poll: number; request: number; pluginWindows: number; hello: number; ping: number; pong: number; stable: number }>;
 };
 
 export class LiveMixConnection extends EventEmitter {
@@ -82,6 +84,7 @@ export class LiveMixConnection extends EventEmitter {
   private hello: HelloAck | undefined;
   private sequence = 0;
   private pending = new Map<string, Pending>();
+  private windowRequestId: string | undefined;
   private running = false;
   private reading = false;
   private readAgain = false;
@@ -103,10 +106,16 @@ export class LiveMixConnection extends EventEmitter {
   constructor(private readonly options: ConnectionOptions = {}) {
     super();
     this.path = options.discoveryPath ?? (process.env.APPDATA ? join(process.env.APPDATA, "LiveMix", "control", "discovery.json") : "");
-    this.timing = { poll: 1000, request: 2000, hello: 3000, ping: 5000, pong: 3000, stable: 10000, ...options.timing };
+    this.timing = { poll: 1000, request: 2000, pluginWindows: 10000, hello: 3000, ping: 5000, pong: 3000, stable: 10000, ...options.timing };
   }
   get ready(): boolean { return this.status === "ready" && this.store.synced; }
   get capabilities(): readonly string[] { return this.hello?.capabilities ?? []; }
+  get pluginWindowsBusy(): boolean { return this.windowRequestId !== undefined; }
+  get resynchronizing(): boolean { return this.resyncId !== undefined; }
+  get pluginWindowTarget(): string | undefined {
+    const command = this.pending.get(this.windowRequestId ?? "")?.command;
+    return command && isWindowCommand(command) ? `plugin-window/${command.args.channelId ?? "all"}/${command.args.index}` : undefined;
+  }
   start(): void {
     if (this.running) return;
     this.running = true;
@@ -167,7 +176,7 @@ export class LiveMixConnection extends EventEmitter {
     this.deadline = setTimeout(() => this.close("HANDSHAKE_TIMEOUT"), this.timing.hello);
     socket.on("connect", () => {
       if (this.socket !== socket) return;
-      this.send({ v: 1, type: "hello", id: this.nextId(), supportedVersions: [1], token: d.token, client: { name: "LiveMix Stream Deck", version: "1.4.0" } });
+      this.send({ v: 1, type: "hello", id: this.nextId(), supportedVersions: [1], token: d.token, client: { name: "LiveMix Stream Deck", version: "1.5.0" } });
     });
     socket.on("data", bytes => {
       if (this.socket !== socket) return;
@@ -228,6 +237,7 @@ export class LiveMixConnection extends EventEmitter {
         if (m.code === "SESSION_CHANGED") { this.cancelPending(m.code); this.store.reset(); }
         this.requestState();
       } else if (request.command.command === "requestState") this.close(m.code);
+      this.finishWindow(m.id!);
       return;
     }
     if ((request.sessionId && m.sessionId !== request.sessionId)
@@ -235,6 +245,7 @@ export class LiveMixConnection extends EventEmitter {
       request.reject(new ConnectionError("INVALID_ACK")); throw new ProtocolError("INVALID_ACK");
     }
     request.resolve(m); // Deliberately do not patch the state store from this result.
+    this.finishWindow(m.id);
   }
   private nextId(): string {
     if (this.sequence >= Number.MAX_SAFE_INTEGER) { this.close("ID_EXHAUSTED"); throw new ConnectionError("ID_EXHAUSTED"); }
@@ -254,28 +265,69 @@ export class LiveMixConnection extends EventEmitter {
     try { id = this.nextId(); } catch { return Promise.reject(new ConnectionError("ID_EXHAUSTED")); }
     const sessionId = command.command === "requestState" ? undefined : this.store.snapshot?.sessionId;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.close("REQUEST_TIMEOUT"), this.timing.request);
-      this.pending.set(id, { command, sessionId, resolve, reject, timer });
-      try { this.send({ v: 1, type: "command", id, instanceId: this.hello!.instanceId, ...(sessionId ? { sessionId } : {}), ...(ifRevision !== undefined ? { ifRevision } : {}), ...command }); }
-      catch { this.close("SOCKET_ERROR"); }
+      this.pending.set(id, { command, sessionId, ifRevision, sent: false, resolve, reject });
+      this.sendPending();
     });
+  }
+  private armRequest(request: Pending): void {
+    clearTimeout(request.timer);
+    request.timer = setTimeout(() => this.close("REQUEST_TIMEOUT"), isWindowCommand(request.command) ? this.timing.pluginWindows : this.timing.request);
+  }
+  private armResync(): void {
+    clearTimeout(this.resyncTimer);
+    if (this.resyncId && !this.pluginWindowsBusy && this.pending.get(this.resyncId)?.sent !== false)
+      this.resyncTimer = setTimeout(() => this.close("STATE_TIMEOUT"), this.timing.request);
+  }
+  private sendPending(): void {
+    // Map insertion order also preserves request IDs across held commands and state requests.
+    for (const [id, request] of this.pending) {
+      if (this.pluginWindowsBusy || !this.socket || !this.hello) return;
+      if (request.sent) continue;
+      request.sent = true;
+      if (isWindowCommand(request.command)) {
+        this.windowRequestId = id;
+        for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.timer = undefined; }
+        clearTimeout(this.pongTimer); clearTimeout(this.resyncTimer);
+        this.emit("pluginWindows", true);
+      }
+      if (id === this.resyncId) {
+        this.store.invalidate(); this.setStatus("checking"); this.armResync();
+      }
+      this.armRequest(request);
+      try { this.send({ v: 1, type: "command", id, instanceId: this.hello.instanceId,
+        ...(request.sessionId ? { sessionId: request.sessionId } : {}), ...(request.ifRevision !== undefined ? { ifRevision: request.ifRevision } : {}), ...request.command }); }
+      catch { this.close("SOCKET_ERROR"); return; }
+    }
+  }
+  private finishWindow(id: string): void {
+    if (id !== this.windowRequestId) return;
+    this.windowRequestId = undefined;
+    for (const request of this.pending.values()) if (request.sent) this.armRequest(request);
+    if (this.pingId) this.pongTimer = setTimeout(() => this.close("PONG_TIMEOUT"), this.timing.pong);
+    this.armResync();
+    this.emit("pluginWindows", false);
+    this.sendPending();
   }
   requestState(): void {
     if (!this.socket || !this.hello || this.resyncId) return;
-    this.store.invalidate(); this.setStatus("checking");
     this.resyncId = String(this.sequence + 1);
-    this.resyncTimer = setTimeout(() => this.close("STATE_TIMEOUT"), this.timing.request);
     void this.issue({ command: "requestState", args: {} }).catch(() => { /* Connection/error path owns recovery. */ });
   }
   private ping(): void {
-    if (!this.socket || !this.hello || this.pingId) return;
+    if (!this.socket || !this.hello || this.pingId || this.pluginWindowsBusy) return;
     try { this.pingId = this.nextId(); this.send({ v: 1, type: "ping", id: this.pingId, instanceId: this.hello.instanceId }); }
     catch { this.close("SOCKET_ERROR"); return; }
     this.pongTimer = setTimeout(() => this.close("PONG_TIMEOUT"), this.timing.pong);
   }
   private cancelPending(code: string): void {
+    const wasWaitingForWindows = this.pluginWindowsBusy;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new ConnectionError(code)); }
-    this.pending.clear();
+    this.pending.clear(); this.windowRequestId = undefined;
+    if (wasWaitingForWindows && this.socket) {
+      // Session replacement discards held state requests; the surviving socket still needs its heartbeat deadline.
+      this.resyncId = undefined; clearTimeout(this.resyncTimer);
+      if (this.pingId) this.pongTimer = setTimeout(() => this.close("PONG_TIMEOUT"), this.timing.pong);
+    }
   }
   private close(code: string, status: ConnectionStatus = "disconnected", retry = true): void {
     const hadSocket = !!this.socket;

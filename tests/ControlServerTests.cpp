@@ -285,9 +285,10 @@ public:
         expectEquals (hello["type"].toString(), juce::String ("helloAck"));
         expectEquals (hello["server"]["version"].toString(),
                       f.options.appVersion.isEmpty() ? appVersionString() : f.options.appVersion);
-        expectEquals (hello["capabilities"].size(), 8);
+        expectEquals (hello["capabilities"].size(), 9);
         expectEquals (hello["capabilities"][6].toString(), juce::String ("fxOn"));
         expectEquals (hello["capabilities"][7].toString(), juce::String ("muteAll"));
+        expectEquals (hello["capabilities"][8].toString(), juce::String ("pluginGroupWindows"));
         c.initial = c.take ("state");
         expectEquals (c.initial["reason"].toString(), juce::String ("initial"));
         c.instance = hello["instanceId"].toString(); c.session = c.initial["sessionId"].toString();
@@ -307,6 +308,7 @@ public:
         orderingAndState();
         fxOnOff();
         muteAll();
+        pluginGroupWindows();
         duplicates();
         clientLimits();
         queueLimits();
@@ -518,6 +520,56 @@ public:
         expect (f.groups.isAllMuted (MuteGroups::Group::mic) && f.engine.areAllChannelsMuted());
         expect (! f.groups.isMuted (MuteGroups::Group::mic));
         expectEquals (f.values, 0); expectEquals (f.structures, 0); expectEquals (f.groupChanges, 1);
+        expect (f.allOnMessageThread && ! c.malformed);
+    }
+
+    void pluginGroupWindows()
+    {
+        beginTest ("plugin window commands over loopback reach the UI callback without publishing a delta");
+        Fixture f;
+        std::vector<ControlDispatcher::PluginGroupWindowsRequest> requests;
+        f.server = std::make_unique<ControlServer> (f.document, f.groups, [&] { f.checkThread(); return f.audio; },
+            [&] (const auto& request) -> ControlDispatcher::PluginGroupWindowsResponse
+            {
+                f.checkThread();
+                requests.push_back (request);
+                if (request.index == 5) return P::ErrorCode::pluginGroupEmpty;
+                return P::PluginGroupWindowsResult { request.index, request.open.value_or (true), 2 };
+            });
+        if (! start (f)) return;
+        Client c;
+        if (! authenticate (f, c)) return;
+        const auto revision = (juce::int64) c.initial["revision"];
+        auto args = object(); put (args, "index", 2);
+        expect (c.send (c.command (2, "togglePluginGroupWindows", args)));
+        const auto opened = c.take ("ack", "2");
+        expectEquals (opened["type"].toString(), juce::String ("ack"));
+        expect (! (bool) opened["changed"]);
+        expectEquals ((juce::int64) opened["revision"], revision);
+        expectEquals ((int) opened["result"]["index"], 2);
+        expect ((bool) opened["result"]["open"]);
+        expectEquals ((int) opened["result"]["count"], 2);
+        put (args, "channelId", f.channel().toString()); put (args, "open", false);
+        expect (c.send (c.command (3, "setPluginGroupWindows", args)));
+        const auto closed = c.take ("ack", "3");
+        expectEquals (closed["type"].toString(), juce::String ("ack"));
+        expect (! (bool) closed["changed"] && ! (bool) closed["result"]["open"]);
+        expectEquals ((juce::int64) closed["revision"], revision);
+        put (args, "index", 5);
+        expect (c.send (c.command (4, "setPluginGroupWindows", args)));
+        const auto empty = c.take ("error", "4");
+        code (empty, "PLUGIN_GROUP_EMPTY");
+        expect (! (bool) empty["retryable"]);
+        expectEquals ((juce::int64) empty["revision"], revision);
+        expectEquals ((int) requests.size(), 3);
+        if (requests.size() == 3)
+        {
+            expect (! requests[0].channelId && ! requests[0].open);
+            expect (requests[1].channelId == f.channel() && requests[1].open == false);
+        }
+        pumpFor (180); c.collect();
+        expect (c.incoming.empty());
+        expectEquals (f.values, 0); expectEquals (f.structures, 0); expectEquals (f.groupChanges, 0);
         expect (f.allOnMessageThread && ! c.malformed);
     }
 

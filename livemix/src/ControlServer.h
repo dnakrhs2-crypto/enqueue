@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ControlState.h"
+#include "ControlDispatcher.h"
 #include "ControlSocket.h"
 
 #include <functional>
@@ -34,7 +34,8 @@ public:
     };
     using ChangeKind = ControlState::ChangeKind;
 
-    ControlServer (MixDocument&, MuteGroups&, std::function<bool()> audioRunning);
+    ControlServer (MixDocument&, MuteGroups&, std::function<bool()> audioRunning,
+                   ControlDispatcher::PluginGroupWindowsHandler = {});
     ~ControlServer();
     void start (Options);
     void setEnabled (bool);

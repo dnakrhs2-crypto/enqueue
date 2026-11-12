@@ -128,7 +128,7 @@ public:
             expectEquals ((int) decoder.bufferedBytes(), 0);
         }
 
-        beginTest ("all thirteen commands, hello negotiation, ping and session-free requestState have typed values");
+        beginTest ("all fifteen commands, hello negotiation, ping and session-free requestState have typed values");
         {
             const std::string channel = "\"channelId\":\"11111111111141118111111111111111\"";
             const std::string fx = "\"fxId\":\"22222222222242228222222222222222\"";
@@ -141,6 +141,7 @@ public:
                 { "setSend", "{" + channel + "," + fx + ",\"amount\":0.38,\"pre\":false}" },
                 { "toggleFx", "{" + fx + "}" }, { "setFxOn", "{" + fx + ",\"on\":false}" },
                 { "toggleMuteAll", "{\"group\":\"mic\"}" }, { "setMuteAll", "{\"group\":\"fx\",\"muted\":false}" },
+                { "togglePluginGroupWindows", "{\"index\":1}" }, { "setPluginGroupWindows", "{\"index\":5," + channel + ",\"open\":false}" },
                 { "requestState", "{}" }
             };
             for (size_t i = 0; i < std::size (commands); ++i)
@@ -302,6 +303,102 @@ public:
             }
         }
 
+        beginTest ("plugin window commands decode every group for all mics or one mic");
+        {
+            const juce::Uuid channel ("11111111111141118111111111111111");
+            for (int index = 1; index <= 5; ++index)
+                for (const bool oneMic : { false, true })
+                {
+                    const auto scope = oneMic ? ",\"channelId\":\"" + channel.toString().toStdString() + "\"" : std::string();
+                    const auto args = "{\"index\":" + std::to_string (index) + scope;
+                    const auto toggle = P::validate (decode (command ("togglePluginGroupWindows", args + "}") + "\n"));
+                    const auto* message = std::get_if<P::ClientMessage> (&toggle);
+                    expect (message != nullptr);
+                    if (message != nullptr)
+                    {
+                        const auto* c = std::get_if<P::Command> (message);
+                        const auto* a = c != nullptr ? std::get_if<P::TogglePluginGroupWindows> (&c->args) : nullptr;
+                        expect (a != nullptr);
+                        if (a != nullptr)
+                        {
+                            expectEquals (a->index, index);
+                            expect (a->channelId == (oneMic ? std::optional<juce::Uuid> (channel) : std::nullopt));
+                        }
+                    }
+                    for (const bool open : { false, true })
+                    {
+                        const auto set = P::validate (decode (command ("setPluginGroupWindows", args + ",\"open\":" + (open ? "true}" : "false}")) + "\n"));
+                        const auto* m = std::get_if<P::ClientMessage> (&set);
+                        expect (m != nullptr);
+                        if (m != nullptr)
+                        {
+                            const auto* c = std::get_if<P::Command> (m);
+                            const auto* a = c != nullptr ? std::get_if<P::SetPluginGroupWindows> (&c->args) : nullptr;
+                            expect (a != nullptr);
+                            if (a != nullptr)
+                            {
+                                expectEquals (a->index, index);
+                                expect (a->open == open);
+                                expect (a->channelId == (oneMic ? std::optional<juce::Uuid> (channel) : std::nullopt));
+                            }
+                        }
+                    }
+                }
+        }
+
+        beginTest ("plugin window commands reject invalid indexes, optional ids, switches and envelopes");
+        {
+            for (const auto* commandName : { "togglePluginGroupWindows", "setPluginGroupWindows" })
+            {
+                for (const auto* value : { "0", "6", "1.5", "2.0", "true", "null", "\"2\"" })
+                    invalid (juce::JSON::parse (command (commandName, "{\"index\":" + std::string (value) + ",\"open\":true}").c_str()));
+                invalid (juce::JSON::parse (command (commandName, "{\"open\":true}").c_str()));
+                for (const auto* value : { "null", "1", "true", "\"\"", "\"not-a-uuid\"", "\"00000000000000000000000000000000\"",
+                                          "\"AAAAAAAAAAAA4AAA8AAAAAAAAAAAAAAA\"", "\"11111111-1111-4111-8111-111111111111\"" })
+                    invalid (juce::JSON::parse (command (commandName, "{\"index\":1,\"channelId\":" + std::string (value) + ",\"open\":true}").c_str()));
+                for (const auto* field : { "instanceId", "sessionId" })
+                {
+                    auto bad = juce::JSON::parse (command (commandName, "{\"index\":1,\"open\":true}").c_str());
+                    bad.getDynamicObject()->removeProperty (field);
+                    invalid (bad);
+                }
+            }
+            invalid (juce::JSON::parse (command ("setPluginGroupWindows", "{\"index\":1}").c_str()));
+            for (const auto* value : { "null", "0", "1", "\"true\"" })
+                invalid (juce::JSON::parse (command ("setPluginGroupWindows", "{\"index\":1,\"open\":" + std::string (value) + "}").c_str()));
+            const P::CommandArgs invalidArgs[] { P::TogglePluginGroupWindows { 0, {} }, P::TogglePluginGroupWindows { 6, {} },
+                P::TogglePluginGroupWindows { 1, juce::Uuid::null() }, P::SetPluginGroupWindows { 0, {}, true },
+                P::SetPluginGroupWindows { 6, {}, false }, P::SetPluginGroupWindows { 1, juce::Uuid::null(), true } };
+            for (const auto& args : invalidArgs)
+            {
+                const auto error = P::validateCommand ({ "2", juce::Uuid(), juce::Uuid(), {}, args });
+                expect (error.has_value());
+                if (error) expect (error->code == P::ErrorCode::invalidArgument);
+            }
+        }
+
+        beginTest ("plugin window replies encode index, open and count; empty groups have a non-retryable error");
+        {
+            const P::Context context { juce::Uuid(), juce::Uuid(), 17 };
+            for (const auto& result : { P::PluginGroupWindowsResult { 5, true, 3 }, P::PluginGroupWindowsResult { 1, false, 2 },
+                                        P::PluginGroupWindowsResult { 1, false, 0 } })
+            {
+                const auto ack = encoded (P::Ack { "2", context, false, result });
+                expect (! (bool) ack["changed"]);
+                expectEquals ((juce::int64) ack["revision"], context.revision);
+                const auto& value = ack["result"];
+                expectEquals (value.getDynamicObject()->getProperties().size(), 3);
+                expect (value["index"].isInt()); expectEquals ((int) value["index"], result.index);
+                expect (value["open"].isBool() && (bool) value["open"] == result.open);
+                expect (value["count"].isInt()); expectEquals ((int) value["count"], result.count);
+            }
+            const auto error = encoded (P::ErrorResponse { { P::ErrorCode::pluginGroupEmpty, "2" }, context, {}, {} });
+            expectEquals (error["code"].toString(), juce::String ("PLUGIN_GROUP_EMPTY"));
+            expectEquals (error["message"].toString(), juce::String ("Plugin group has no plugins"));
+            expect (error["retryable"].isBool() && ! (bool) error["retryable"]);
+            expectEquals ((int) P::ErrorCode::pluginGroupEmpty + 1, (int) P::ErrorCode::internalError);
+        }
+
         beginTest ("strict ids, enums, required fields, bools, indexes, numeric ranges and unknown direction/command");
         {
             for (const auto* id : { "", "0", "01", "-1", "1.0", "9007199254740992", "10000000000000000", "1a" }) expect (! P::isRequestId (id));
@@ -429,11 +526,12 @@ public:
             expectEquals (hello["type"].toString(), juce::String ("helloAck"));
             expectEquals (hello["server"]["version"].toString(), juce::String ("0.5.3"));
             expectEquals ((int) hello["v"], 1);
-            expectEquals (hello["capabilities"].size(), 8);
+            expectEquals (hello["capabilities"].size(), 9);
             expectEquals (hello["capabilities"][4].toString(), juce::String ("sends"));
             expectEquals (hello["capabilities"][5].toString(), juce::String ("pluginGroupsEverywhere"));
             expectEquals (hello["capabilities"][6].toString(), juce::String ("fxOn"));
             expectEquals (hello["capabilities"][7].toString(), juce::String ("muteAll"));
+            expectEquals (hello["capabilities"][8].toString(), juce::String ("pluginGroupWindows"));
             expectEquals ((int) hello["eventIntervalMs"], 100); expectEquals ((int) hello["heartbeatIntervalMs"], 5000);
             P::Projection projection;
             projection.session.name = juce::String::fromUTF8 ("곰 \"방송\"\n");

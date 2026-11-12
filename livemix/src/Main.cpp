@@ -274,6 +274,9 @@ public:
         {
             jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
             return mixEngine->isDeviceRunning();
+        }, [&main] (const ControlDispatcher::PluginGroupWindowsRequest& request)
+        {
+            return main.controlPluginGroupWindows (request);
         });
         main.attachControlServer (controlServer.get());
         main.onExternalControlEnabled = [this] (bool on)
