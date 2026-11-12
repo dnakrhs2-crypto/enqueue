@@ -107,10 +107,14 @@ def encrypt_installer(installer, output, password, name=None):
 
 def push_payload(folder):
     def git(*arguments):
-        subprocess.run(
-            ["git", *arguments], cwd=folder, check=True, capture_output=True,
+        result = subprocess.run(
+            ["git", *arguments], cwd=folder, capture_output=True, text=True, errors="replace",
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
+        if result.returncode:
+            # Show git's own reason (expired login, network); the push URL carries no credentials.
+            detail = (result.stderr or result.stdout).strip()[-800:]
+            raise ValueError(f"git {arguments[0]} failed ({result.returncode}): {detail}")
 
     # This is a fresh repository, so its sole commit has no parent.
     git("init")

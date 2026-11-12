@@ -170,6 +170,9 @@
     }
 
     password.addEventListener('input', clearError);
+    // index.html ships the button disabled: before this script attaches, Enter must not do the
+    // browser's default GET submit (that would put the password in the address bar and history).
+    button.disabled = false;
     fetchManifest().catch(() => {});
 
     form.addEventListener('submit', async event => {

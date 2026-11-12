@@ -193,6 +193,7 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
     def test_05_publish_isolated_and_only_download_ref(self):
         # No git command or network call is executed in this test.
         with patch.object(dvw.subprocess, "run") as run:
+            run.return_value.returncode = 0
             dvw.push_payload(payload.root)
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands, [

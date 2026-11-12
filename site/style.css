@@ -647,6 +647,10 @@ details.trouble > summary h3 { margin: 0; font: inherit; }   /* 제목 구조는
   outline: none;
 }
 .dl-pass:focus-within { outline: 3px solid var(--link); outline-offset: 3px; }
+/* 크롬이 저장된 비밀번호를 채우면 칸 배경이 연파랑 사각형이 된다 — 흰 키 안에 띠처럼 보이지 않게 */
+.dl-pass input:-webkit-autofill,
+.dl-pass input:-webkit-autofill:hover,
+.dl-pass input:-webkit-autofill:focus { box-shadow: 0 0 0 40px var(--paper) inset; -webkit-text-fill-color: var(--ink); caret-color: var(--ink); }
 .dl-pass:has(input[aria-invalid="true"]) { border-color: #F3D3CF; box-shadow: 0 0 0 1px #D9584C, 0 3px 0 #C4C4BF, 0 18px 30px -24px rgba(0, 0, 0, 0.35); }
 
 button.dl-button {
@@ -663,6 +667,7 @@ button.dl-button {
 button.dl-button:focus-visible { outline: 3px solid var(--link); outline-offset: 3px; }
 button.dl-button[aria-busy="true"] { cursor: progress; }
 .dl-button > span#dl-meta { display: flex; flex-wrap: wrap; column-gap: 14px; font-variant-numeric: tabular-nums; }
+#dl-label { font-variant-numeric: tabular-nums; }   /* '받는 중 NN%' 숫자가 바뀔 때 % 가 좌우로 흔들리지 않게 */
 .dl-button > .dl-progress {
   position: absolute;
   grid-column: auto;   /* .download-button > span 의 grid-column: 2 를 끊어야 막대가 키 왼쪽 끝부터 찬다 */
