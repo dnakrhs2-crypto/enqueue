@@ -125,6 +125,32 @@ public:
             }
         }
 
+       #if JUCE_WINDOWS
+        beginTest ("dispatch() delivers a Return queued while JUCE waits for a background thread's notification");
+        {
+            // A low-priority thread (the thumbnail loader) pre-empted between queueing a JUCE message and posting
+            // its Windows notification leaves a Return queued meanwhile without one. Recreate that state.
+            Fixture f;
+            addSound (f);
+            f.document().cues.update (0, [] (Cue& c) { c.audio.envelope = Envelope::fromFadeIn (2.0); });
+            auto* editor = openEditor (f);
+            if (editor == nullptr) return;
+            dispatch();
+            bool earlier = false;
+            juce::MessageManager::callAsync ([&earlier] { earlier = true; });
+            MSG notification {};
+            int removed = 0;
+            while (PeekMessageW (&notification, juce::juce_messageWindowHandle, WM_USER + 123, WM_USER + 123, PM_REMOVE))
+                ++removed;
+            expectEquals (removed, 1);
+            editor->setText ("", false);
+            editor->keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+            dispatch();
+            expect (earlier);
+            expectEquals (editor->getText(), juce::String ("0:02.000"));
+        }
+       #endif
+
         beginTest ("visiting a rounded field preserves all points and both undo and redo history");
         {
             Fixture f;

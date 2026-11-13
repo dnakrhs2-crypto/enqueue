@@ -6,6 +6,8 @@
 
 #if JUCE_WINDOWS
  #include <windows.h>
+
+namespace juce { extern HWND juce_messageWindowHandle; }   // defined in juce_core (juce_Threads_windows.cpp)
 #endif
 
 namespace gocue::tests::volume_ui
@@ -13,11 +15,22 @@ namespace gocue::tests::volume_ui
 inline void dispatch()
 {
    #if JUCE_WINDOWS
+    // JUCE queues its own messages and posts one Windows notification only when that queue was empty. A background
+    // thread (the low-priority thumbnail loader) pre-empted between queueing and posting leaves a message this thread
+    // queues meanwhile (a TextEditor's Return / focus-loss command) without a notification, so a PeekMessage loop
+    // returns without it. Asking JUCE's message window to dispatch its queue closes that gap
+    // (WM_USER + 123 = customMessageID in juce_Messaging_windows.cpp).
     MSG message {};
-    for (int n = 0; n < 2000 && PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE); ++n)
+    for (int pass = 0; pass < 2; ++pass)
     {
-        TranslateMessage (&message);
-        DispatchMessageW (&message);
+        for (int n = 0; n < 2000 && PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE); ++n)
+        {
+            TranslateMessage (&message);
+            DispatchMessageW (&message);
+        }
+
+        if (pass == 0 && juce::juce_messageWindowHandle != nullptr)
+            SendMessageW (juce::juce_messageWindowHandle, WM_USER + 123, 0, 0);
     }
    #endif
 }
