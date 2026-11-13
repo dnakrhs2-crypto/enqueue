@@ -423,15 +423,21 @@ void TimeLoopsPanel::commitStart()
         return;
 
     const double value = parseTimeText (startEditor.getText());
+    const auto currentText = formatTimeMs (cue->regionStart());
 
-    if (value < 0.0 || juce::approximatelyEqual (value, cue->regionStart()))
+    if (value < 0.0 || formatTimeMs (value) == currentText)
     {
-        startEditor.setText (formatTimeMs (cue->regionStart()), false);
+        startEditor.setText (currentText, false);
         return;
     }
 
     const double end = cue->regionEnd();
     const double start = juce::jlimit (0.0, juce::jmax (0.0, end - WaveformView::minRegionSeconds), value);
+    startEditor.setText (formatTimeMs (start), false);
+
+    if (formatTimeMs (start) == currentText)
+        return;
+
     updateSelected (ko ("시작 시간"), [start] (Cue& c) { c.audio.startSeconds = start; }, {}, LiveApply::region);
 }
 
@@ -443,10 +449,11 @@ void TimeLoopsPanel::commitEnd()
         return;
 
     const double value = parseTimeText (endEditor.getText());
+    const auto currentText = formatTimeMs (cue->regionEnd());
 
-    if (value < 0.0 || juce::approximatelyEqual (value, cue->regionEnd()))
+    if (value < 0.0 || formatTimeMs (value) == currentText)
     {
-        endEditor.setText (formatTimeMs (cue->regionEnd()), false);
+        endEditor.setText (currentText, false);
         return;
     }
 
@@ -455,6 +462,12 @@ void TimeLoopsPanel::commitEnd()
 
     if (length > 0.0 && end >= length - 1e-6)
         end = -1.0;
+
+    const auto text = formatTimeMs (end < 0.0 ? length : end);
+    endEditor.setText (text, false);
+
+    if (text == currentText)
+        return;
 
     updateSelected (ko ("끝 시간"), [end] (Cue& c) { c.audio.endSeconds = end; }, {}, LiveApply::region);
 }
@@ -486,13 +499,15 @@ void TimeLoopsPanel::commitRate()
 
     const auto text = rateEditor.getText().trim();
     const double value = juce::jlimit (AudioCueData::minRate, AudioCueData::maxRate, text.getDoubleValue());
+    const auto currentText = juce::String (cue->audio.rate, 2);
 
-    if (text.isEmpty() || juce::approximatelyEqual (value, cue->audio.rate))
+    if (text.isEmpty() || juce::String (value, 2) == currentText)
     {
-        rateEditor.setText (juce::String (cue->audio.rate, 2), false);
+        rateEditor.setText (currentText, false);
         return;
     }
 
+    rateEditor.setText (juce::String (value, 2), false);
     updateSelected (ko ("속도"), [value] (Cue& c) { c.audio.rate = value; }, {}, LiveApply::rate);
 }
 

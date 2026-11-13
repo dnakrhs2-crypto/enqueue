@@ -21,7 +21,7 @@ public:
         dispatch();
     }
 
-    juce::TextEditor* openEditor (Fixture& f)
+    juce::TextEditor* openEditor (Fixture& f, int field = 4)
     {
         f.inspector().showTimeTab();
         dispatch();
@@ -32,7 +32,7 @@ public:
 
         // Construction order: start, end, play count, rate, fade-in (independent of the layout).
         int index = 0;
-        auto* editor = child<juce::TextEditor> (*panel, [&index] (const auto&) { return index++ == 4; });
+        auto* editor = child<juce::TextEditor> (*panel, [&index, field] (const auto&) { return index++ == field; });
         expect (editor != nullptr);
         return editor;
     }
@@ -225,24 +225,91 @@ public:
             expect (editor->isEnabled());
         }
 
-        beginTest ("focus-loss input uses the edited cue's length when the selection changes");
+        beginTest ("all five fields commit before row selection and record only one undo step, including group and fade selections");
         {
-            Fixture f;
-            addSound (f, 10.0);
-            f.addSound ("Next");   // one-second region, shorter than the entered fade-in
-            f.document().cues.setSelectedIndex (0);
-            f.hiddenMain();
-            auto* editor = openEditor (f);
-            if (editor == nullptr) return;
-            editor->grabKeyboardFocus();
-            editor->setText ("3", false);
-            f.document().cues.setSelectedIndex (1);
-            f.table().grabKeyboardFocus();
-            dispatch();
-            expectSeconds (f, 3.0);
-            expect (! f.document().cues.get (1).audio.envelope.isActive());
-            expectEquals (editor->getText(), juce::String ("0:00.000"));
-            expectEquals (f.document().getHistory().getUndoDepth(), 1);
+            const char* inputs[] { "1", "8", "3", "1.5", "5" };
+            const double expected[] { 1.0, 8.0, 3.0, 1.5, 5.0 };
+            for (const auto nextType : { CueType::audio, CueType::group, CueType::fade })
+                for (int field = 0; field < 5; ++field)
+                {
+                    Fixture f;
+                    addSound (f, 10.0);
+                    f.document().cues.update (0, [] (Cue& c)
+                    {
+                        c.audio.infiniteLoop = false;
+                        c.audio.envelope = Envelope::fromFadeIn (3.0);
+                    });
+                    f.addSound ("Next");   // a one-second region must not limit the original cue's edit
+                    f.document().cues.update (1, [nextType] (Cue& c) { c.type = nextType; });
+                    f.document().cues.setSelectedIndex (0);
+                    f.hiddenMain();
+                    auto* editor = openEditor (f, field);
+                    if (editor == nullptr) return;
+                    const auto before = snapshot (f);
+                    const auto value = [&]
+                    {
+                        const auto& cue = f.document().cues.get (0);
+                        const double values[] { cue.regionStart(), cue.regionEnd(), (double) cue.audio.playCount,
+                                                cue.audio.rate, cue.audio.envelope.fadeInSeconds (cue.regionLength()) };
+                        return values[field];
+                    };
+                    editor->grabKeyboardFocus();
+                    expect (editor->hasKeyboardFocus (false));
+                    editor->setText (inputs[field], false);
+                    f.table().grabKeyboardFocus();   // a row click releases focus before it changes the selection
+                    expectWithinAbsoluteError (value(), expected[field], 1e-9, "committed before selection or queued callbacks");
+                    expectEquals (f.document().getHistory().getUndoDepth(), 1);
+                    const auto committed = snapshot (f);
+                    f.document().cues.setSelectedIndex (1);
+                    dispatch();
+                    expectWithinAbsoluteError (value(), expected[field], 1e-9);
+                    expectEquals (snapshot (f), committed, "queued focus loss changes neither cue");
+                    expectEquals (f.document().getHistory().getUndoDepth(), 1);
+                    f.document().cues.setSelectedIndex (0);
+                    dispatch();
+                    expectEquals (editor->getText(), field == 2 ? juce::String ("3") : field == 3 ? juce::String ("1.50")
+                                                               : formatTimeMs (expected[field]));
+                    expect (f.document().undo());
+                    dispatch();
+                    expectEquals (snapshot (f), before);
+                    expect (! f.document().canUndo());
+                }
+        }
+
+        beginTest ("Enter and queued focus loss keep precise or clamped time and rate edits in one undo step");
+        {
+            struct Edit { int field; const char* text; double expected; };
+            const Edit edits[] { { 0, "1.23456", 1.23456 }, { 1, "8.76543", 8.76543 }, { 3, "1.2345", 1.2345 },
+                                 { 0, "99", 10.0 - WaveformView::minRegionSeconds }, { 1, "99", 10.0 }, { 3, "99", AudioCueData::maxRate } };
+            for (const auto& edit : edits)
+            {
+                Fixture f;
+                addSound (f, 10.0);
+                if (edit.field == 1)
+                    f.document().cues.update (0, [] (Cue& c) { c.audio.endSeconds = 7.0; });
+                f.hiddenMain();
+                auto* editor = openEditor (f, edit.field);
+                if (editor == nullptr) return;
+                const auto before = snapshot (f);
+                editor->grabKeyboardFocus();
+                enter (*editor, edit.text);
+                const auto& cue = f.document().cues.get (0);
+                const double value = edit.field == 0 ? cue.regionStart() : edit.field == 1 ? cue.regionEnd() : cue.audio.rate;
+                expectWithinAbsoluteError (value, edit.expected, 1e-9);
+                expectEquals (f.document().getHistory().getUndoDepth(), 1);
+                const auto committed = snapshot (f);
+                f.document().markClean();
+                editor->grabKeyboardFocus();
+                f.table().grabKeyboardFocus();
+                dispatch();
+                expectEquals (snapshot (f), committed, "visiting the rounded display is not another edit");
+                expect (! f.document().isDirty());
+                expectEquals (f.document().getHistory().getUndoDepth(), 1);
+                expect (f.document().undo());
+                dispatch();
+                expectEquals (snapshot (f), before);
+                expect (! f.document().canUndo());
+            }
         }
 
         beginTest ("a playing cue hears the numeric fade-in immediately without restarting");

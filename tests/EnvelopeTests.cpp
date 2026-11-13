@@ -29,6 +29,31 @@ public:
         expectPoints (actual, expected.points);
     }
 
+    void expectFadeInEdit (const std::vector<EnvelopePoint>& original, double seconds, double length,
+                           const std::vector<EnvelopePoint>& expected)
+    {
+        for (const bool locked : { false, true })
+            for (const bool linear : { false, true })
+            {
+                Envelope e;
+                e.enabled = true;
+                e.linear = linear;
+                e.lockToTrim = false;
+                e.points = original;
+                e.setLockToTrim (locked, length);
+                e.setFadeInSeconds (seconds, length);
+
+                auto stored = expected;
+                if (locked)
+                    for (auto& p : stored)
+                        p.x /= length;
+
+                expect (e.enabled && e.linear == linear && e.lockToTrim == locked);
+                expectPoints (e, stored);
+                expectWithinAbsoluteError (e.fadeInSeconds (length), seconds, 1e-9);
+            }
+    }
+
     void runTest() override
     {
         beginTest ("inactive envelopes are unity gain");
@@ -152,15 +177,10 @@ public:
             }
         }
 
-        beginTest ("a newly enabled flat locked envelope gets a three-second fade-in");
+        beginTest ("a newly enabled flat envelope gets a three-second fade-in in either storage mode");
         {
-            Envelope e;
-            e.enabled = true;
-            e.points = { { 0.0, 1.0 }, { 1.0, 1.0 } };
-            e.setFadeInSeconds (3.0, 10.0);
-            expect (e.enabled && ! e.linear && e.lockToTrim);
-            expectPoints (e, { { 0.0, 0.0 }, { 0.3, 1.0 }, { 1.0, 1.0 } });
-            expectWithinAbsoluteError (e.fadeInSeconds (10.0), 3.0, 1e-9);
+            expectFadeInEdit ({ { 0.0, 1.0 }, { 12.0, 1.0 } }, 3.0, 12.0,
+                              { { 0.0, 0.0 }, { 3.0, 1.0 }, { 12.0, 1.0 } });
         }
 
         beginTest ("replacing the initial rise preserves the fade-out, shape and storage mode");
@@ -217,13 +237,55 @@ public:
                 }
         }
 
-        beginTest ("an envelope that never reaches full level is replaced entirely");
+        beginTest ("fade-in reaches the envelope's own peak, including flat and nearly equal levels");
         {
-            auto e = Envelope::fromFadeIn (1.0);
-            e.points = { { 0.0, 0.2 }, { 1.0, 0.5 }, { 4.0, 0.998 } };
-            e.setFadeInSeconds (3.0, 10.0);
-            expectEnvelope (e, Envelope::fromFadeIn (3.0));
-            expectEquals (e.fadeInSeconds (10.0), 3.0);
+            for (const bool locked : { false, true })
+            {
+                const double x = locked ? 1.0 / 12.0 : 1.0;
+                Envelope e;
+                e.enabled = true;
+                e.lockToTrim = locked;
+                e.points = { { 0.0, 0.0 }, { 3.0 * x, 0.97 }, { 12.0 * x, 0.97 } };
+                expectWithinAbsoluteError (e.fadeInSeconds (12.0), 3.0, 1e-9);
+                e.points.back().level = 0.9705;
+                expectWithinAbsoluteError (e.fadeInSeconds (12.0), 3.0, 1e-9);
+                e.points = { { 0.0, 0.5 }, { 12.0 * x, 0.5 } };
+                expectEquals (e.fadeInSeconds (12.0), 0.0);
+                e.points = { { 0.0, 0.999 }, { 12.0 * x, 1.0 } };
+                expectEquals (e.fadeInSeconds (12.0), 0.0);
+            }
+        }
+
+        beginTest ("a fade-in below full level keeps its peak and the later plateau and fade-out");
+        {
+            const std::vector<EnvelopePoint> original { { 0.0, 0.0 }, { 3.0, 0.8 }, { 7.0, 0.8 }, { 10.0, 0.0 } };
+            expectFadeInEdit (original, 2.0, 10.0, { { 0.0, 0.0 }, { 2.0, 0.8 }, { 7.0, 0.8 }, { 10.0, 0.0 } });
+            expectFadeInEdit (original, 0.0, 10.0, { { 0.0, 0.8 }, { 7.0, 0.8 }, { 10.0, 0.0 } });
+            expectFadeInEdit ({ { 0.0, 0.2 }, { 1.0, 0.5 }, { 4.0, 0.998 } }, 3.0, 10.0,
+                              { { 0.0, 0.0 }, { 3.0, 0.998 } });
+        }
+
+        beginTest ("a triangle keeps its fade-out boundary when shortened or removed, but drops an overlapped peak");
+        {
+            const std::vector<EnvelopePoint> original { { 0.0, 0.0 }, { 5.0, 1.0 }, { 10.0, 0.0 } };
+            expectFadeInEdit (original, 2.0, 10.0, { { 0.0, 0.0 }, { 2.0, 1.0 }, { 5.0, 1.0 }, { 10.0, 0.0 } });
+            expectFadeInEdit (original, 0.0, 10.0, { { 0.0, 1.0 }, { 5.0, 1.0 }, { 10.0, 0.0 } });
+            expectFadeInEdit (original, 7.0, 10.0, { { 0.0, 0.0 }, { 7.0, 1.0 }, { 10.0, 0.0 } });
+        }
+
+        beginTest ("a plateau's old rise endpoint is removed rather than kept as a redundant boundary");
+        {
+            expectFadeInEdit ({ { 0.0, 0.0 }, { 3.0, 1.0 }, { 12.0, 1.0 } }, 2.0, 12.0,
+                              { { 0.0, 0.0 }, { 2.0, 1.0 }, { 12.0, 1.0 } });
+            expectFadeInEdit ({ { 0.0, 0.0 }, { 3.0, 0.7995 }, { 7.0, 0.8 }, { 10.0, 0.0 } }, 2.0, 10.0,
+                              { { 0.0, 0.0 }, { 2.0, 0.8 }, { 7.0, 0.8 }, { 10.0, 0.0 } });
+        }
+
+        beginTest ("a silent or nearly silent envelope uses full level as its new fade-in target");
+        {
+            for (const double level : { 0.0, 0.001 })
+                expectFadeInEdit ({ { 0.0, level }, { 12.0, level } }, 3.0, 12.0,
+                                  { { 0.0, 0.0 }, { 3.0, 1.0 }, { 12.0, level } });
         }
 
         beginTest ("fade-in duration is limited to the region for active and inactive envelopes");

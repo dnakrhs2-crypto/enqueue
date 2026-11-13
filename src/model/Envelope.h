@@ -101,20 +101,26 @@ struct Envelope
         return (float) points.back().level;
     }
 
-    /** Seconds after the region start until the envelope first reaches (almost) full level; 0 when inactive. */
+    /** Seconds after the region start until the envelope first reaches its own peak (within 0.001); 0 when inactive. */
     double fadeInSeconds (double regionLength) const noexcept
     {
-        if (! isActive() || points.front().level >= 0.999)
+        if (! isActive())
+            return 0.0;
+
+        const double peak = std::max_element (points.begin(), points.end(),
+                                              [] (const EnvelopePoint& a, const EnvelopePoint& b) { return a.level < b.level; })->level;
+
+        if (points.front().level >= peak - 0.001)
             return 0.0;
 
         for (const auto& p : points)
-            if (p.level >= 0.999)
+            if (p.level >= peak - 0.001)
                 return toSeconds (p.x, regionLength);
 
         return toSeconds (points.back().x, regionLength);
     }
 
-    /** Replaces the initial rise to full level, preserving later points beyond the new fade-in. */
+    /** Replaces the initial rise to the envelope's peak, preserving the later shape beyond the new fade-in. */
     void setFadeInSeconds (double seconds, double regionLength)
     {
         if (regionLength <= 0.0)
@@ -130,10 +136,18 @@ struct Envelope
             return;
         }
 
+        const double peak = std::max_element (points.begin(), points.end(),
+                                              [] (const EnvelopePoint& a, const EnvelopePoint& b) { return a.level < b.level; })->level;
+        const double target = peak > 0.001 ? peak : 1.0;
         auto fadeEnd = std::find_if (points.begin(), points.end(),
-                                     [] (const EnvelopePoint& p) { return p.level >= 0.999; });
+                                     [peak] (const EnvelopePoint& p) { return p.level >= peak - 0.001; });
 
-        if (fadeEnd != points.end())
+        // Keep a peak that starts a later slope; an endpoint followed by a plateau is redundant.
+        const bool keepBoundary = toSeconds (fadeEnd->x, regionLength) > seconds
+                               && fadeEnd + 1 != points.end()
+                               && std::abs ((fadeEnd + 1)->level - fadeEnd->level) > 0.001;
+
+        if (! keepBoundary)
             ++fadeEnd;
 
         points.erase (points.begin(), fadeEnd);
@@ -142,10 +156,10 @@ struct Envelope
             return toSeconds (p.x, regionLength) <= seconds;
         }), points.end());
 
-        points.insert (points.begin(), { 0.0, seconds > 0.0 ? 0.0 : 1.0 });
+        points.insert (points.begin(), { 0.0, seconds > 0.0 ? 0.0 : target });
 
         if (seconds > 0.0)
-            points.insert (points.begin() + 1, { toX (seconds, regionLength), 1.0 });
+            points.insert (points.begin() + 1, { toX (seconds, regionLength), target });
 
         sanitise();
     }

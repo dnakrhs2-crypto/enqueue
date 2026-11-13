@@ -39,6 +39,18 @@ public:
     void paint (juce::Graphics& g) override;
 
 private:
+    class CommitEditor final : public juce::TextEditor
+    {
+        void focusLost (FocusChangeType cause) override
+        {
+            // Commit before the click changes selection and refreshes these fields.
+            if (onFocusLost)
+                onFocusLost();
+
+            juce::TextEditor::focusLost (cause);
+        }
+    };
+
     const Cue* selected() const { return document.cues.getSelected(); }
     /** What a running instance is told after the edit: region (trim), rate, both, or nothing (next start only). */
     enum class LiveApply { none, region, rate, regionAndRate, envelope, loop };
@@ -66,7 +78,7 @@ private:
 
     juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel, fadeInLabel;
     /** fadeInEditor: the envelope's fade-in length typed as a time, in the 시작 / 끝 format. */
-    juce::TextEditor startEditor, endEditor, countEditor, rateEditor, fadeInEditor;
+    CommitEditor startEditor, endEditor, countEditor, rateEditor, fadeInEditor;
     juce::ToggleButton infiniteToggle, envelopeToggle, linearToggle, lockToggle, pitchToggle;
     juce::TextButton resetButton, zoomInButton, zoomOutButton, sizeUpButton, sizeDownButton;
     /** The cue's gain, the same value as the 기본 tab's slider: moving either moves the other, and this tab's wave
