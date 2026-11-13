@@ -10,6 +10,25 @@ class EnvelopeTests : public juce::UnitTest
 public:
     EnvelopeTests() : juce::UnitTest ("Envelope", "Enqueue") {}
 
+    void expectPoints (const Envelope& envelope, const std::vector<EnvelopePoint>& expected)
+    {
+        expectEquals ((int) envelope.points.size(), (int) expected.size());
+
+        for (size_t i = 0; i < std::min (envelope.points.size(), expected.size()); ++i)
+        {
+            expectWithinAbsoluteError (envelope.points[i].x, expected[i].x, 1e-12);
+            expectWithinAbsoluteError (envelope.points[i].level, expected[i].level, 1e-12);
+        }
+    }
+
+    void expectEnvelope (const Envelope& actual, const Envelope& expected)
+    {
+        expect (actual.enabled == expected.enabled);
+        expect (actual.linear == expected.linear);
+        expect (actual.lockToTrim == expected.lockToTrim);
+        expectPoints (actual, expected.points);
+    }
+
     void runTest() override
     {
         beginTest ("inactive envelopes are unity gain");
@@ -111,6 +130,130 @@ public:
             expectWithinAbsoluteError (fade.levelAt (0.25, 10.0), 1.0f, 1e-6f);
             expectWithinAbsoluteError (fade.levelAt (5.0, 10.0), 1.0f, 1e-6f);
             expectWithinAbsoluteError (fade.fadeInSeconds (10.0), 0.25, 1e-9);
+        }
+
+        beginTest ("setting an inactive fade-in uses the legacy shape; zero leaves it untouched");
+        {
+            Envelope disabled;
+            disabled.points = { { 0.0, 0.5 }, { 1.0, 0.0 } };
+            Envelope empty;
+            empty.enabled = true;
+
+            for (const auto& original : { Envelope {}, disabled, empty })
+            {
+                auto e = original;
+                e.setFadeInSeconds (0.0, 10.0);
+                expectEnvelope (e, original);
+                e.setFadeInSeconds (-2.0, 10.0);
+                expectEnvelope (e, original);
+                e.setFadeInSeconds (3.0, 10.0);
+                expectEnvelope (e, Envelope::fromFadeIn (3.0));
+                expectWithinAbsoluteError (e.fadeInSeconds (10.0), 3.0, 1e-9);
+            }
+        }
+
+        beginTest ("a newly enabled flat locked envelope gets a three-second fade-in");
+        {
+            Envelope e;
+            e.enabled = true;
+            e.points = { { 0.0, 1.0 }, { 1.0, 1.0 } };
+            e.setFadeInSeconds (3.0, 10.0);
+            expect (e.enabled && ! e.linear && e.lockToTrim);
+            expectPoints (e, { { 0.0, 0.0 }, { 0.3, 1.0 }, { 1.0, 1.0 } });
+            expectWithinAbsoluteError (e.fadeInSeconds (10.0), 3.0, 1e-9);
+        }
+
+        beginTest ("replacing the initial rise preserves the fade-out, shape and storage mode");
+        {
+            for (const bool locked : { false, true })
+                for (const bool linear : { false, true })
+                {
+                    const double x = locked ? 0.1 : 1.0;
+                    Envelope e;
+                    e.enabled = true;
+                    e.linear = linear;
+                    e.lockToTrim = locked;
+                    e.points = { { 0.0, 0.0 }, { x, 0.5 }, { 2.0 * x, 0.999 },
+                                 { 7.0 * x, 1.0 }, { 8.0 * x, 0.7 }, { 10.0 * x, 0.0 } };
+                    e.setFadeInSeconds (3.0, 10.0);
+                    expect (e.enabled && e.linear == linear && e.lockToTrim == locked);
+                    expectPoints (e, { { 0.0, 0.0 }, { 3.0 * x, 1.0 }, { 7.0 * x, 1.0 },
+                                       { 8.0 * x, 0.7 }, { 10.0 * x, 0.0 } });
+                    expectWithinAbsoluteError (e.fadeInSeconds (10.0), 3.0, 1e-9);
+                }
+        }
+
+        beginTest ("a longer fade-in removes later points at or before its new endpoint");
+        {
+            for (const bool locked : { false, true })
+            {
+                const double x = locked ? 0.1 : 1.0;
+                Envelope e;
+                e.enabled = true;
+                e.lockToTrim = locked;
+                e.points = { { 0.0, 0.0 }, { 2.0 * x, 1.0 }, { 4.0 * x, 0.4 },
+                             { 5.0 * x, 0.5 }, { 8.0 * x, 1.0 }, { 10.0 * x, 0.0 } };
+                e.setFadeInSeconds (5.0, 10.0);
+                expectPoints (e, { { 0.0, 0.0 }, { 5.0 * x, 1.0 }, { 8.0 * x, 1.0 }, { 10.0 * x, 0.0 } });
+                expectWithinAbsoluteError (e.fadeInSeconds (10.0), 5.0, 1e-9);
+            }
+        }
+
+        beginTest ("zero or a negative duration removes only the fade-in");
+        {
+            for (const bool locked : { false, true })
+                for (const double seconds : { 0.0, -2.0 })
+                {
+                    const double x = locked ? 0.1 : 1.0;
+                    Envelope e;
+                    e.enabled = true;
+                    e.linear = true;
+                    e.lockToTrim = locked;
+                    e.points = { { 0.0, 0.0 }, { x, 0.5 }, { 2.0 * x, 1.0 }, { 7.0 * x, 1.0 }, { 10.0 * x, 0.0 } };
+                    e.setFadeInSeconds (seconds, 10.0);
+                    expect (e.enabled && e.linear && e.lockToTrim == locked);
+                    expectPoints (e, { { 0.0, 1.0 }, { 7.0 * x, 1.0 }, { 10.0 * x, 0.0 } });
+                    expectEquals (e.fadeInSeconds (10.0), 0.0);
+                }
+        }
+
+        beginTest ("an envelope that never reaches full level is replaced entirely");
+        {
+            auto e = Envelope::fromFadeIn (1.0);
+            e.points = { { 0.0, 0.2 }, { 1.0, 0.5 }, { 4.0, 0.998 } };
+            e.setFadeInSeconds (3.0, 10.0);
+            expectEnvelope (e, Envelope::fromFadeIn (3.0));
+            expectEquals (e.fadeInSeconds (10.0), 3.0);
+        }
+
+        beginTest ("fade-in duration is limited to the region for active and inactive envelopes");
+        {
+            Envelope inactive;
+            inactive.setFadeInSeconds (30.0, 10.0);
+            expectEnvelope (inactive, Envelope::fromFadeIn (10.0));
+
+            for (const bool locked : { false, true })
+            {
+                const double x = locked ? 0.1 : 1.0;
+                Envelope e;
+                e.enabled = true;
+                e.lockToTrim = locked;
+                e.points = { { 0.0, 0.0 }, { 2.0 * x, 1.0 }, { 8.0 * x, 1.0 }, { 10.0 * x, 0.0 } };
+                e.setFadeInSeconds (30.0, 10.0);
+                expectPoints (e, { { 0.0, 0.0 }, { 10.0 * x, 1.0 } });
+                expectWithinAbsoluteError (e.fadeInSeconds (10.0), 10.0, 1e-9);
+            }
+        }
+
+        beginTest ("a nonpositive region length leaves active and inactive envelopes unchanged");
+        {
+            for (const auto& original : { Envelope {}, Envelope::fromFadeIn (2.0) })
+                for (const double length : { 0.0, -1.0 })
+                {
+                    auto e = original;
+                    e.setFadeInSeconds (3.0, length);
+                    expectEnvelope (e, original);
+                }
         }
     }
 };

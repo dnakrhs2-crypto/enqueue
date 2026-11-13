@@ -386,7 +386,7 @@ void TransportBar::updateStandbyCue (int index, const Cue* cue)
     juce::String meta;
     const double effective = cue->effectiveLength();
     meta << ko ("길이 ") << (effective < 0.0 ? juce::String::fromUTF8 ("\xE2\x88\x9E") : formatSeconds (effective > 0.0 ? effective : cue->durationSeconds))
-         << "   " << ko ("페이드인 ") << juce::roundToInt (cue->audio.envelope.fadeInSeconds (cue->regionLength()) * 1000.0) << " ms"
+         << "   " << ko ("페이드인 ") << formatTimeMs (cue->audio.envelope.fadeInSeconds (cue->regionLength()))   // as the 재생 tab's 페이드 인 field
          << "   " << ko ("정지 페이드 ") << cue->fadeOutMs << " ms"
          << "   " << ko ("게인 ") << GainUnits::format (cue->gainDb, static_cast<bool> (gainUnit.getValue()));   // dB or %, as the inspector shows it
     if (describePatch)

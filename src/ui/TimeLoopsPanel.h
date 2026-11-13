@@ -54,6 +54,7 @@ private:
     void commitPlayCount();
     void commitRate();
     void commitGain();
+    void commitFadeIn();
     void setupEditor (juce::TextEditor& editor, const juce::String& allowed, int maxLength);
     void setupToggle (juce::ToggleButton& toggle, const char* text);
     void cancelEdit();
@@ -63,8 +64,9 @@ private:
     AudioEngine& engine;
     WaveformView waveform;
 
-    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel;
-    juce::TextEditor startEditor, endEditor, countEditor, rateEditor;
+    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel, fadeInLabel;
+    /** fadeInEditor: the envelope's fade-in length typed as a time, in the 시작 / 끝 format. */
+    juce::TextEditor startEditor, endEditor, countEditor, rateEditor, fadeInEditor;
     juce::ToggleButton infiniteToggle, envelopeToggle, linearToggle, lockToggle, pitchToggle;
     juce::TextButton resetButton, zoomInButton, zoomOutButton, sizeUpButton, sizeDownButton;
     /** The cue's gain, the same value as the 기본 tab's slider: moving either moves the other, and this tab's wave

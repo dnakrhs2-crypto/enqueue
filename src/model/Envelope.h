@@ -114,6 +114,42 @@ struct Envelope
         return toSeconds (points.back().x, regionLength);
     }
 
+    /** Replaces the initial rise to full level, preserving later points beyond the new fade-in. */
+    void setFadeInSeconds (double seconds, double regionLength)
+    {
+        if (regionLength <= 0.0)
+            return;
+
+        seconds = std::clamp (seconds, 0.0, regionLength);
+
+        if (! isActive())
+        {
+            if (seconds > 0.0)
+                *this = fromFadeIn (seconds);
+
+            return;
+        }
+
+        auto fadeEnd = std::find_if (points.begin(), points.end(),
+                                     [] (const EnvelopePoint& p) { return p.level >= 0.999; });
+
+        if (fadeEnd != points.end())
+            ++fadeEnd;
+
+        points.erase (points.begin(), fadeEnd);
+        points.erase (std::remove_if (points.begin(), points.end(), [this, seconds, regionLength] (const EnvelopePoint& p)
+        {
+            return toSeconds (p.x, regionLength) <= seconds;
+        }), points.end());
+
+        points.insert (points.begin(), { 0.0, seconds > 0.0 ? 0.0 : 1.0 });
+
+        if (seconds > 0.0)
+            points.insert (points.begin() + 1, { toX (seconds, regionLength), 1.0 });
+
+        sanitise();
+    }
+
     /** Switches between fraction and seconds storage, keeping the shape at the current region length. */
     void setLockToTrim (bool shouldLock, double regionLength)
     {
