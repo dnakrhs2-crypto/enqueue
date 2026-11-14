@@ -31,7 +31,7 @@ ShortcutDefinition command (const char* id, juce::CommandID commandID, juce::Str
 std::vector<ShortcutDefinition> makeCommands()
 {
     return {
-        command ("transport.go", CommandIDs::go, "GO", ko ("플레이헤드 큐 재생(시퀀스 포함) 후 다음 큐로 이동 (일시정지된 큐가 있으면 재개)"),
+        command ("transport.go", CommandIDs::go, "GO", ko ("플레이헤드 큐 재생(시퀀스 포함) 후 다음 큐로 이동, 지정 큐 대기면 그 큐에 그대로 (일시정지된 큐가 있으면 재개)"),
                  Category::playback, Scope::playback, false, ko ("재생"), { key (KeyPress::spaceKey, ModifierKeys::noModifiers) }),
         command ("transport.pauseToggle", CommandIDs::pauseToggle, ko ("일시정지 / 재개"), ko ("선택 큐(재생 중이 아니면 가장 최근 재생 큐)를 일시정지하거나 재개"),
                  Category::playback, Scope::playback, false, ko ("재생"), { key ('P', ModifierKeys::noModifiers) }),

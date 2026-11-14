@@ -153,6 +153,18 @@ namespace
             keyUpToggle = &addToggle (ko ("키를 뗀 뒤에만 다시 GO"), s.requireKeyUp,
                                       [] (WorkspaceSettings& w, bool v) { w.requireKeyUp = v; });
 
+            standbyLabel = &addLabel (ko ("큐 대기 상태"));
+            standbyBox.addItem (ko ("다음 큐 대기"), 1);
+            standbyBox.addItem (ko ("지정 큐 대기"), 2);
+            standbyBox.setSelectedId (s.goKeepsStandby ? 2 : 1, juce::dontSendNotification);
+            standbyBox.onChange = [this]
+            {
+                auto w = document.settings;
+                w.goKeepsStandby = standbyBox.getSelectedId() == 2;
+                document.setSettings (w);
+            };
+            addAndMakeVisible (standbyBox);
+
             panicLabel = &addLabel ({});
             panicEditor = &addSeconds (&WorkspaceSettings::panicSeconds);
             panicHint = &addLabel ({});
@@ -215,6 +227,9 @@ namespace
             hotkeysToggle->setBounds (row.take (area.getWidth()));
             row = next();
             keyUpToggle->setBounds (row.take (300));
+            row = next();
+            standbyLabel->setBounds (row.take (230));
+            standbyBox.setBounds (row.take (130));
             area.removeFromTop (6);
 
             row = next();
@@ -252,8 +267,8 @@ namespace
         }
 
     private:
-        juce::Label *goLabel, *goHint, *panicLabel, *panicHint, *fadeLabel, *incrementLabel, *rowSizeLabel, *scaleHint;
-        juce::ComboBox rowSizeBox;
+        juce::Label *goLabel, *goHint, *standbyLabel, *panicLabel, *panicHint, *fadeLabel, *incrementLabel, *rowSizeLabel, *scaleHint;
+        juce::ComboBox standbyBox, rowSizeBox;
         juce::TextEditor *goEditor, *panicEditor, *fadeEditor, *incrementEditor, *openEditor, *closeEditor;
         juce::ToggleButton *hotkeysToggle, *keyUpToggle, *autoNumberToggle, *lockToggle, *openToggle, *closeToggle;
     };

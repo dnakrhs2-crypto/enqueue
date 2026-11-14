@@ -199,6 +199,7 @@ target_sources(EnqueueTests PRIVATE
     RegionPlaybackTests.cpp
     CueControllerTests.cpp
     StandbyAfterGoTests.cpp
+    StandbySettingRowTests.cpp
     AuditFixCueTests.cpp
     AuditFix0923CueTests.cpp
     BackupManagerTests.cpp

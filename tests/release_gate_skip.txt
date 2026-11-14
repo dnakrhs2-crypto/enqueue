@@ -74,4 +74,5 @@ Safe project save and load
 Scheduler
 Settings migration (GoCue -> Enqueue)
 SplitLayout
+StandbyAfterGo
 WaitProgress
