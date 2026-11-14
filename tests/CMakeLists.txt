@@ -198,6 +198,7 @@ target_sources(EnqueueTests PRIVATE
     AudioEngineTests.cpp
     RegionPlaybackTests.cpp
     CueControllerTests.cpp
+    StandbyAfterGoTests.cpp
     AuditFixCueTests.cpp
     AuditFix0923CueTests.cpp
     BackupManagerTests.cpp

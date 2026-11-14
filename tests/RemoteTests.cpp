@@ -283,6 +283,20 @@ public:
     RemoteInputTests() : UnitTest ("Remote input and PC actions", "Enqueue") {}
     void runTest() override
     {
+        beginTest ("phone GO follows both project standby modes");
+        for (const bool keep : { false, true })
+        {
+            Fixture f;
+            f.waits (2);
+            f.document().settings.goKeepsStandby = keep;
+            const auto first = f.document().cues.get (0).id;
+            expect (ok (f.go (true)));
+            expect (ok (f.go (false)));
+            expect (f.controller().isCueActive (first));
+            expectEquals (f.document().cues.getPlayheadIndex(), keep ? 0 : 1);
+            expectEquals (f.document().cues.getSelectedIndex(), keep ? 0 : 1);
+        }
+
         beginTest ("real MainComponent GO down executes once and up never executes GO");
         {
             Fixture f; f.waits();
