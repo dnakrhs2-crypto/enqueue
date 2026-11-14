@@ -63,7 +63,10 @@ private:
     void rebuildChain();
     void commitInput();
     void commitOutput (bool pairSelected = false);
-    int outputHeight() const;   // the output column: caption, master / direct, the aux chips (when the session has auxes), pan
+    int outputWidthForWidth (int width) const;   // the output column's width in the current layout
+    int auxChipsWidth() const;                   // the AUX chips side by side
+    bool auxChipsBesideOutputs (int outputWidth) const;   // the AUX chips fit on the master / direct row
+    int outputHeight (int outputWidth) const;   // the output column: caption, master / direct, the AUX row (when the chips don't fit beside them), pan
     void showMenu();
     const MixChannel* channel() const;
 

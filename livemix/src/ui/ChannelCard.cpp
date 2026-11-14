@@ -430,9 +430,35 @@ void ChannelCard::rebuildAuxSends()
     auxChips = std::move (next);   // the chips of removed auxes go with the old list
 }
 
-int ChannelCard::outputHeight() const
+int ChannelCard::outputWidthForWidth (int width) const
 {
-    return 26 + 34 + (auxChips.empty() ? 0 : 4 + 30) + 4 + 34;
+    const int inner = width - 28;
+
+    if (layout == CardLayout::wide)
+        return 250;
+
+    if (layout == CardLayout::medium)
+        return inner - (194 + 18 + 160) - 18;   // beside the send rows
+
+    return inner;
+}
+
+int ChannelCard::auxChipsWidth() const
+{
+    const int n = (int) auxChips.size();
+    return n * 54 + juce::jmax (0, n - 1) * 6;
+}
+
+bool ChannelCard::auxChipsBesideOutputs (int outputWidth) const
+{
+    // master 72 + 8 + direct 84 + 6, a 12 px gap before the sends; the pair box keeps the 88 px the wide column gives it
+    return ! auxChips.empty() && outputWidth - (72 + 8 + 84 + 6) - 12 - auxChipsWidth() >= 88;
+}
+
+int ChannelCard::outputHeight (int outputWidth) const
+{
+    const bool ownRow = ! auxChips.empty() && ! auxChipsBesideOutputs (outputWidth);
+    return 26 + 34 + (ownRow ? 4 + 30 : 0) + 4 + 34;
 }
 
 int ChannelCard::sendNameWidth() const
@@ -541,7 +567,7 @@ int ChannelCard::getPreferredHeight (int width) const
     const int sendRows = juce::jmax (1, (int) sends.size());
     const int fxH = 28 + sendRows * 38 - 8;
     const int chainH = chainHeightForWidth (width);
-    const int outH = outputHeight();
+    const int outH = outputHeight (outputWidthForWidth (width));
 
     switch (layout)
     {
@@ -637,6 +663,10 @@ void ChannelCard::resized()
 
     auto layoutOut = [this] (juce::Rectangle<int> r, bool tight)
     {
+        // the auxes are more places this mic goes (before its pan): 마스터 off with an AUX lit is send-only.
+        // A wide enough column (the two-tier and stacked cards) puts their chips at the end of the master / direct
+        // row, so a session with auxes keeps the card's height; the wide card's 250 px column gives them a row.
+        const bool auxBeside = auxChipsBesideOutputs (r.getWidth());
         outputCaption.setBounds (r.removeFromTop (26));
         auto chipsRow = r.removeFromTop (34);
         // the wide column is 250 px: slightly narrower chips leave the pair box 88 px, so a named ASIO pair
@@ -645,11 +675,23 @@ void ChannelCard::resized()
         chipsRow.removeFromLeft (tight ? 6 : 8);
         directChip.setBounds (chipsRow.removeFromLeft (tight ? 80 : 84));
         chipsRow.removeFromLeft (6);
+
+        if (auxBeside)
+        {
+            auto auxArea = chipsRow.removeFromRight (auxChipsWidth());
+            chipsRow.removeFromRight (12);
+
+            for (auto& chip : auxChips)   // as tall as the master / direct chips they share the row with
+            {
+                chip->setBounds (auxArea.removeFromLeft (54));
+                auxArea.removeFromLeft (6);
+            }
+        }
+
         directCombo.setBounds (chipsRow.withHeight (30).withY (chipsRow.getY() + 2));
 
-        if (! auxChips.empty())
+        if (! auxChips.empty() && ! auxBeside)
         {
-            // the auxes are more places this mic goes (before its pan): 마스터 off with an AUX lit is send-only.
             // Badge-wide chips: four fit the wide column's 250 px.
             r.removeFromTop (4);
             auto auxRow = r.removeFromTop (30);
@@ -713,7 +755,7 @@ void ChannelCard::resized()
         area.removeFromTop (14);
         layoutFx (area.removeFromTop (28 + juce::jmax (1, (int) sends.size()) * 38 - 8));
         area.removeFromTop (14);
-        layoutOut (area.removeFromTop (outputHeight()), false);
+        layoutOut (area.removeFromTop (outputHeight (area.getWidth())), false);
     }
 }
 

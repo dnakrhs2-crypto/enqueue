@@ -384,10 +384,11 @@ public:
             };
             const auto sends = [&auxDocument] { return auxDocument.getSession().channels[0].auxSends; };
 
-            struct Size { CardLayout mode; int width; int grows; };
-            // the wide card keeps its height (its chain column is as tall as the output column with the row); the
-            // stacked layouts grow by the row
-            const Size sizes[] { { CardLayout::wide, 1400, 0 }, { CardLayout::medium, 960, 34 }, { CardLayout::narrow, 420, 34 } };
+            struct Size { CardLayout mode; int width; };
+            // with two auxes no card grows: the wide card's chain column is as tall as its output column with the AUX
+            // row, and the two-tier and stacked cards end the master / direct row with the chips (design check 11/14:
+            // the two-tier card grew 34 px and left its pan below a 1366 x 768 screen's card area)
+            const Size sizes[] { { CardLayout::wide, 1400 }, { CardLayout::medium, 960 }, { CardLayout::narrow, 420 } };
             std::vector<int> before;
             for (const auto& s : sizes)
             {
@@ -422,42 +423,73 @@ public:
                 auto* pan = childOfType<PanSlider> (auxCard);
                 expect (master != nullptr && direct != nullptr && pan != nullptr);
 
+                // beside: the chips end the master / direct row after the pair box, which keeps 88 px; otherwise they
+                // have their own row between master / direct and the pan. Either way one line inside the card.
+                const auto checkAuxPlace = [&] (const std::vector<juce::Button*>& row, bool beside)
+                {
+                    for (auto* chip : row)
+                    {
+                        if (beside)
+                        {
+                            expect (chip->getY() >= master->getY() && chip->getBottom() <= master->getBottom(),
+                                    "the AUX chips end the master / direct row");
+                            expect (chip->getX() > direct->getRight());
+                        }
+                        else
+                        {
+                            expect (chip->getY() > master->getBottom() && chip->getBottom() < pan->getY(),
+                                    "the AUX row sits between master / direct and the pan");
+                            expect (chip->getX() >= master->getX());
+                        }
+
+                        expectEquals (chip->getY(), row[0]->getY());
+                        expect (chip->getRight() <= auxCard.getWidth() - 14);
+
+                        for (auto* child : auxCard.getChildren())
+                            if (auto* box = dynamic_cast<juce::ComboBox*> (child))
+                            {
+                                expect (! box->getBounds().intersects (chip->getBounds()), "no AUX chip over a box");
+                                if (beside && box->getY() >= master->getY() && box->getBottom() <= master->getBottom())
+                                    expectGreaterOrEqual (box->getWidth(), 88);   // the pair box beside them
+                            }
+                    }
+
+                    for (size_t i = 1; i < row.size(); ++i)
+                        expect (row[i]->getX() >= row[i - 1]->getRight());
+                };
+
                 for (size_t i = 0; i < std::size (sizes); ++i)
                 {
                     const auto& s = sizes[i];
                     auxCard.setLayout (s.mode);
                     const int h = auxCard.getPreferredHeight (s.width);
-                    expectEquals (h, before[i] + s.grows);
+                    expectEquals (h, before[i]);
                     auxCard.setSize (s.width, h);
 
                     if (master != nullptr && direct != nullptr && pan != nullptr)
-                    {
-                        for (auto* chip : chips)
-                        {
-                            expect (chip->getY() > master->getBottom() && chip->getBottom() < pan->getY(),
-                                    "the AUX row sits between master / direct and the pan");
-                            expectEquals (chip->getY(), chips[0]->getY());
-                            expect (auxCard.getLocalBounds().contains (chip->getBounds()));
-                            expect (chip->getX() >= master->getX());
-                        }
-                        expect (chips[1]->getX() > chips[0]->getRight());
-                    }
+                        checkAuxPlace (chips, s.mode != CardLayout::wide);
                 }
 
-                // four auxes fit the wide column's 250 px on one line
+                // four auxes: one line in the wide column's 250 px, still beside master / direct on the two-tier card;
+                // a stacked card too narrow for them gives them their row back
                 auxDocument.addAux();
                 auxDocument.addAux();
                 auxCard.refresh();
                 chips = auxChips();
                 expectEquals ((int) chips.size(), 4);
-                auxCard.setLayout (CardLayout::wide);
-                auxCard.setSize (1400, auxCard.getPreferredHeight (1400));
-                if (chips.size() == 4 && direct != nullptr)
+
+                struct Four { CardLayout mode; int width; bool beside; int grows; };
+                const Four four[] { { CardLayout::wide, 1400, false, 0 }, { CardLayout::medium, 960, true, 0 },
+                                    { CardLayout::narrow, 420, false, 34 } };
+                for (size_t i = 0; i < std::size (four); ++i)
                 {
-                    expectEquals (chips[3]->getY(), chips[0]->getY());
-                    expect (chips[3]->getRight() <= auxCard.getWidth() - 14);
-                    for (size_t i = 1; i < chips.size(); ++i)
-                        expect (chips[i]->getX() >= chips[i - 1]->getRight());
+                    auxCard.setLayout (four[i].mode);
+                    const int h = auxCard.getPreferredHeight (four[i].width);
+                    expectEquals (h, before[i] + four[i].grows);
+                    auxCard.setSize (four[i].width, h);
+
+                    if (chips.size() == 4 && master != nullptr && direct != nullptr && pan != nullptr)
+                        checkAuxPlace (chips, four[i].beside);
                 }
 
                 // a click sends to that aux and lights the chip; master off keeps it (send-only); a second click stops it
