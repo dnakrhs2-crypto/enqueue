@@ -1,0 +1,77 @@
+# Release gate: suites covered by a matching full dev_cycle snapshot.
+# Retain desktop patterns: foreground, popups, focus, keys, modal dialogs, windows and mouse position.
+# Retain build-PC patterns: MP3/Media Foundation/WMA, WASAPI, JUCE ASIO, VST2 and WinSparkle.
+# Generated from tests/*.cpp and recursively included tests-local headers.
+# Regenerate: python tools/release_gate_scope.py --write (then commit this file).
+# Verify: python tools/release_gate_scope.py --check
+Application version
+AudioEngine (offline)
+AudioPatch
+Audit L1 live mix reproductions
+AutoLevel DSP
+AutoLevel file render
+BackupManager
+CueList
+CueNumbering
+CueOrder
+CuePropertyPaste
+Envelope
+FadeCurve
+FadeEnvelope
+FadeOutSetting
+FadeRunner
+HighQualityResampler
+LevelMatrix
+Live loop toggle
+LiveMix Collab PLC
+LiveMix Collab PLC bursts
+LiveMix Collab PLC recovery
+LiveMix Collab UDP
+LiveMix Collab clock
+LiveMix Collab engine
+LiveMix Collab playout
+LiveMix Collab protocol
+LiveMix Collab room v2
+LiveMix Collab roster
+LiveMix Collab sender and rates
+LiveMix Collab sources independent device clocks
+LiveMix Collab sources realtime callbacks
+LiveMix Collab sources roster and epochs
+LiveMix Collab sources stereo, mono and monitor
+LiveMix Collab sources v1 compatibility and restart
+LiveMix Collab v2
+LiveMix Collab web playout
+LiveMix G-Denoise voice transition
+LiveMix OBS sender
+LiveMix ObsMetadata
+LiveMix WebGuest signaling
+LiveMix WebGuest transport
+LiveMix backup path
+LiveMix bundled plugins
+LiveMix control dispatcher
+LiveMix control protocol
+LiveMix control server
+LiveMix control state
+LiveMix document
+LiveMix group OFF re-sync
+LiveMix localisation
+LiveMix name fit
+LiveMix plugin sets
+LiveMix session model
+LiveMix shared ASRC and protocol
+LiveMix split monitor
+LoudnessAverage
+Mobile remote startup notice
+OutputDiagnostics
+Panic output gate
+PluginChain
+Project file extensions (.enqueue / .gocue)
+ProjectHistory
+ProjectSerializer
+Real VST3 plugins (optional)
+RegionPlayback (offline)
+Safe project save and load
+Scheduler
+Settings migration (GoCue -> Enqueue)
+SplitLayout
+WaitProgress

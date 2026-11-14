@@ -30,7 +30,15 @@ import tempfile
 import time
 from xml.sax.saxutils import escape
 
+try:
+    from tools import release_gate_scope
+except ModuleNotFoundError:  # direct execution: tools/ is already on sys.path
+    import release_gate_scope
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+# Library callers keep the full gate without consulting machine-local cycle history.
+# main() enables automatic scope selection unless --full-gate was requested.
+FULL_GATE = True
 
 
 def recorder_identity():
@@ -378,7 +386,7 @@ def wait_for_gate_idle(idle_s=GATE_IDLE_S, max_min=GATE_IDLE_MAX_MIN, idle_fn=se
             print("GATE_WAIT: idle time unknown - starting the test gate now", flush=True)
             return "unknown"
         if idle >= idle_s:
-            print("GATE_START: no keyboard/mouse input for %.0f s at %s - running the test gate on this desktop (about 4 min; "
+            print("GATE_START: no keyboard/mouse input for %.0f s at %s - running the test gate on this desktop ("
                   "input during it can fail focus tests)" % (idle, time.strftime("%H:%M:%S")), flush=True)
             return "idle"
         if clock() >= deadline:
@@ -443,10 +451,12 @@ def roomc_build_command(preset):
             "-- /m /v:m /nologo }" % (cmake, preset, cmake, preset, " ".join(build_targets())))
 
 
-def roomc_ctest_command(preset):
+def roomc_ctest_command(preset, ctest_filter=None):
     """PowerShell for roomc: this app's ctest gate."""
+    if ctest_filter is None:
+        ctest_filter = APP.get("ctest_filter")
     return "& '%s' --preset %s-release%s" % (ROOMC_CMAKE_BIN + r"\ctest.exe", preset,
-                                             (" -R '%s'" % APP["ctest_filter"]) if APP.get("ctest_filter") else "")
+                                             (" -R '%s'" % ctest_filter) if ctest_filter else "")
 
 
 def build_on_roomc(preset, skip_tests, working):
@@ -466,7 +476,9 @@ def build_on_roomc(preset, skip_tests, working):
     if code:
         sys.exit("roomc build failed (exit %s) - see the output above" % code)
     if not skip_tests:
-        code = job(roomc_ctest_command(preset), True)
+        scope = release_gate_scope.decide(ROOT, APP["name"].lower(), working, FULL_GATE)
+        release_gate_scope.print_decision(scope)
+        code = job(roomc_ctest_command(preset, scope.ctest_filter), True)
         if code:
             sys.exit("roomc test gate failed (exit %s) - see the output above" % code)
     fetch_roomc_release(rbuild)
@@ -508,11 +520,13 @@ def build(preset, skip_tests, gate_idle=GATE_IDLE_S, gate_idle_max_min=GATE_IDLE
     with heavy_slot("release build " + APP["name"]):
         run(["cmake", "--build", "--preset", preset + "-release", "--target"] + build_targets() + ["--", "-m", "-v:m", "-nologo"])
     if not skip_tests:
+        scope = release_gate_scope.decide(ROOT, APP["name"].lower(), working, FULL_GATE)
+        release_gate_scope.print_decision(scope)
         wait_for_gate_idle(gate_idle, gate_idle_max_min)
         # only this app's suites: the Recorder tests registered by recorder/CMakeLists.txt need RecorderTests.exe, which an
         # Enqueue / LiveMix build does not make (2026-09-14: the 0.10.2 release stopped on 41 "Not Run" Recorder tests)
         with heavy_slot("release test gate " + APP["name"]):
-            run(["ctest", "--preset", preset + "-release"] + (["-R", APP["ctest_filter"]] if APP.get("ctest_filter") else []))
+            run(["ctest", "--preset", preset + "-release", "-R", scope.ctest_filter])
         web_join_gate()
 
 
@@ -1142,6 +1156,7 @@ def main():
                         help="Enqueue/LiveMix build + test gate (default auto, gom 2026-10-18): local = this PC, roomc = the studio build server, "
                              "auto = roomc when it answers, else this PC (installer, signature and upload stay here)")
     parser.add_argument("--skip-tests", action="store_true")
+    parser.add_argument("--full-gate", action="store_true", help="always run the whole release test gate")
     parser.add_argument("--gate-idle", type=int, default=GATE_IDLE_S,
                         help="start the test gate after this many seconds without keyboard/mouse input (default %d, 0 = off)" % GATE_IDLE_S)
     parser.add_argument("--gate-idle-max-min", type=float, default=GATE_IDLE_MAX_MIN,
@@ -1157,8 +1172,9 @@ def main():
                         help="--publish although other worktrees hold recent work on this app that is not in this release "
                              "(only once it is decided that the work belongs to a later version)")
     args = parser.parse_args()
-    global APP
+    global APP, FULL_GATE
     APP = APPS[args.app]
+    FULL_GATE = args.full_gate
 
     if args.package_only and (args.publish or args.site_only or args.skip_build or args.skip_tests):
         parser.error("--package-only requires build/tests and cannot be combined with --publish or --site-only")

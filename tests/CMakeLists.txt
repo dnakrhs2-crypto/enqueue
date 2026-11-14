@@ -294,6 +294,7 @@ target_sources(EnqueueTests PRIVATE "${_asrc_probe}")
 set_property(TARGET EnqueueTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_test(NAME EnqueueUnitTests COMMAND EnqueueTests)
+add_test(NAME EnqueueGateShortTests COMMAND EnqueueTests --skip-file "${CMAKE_CURRENT_SOURCE_DIR}/release_gate_skip.txt")
 target_compile_definitions(EnqueueTests PRIVATE LIVEMIX_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 target_compile_definitions(EnqueueTests PRIVATE LIVEMIX_I18N_SHOTS_APP_VERSION="${LIVEMIX_VERSION}")
 add_test(NAME EnqueueMidiLoadTests COMMAND EnqueueTests --midi-load)
