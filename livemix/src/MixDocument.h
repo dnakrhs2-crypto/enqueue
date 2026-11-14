@@ -63,6 +63,7 @@ public:
     void setChannelAuxSend (const juce::Uuid& channelId, const juce::Uuid& auxId, bool send);
     void renameAux (const juce::Uuid& id, const juce::String& name);
     void setAuxOn (const juce::Uuid& id, bool on);
+    void setAuxMono (const juce::Uuid& id, bool mono);
     void setAuxOutput (const juce::Uuid& id, const MixOutput& output);
     void setAuxPan (const juce::Uuid& id, double pan);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);

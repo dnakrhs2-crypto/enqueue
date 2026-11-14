@@ -47,7 +47,7 @@ public:
         {
             const auto key = property.name;
             const auto& value = property.value;
-            if (root && (key == juce::Identifier ("channels") || key == juce::Identifier ("fx")))
+            if (root && (key == juce::Identifier ("channels") || key == juce::Identifier ("fx") || key == juce::Identifier ("auxes")))
             {
                 for (const auto& item : *value.getArray())
                 {
@@ -67,6 +67,43 @@ public:
 
     void runTest() override
     {
+        beginTest ("aux additions, removal and order use structural states; name and switch deltas merge by id");
+        {
+            Fixture f;
+            ControlState state (f.capture());
+            auto before = state.getCurrent();
+            expect (before.projection.auxes.empty());
+            const auto first = f.document.addAux(), second = f.document.addAux();
+            expect (state.update (f.capture()));
+            expect (ControlState::diff (before, state.getCurrent()).needsFullState());
+            expect (state.getCurrent().projection.auxes[0].id == first && state.getCurrent().projection.auxes[1].id == second);
+            before = state.getCurrent();
+            auto full = P::toVar (before.projection);
+            f.document.renameAux (second, "Hall");
+            f.document.setAuxOn (first, false);
+            expect (state.update (f.capture()));
+            const auto diff = ControlState::diff (before, state.getCurrent());
+            expect (diff.kind == ControlState::ChangeKind::values);
+            expectEquals ((int) diff.changes.auxes.size(), 2);
+            const auto patch = P::toVar (diff.changes);
+            expect (! patch.hasProperty ("channels") && ! patch.hasProperty ("fx"));
+            merge (full, patch);
+            expectEquals (juce::JSON::toString (full), juce::JSON::toString (P::toVar (state.getCurrent().projection)));
+            before = state.getCurrent();
+            std::reverse (f.document.getSession().auxes.begin(), f.document.getSession().auxes.end());
+            expect (state.update (f.capture()));
+            expect (ControlState::diff (before, state.getCurrent()).needsFullState());
+            before = state.getCurrent();
+            f.document.removeAux (first);
+            expect (state.update (f.capture()));
+            expect (ControlState::diff (before, state.getCurrent()).needsFullState());
+            expectEquals ((int) state.getCurrent().projection.auxes.size(), 1);
+            expect (state.getCurrent().projection.auxes[0].id == second);
+            f.document.removeAux (second);
+            expect (state.update (f.capture()));
+            expect (state.getCurrent().projection.auxes.empty());
+        }
+
         beginTest ("master groups publish full lists, OFF deltas and structural changes independently of microphones");
         {
             Fixture f;
@@ -128,7 +165,7 @@ public:
             expectWithinAbsoluteError (p.fx[0].returnAmount, 0.8, 1.0e-12);
             expect (! p.fx[0].on && p.fx[1].on);
             const auto json = P::toVar (p);
-            expectEquals (json.getDynamicObject()->getProperties().size(), 7);
+            expectEquals (json.getDynamicObject()->getProperties().size(), 8);
             expectEquals (json["channels"][0].getDynamicObject()->getProperties().size(), 7);
             expect (json["channels"][0]["pan"].isDouble());
             expectWithinAbsoluteError ((double) json["channels"][0]["pan"], -0.3, 1e-12);

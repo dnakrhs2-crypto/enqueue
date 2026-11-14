@@ -26,7 +26,7 @@ public:
         invalidJson, invalidUtf8, messageTooLarge, stateTooLarge, unsupportedVersion,
         authRequired, authFailed, handshakeTimeout, invalidArgument, unknownCommand, unknownMessage,
         channelNotFound, fxNotFound, pluginGroupNotFound, instanceChanged, sessionChanged, revisionConflict,
-        duplicateId, controlDisabled, serverStopping, commandExpired, rateLimited, serverBusy, pluginGroupEmpty, internalError
+        duplicateId, controlDisabled, serverStopping, commandExpired, rateLimited, serverBusy, pluginGroupEmpty, auxNotFound, internalError
     };
 
     struct Error
@@ -53,6 +53,8 @@ public:
     struct SetSend { juce::Uuid channelId, fxId; std::optional<double> amount; std::optional<bool> pre; };
     struct ToggleFx { juce::Uuid fxId; };
     struct SetFxOn { juce::Uuid fxId; bool on = false; };
+    struct ToggleAux { juce::Uuid auxId; };
+    struct SetAuxOn { juce::Uuid auxId; bool on = false; };
     struct ToggleMuteAll { MuteGroup group = MuteGroup::mic; };
     struct SetMuteAll { MuteGroup group = MuteGroup::mic; bool muted = false; };
     struct TogglePluginGroupWindows { int index = 1; std::optional<juce::Uuid> channelId; };
@@ -60,7 +62,8 @@ public:
     struct RequestState {};
     using CommandArgs = std::variant<SetChannelOn, ToggleChannel, SetAllChannelsOn, ToggleMuteGroup,
                                      SetMuteGroup, SetPluginGroupOff, SetPluginGroupOffEverywhere, SetSend, ToggleFx, SetFxOn,
-                                     ToggleMuteAll, SetMuteAll, TogglePluginGroupWindows, SetPluginGroupWindows, SetMasterPluginGroupOff, RequestState>;
+                                     ToggleMuteAll, SetMuteAll, TogglePluginGroupWindows, SetPluginGroupWindows, SetMasterPluginGroupOff, RequestState,
+                                     ToggleAux, SetAuxOn>;
     struct Command
     {
         juce::String id;
@@ -145,6 +148,13 @@ public:
             return std::tie (id, name, muteGroup, returnAmount, on) == std::tie (o.id, o.name, o.muteGroup, o.returnAmount, o.on);
         }
     };
+    struct Aux
+    {
+        juce::Uuid id;
+        juce::String name;
+        bool on = true;
+        bool operator== (const Aux& o) const { return std::tie (id, name, on) == std::tie (o.id, o.name, o.on); }
+    };
     struct Projection
     {
         Session session;
@@ -155,10 +165,11 @@ public:
         // Additive v1 field: older clients may ignore muteAll; absent on older servers means both false.
         bool allMicsMuted = false, allFxMuted = false;
         std::vector<PluginGroup> masterPluginGroups;
+        std::vector<Aux> auxes;   // additive v1 field, in card order
         bool operator== (const Projection& o) const
         {
-            return std::tie (session, audioRunning, channels, fx, micMuted, fxMuted, allMicsMuted, allFxMuted, masterPluginGroups)
-                == std::tie (o.session, o.audioRunning, o.channels, o.fx, o.micMuted, o.fxMuted, o.allMicsMuted, o.allFxMuted, o.masterPluginGroups);
+            return std::tie (session, audioRunning, channels, fx, micMuted, fxMuted, allMicsMuted, allFxMuted, masterPluginGroups, auxes)
+                == std::tie (o.session, o.audioRunning, o.channels, o.fx, o.micMuted, o.fxMuted, o.allMicsMuted, o.allFxMuted, o.masterPluginGroups, o.auxes);
         }
     };
     struct ChannelChanges
@@ -180,6 +191,13 @@ public:
         std::optional<bool> on;
         bool empty() const;
     };
+    struct AuxChanges
+    {
+        juce::Uuid id;
+        std::optional<juce::String> name;
+        std::optional<bool> on;
+        bool empty() const;
+    };
     struct Changes
     {
         std::optional<juce::String> sessionName;
@@ -188,6 +206,7 @@ public:
         std::optional<std::vector<PluginGroup>> masterPluginGroups;
         std::vector<ChannelChanges> channels;
         std::vector<FxChanges> fx;
+        std::vector<AuxChanges> auxes;
         bool empty() const;
     };
 

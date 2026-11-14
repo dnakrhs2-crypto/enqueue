@@ -117,6 +117,18 @@ ControlDispatcher::Result ControlDispatcher::dispatch (const ControlProtocol::Co
                 if (changed) groups.setAll (group, muted);
                 return P::CommandResult { P::MuteGroupResult { a.group, muted } };
             }
+            else if constexpr (std::is_same_v<T, P::ToggleAux> || std::is_same_v<T, P::SetAuxOn>)
+            {
+                const auto* aux = session.findAux (a.auxId);
+                if (aux == nullptr) return Code::auxNotFound;
+                bool on;
+                if constexpr (std::is_same_v<T, P::SetAuxOn>) on = a.on;
+                else on = ! aux->on;
+                changed = aux->on != on;
+                if (! canAdvance()) return Code::internalError;
+                if (changed) document.setAuxOn (a.auxId, on);
+                return P::CommandResult { P::OnResult { on } };
+            }
             else if constexpr (std::is_same_v<T, P::ToggleFx> || std::is_same_v<T, P::SetFxOn>)
             {
                 const auto* fx = session.findFx (a.fxId);

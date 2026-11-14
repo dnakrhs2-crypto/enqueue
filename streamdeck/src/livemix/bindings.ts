@@ -1,4 +1,4 @@
-import { isObject, isUuid, type Channel, type Fx, type Snapshot } from "./protocol.js";
+import { isObject, isUuid, type Channel, type Fx, type Aux, type Snapshot } from "./protocol.js";
 
 export type MicSettings = {
   settingsVersion: 1;
@@ -82,11 +82,22 @@ export class FxBinding {
   }
 }
 
-export type ActionKind = "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "plugin-group-master" | "plugin-window" | "fx-send" | "fx-send-step" | "status";
+type AuxSettings = { auxId: string; auxName: string; nameFallback: boolean };
+export class AuxBinding {
+  private readonly binding: NamedBinding<Aux>;
+  constructor(settings: AuxSettings) { this.binding = new NamedBinding({ id: settings.auxId, name: settings.auxName, nameFallback: settings.nameFallback }, s => s.state.auxes); }
+  update(settings: AuxSettings): void { this.binding.update({ id: settings.auxId, name: settings.auxName, nameFallback: settings.nameFallback }); }
+  resolve(snapshot: Snapshot): { status: "bound"; aux: Aux; renamedOrigin?: string } | { status: "missing" | "duplicate" } {
+    const r = this.binding.resolve(snapshot); return r.status === "bound" ? { ...r, aux: r.item } : r;
+  }
+}
+
+export type ActionKind = "fx" | "aux" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "plugin-group-master" | "plugin-window" | "fx-send" | "fx-send-step" | "status";
 export type ActionSettings = Omit<MicSettings, "mode"> & {
   mode: "toggle" | "on" | "off" | "mute" | "unmute" | "up" | "down" | "set" | "open" | "close";
   windowTarget?: "all" | "mic";
   fxId: string; fxName: string; groupIndex: number;
+  auxId: string; auxName: string;
   stepPercent: 1 | 5 | 10; targetPercent: number; pressMode: "pre-post" | "none"; display: "connection" | "session" | "audio";
 };
 export function actionSettings(kind: ActionKind, value: unknown): { settings: ActionSettings; valid: boolean; changed: boolean } {
@@ -107,6 +118,7 @@ export function actionSettings(kind: ActionKind, value: unknown): { settings: Ac
     ...(window ? { windowTarget: o.windowTarget === "mic" ? "mic" as const : "all" as const } : {}),
     mode: modes.includes(String(o.mode)) ? o.mode as ActionSettings["mode"] : sendStep ? "up" : "toggle",
     fxId: isUuid(o.fxId) ? o.fxId : "", fxName: typeof o.fxName === "string" ? o.fxName : "",
+    auxId: isUuid(o.auxId) ? o.auxId : "", auxName: typeof o.auxName === "string" ? o.auxName : "",
     groupIndex: Number.isInteger(o.groupIndex) && Number(o.groupIndex) >= 1 && Number(o.groupIndex) <= 5 ? Number(o.groupIndex) : 1,
     stepPercent: steps.includes(o.stepPercent as number) ? o.stepPercent as ActionSettings["stepPercent"] : sendStep ? 5 : 1,
     targetPercent: validTarget ? o.targetPercent as number : 50, pressMode: o.pressMode === "none" ? "none" : "pre-post",

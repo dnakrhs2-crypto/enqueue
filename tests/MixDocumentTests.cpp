@@ -17,6 +17,75 @@ public:
 
     void runTest() override
     {
+        beginTest ("setAuxMono is a live value edit, unchanged values are inert, and stereo returns to the containing pair");
+        {
+            MixEngine engine;
+            MixDocument doc (engine);
+            doc.applyToEngine();
+            const auto mic = doc.getSession().channels[0].id, aux = doc.addAux();
+            doc.setChannelInput (mic, 0, true);
+            doc.setChannelOutput (mic, { false, false, 2 });
+            doc.setChannelAuxSend (mic, aux, true);
+            doc.setAuxOutput (aux, { false, true, 2 });
+            auto* chain = engine.getAuxChain (aux);
+            int values = 0, structures = 0;
+            doc.onValueChanged = [&] { ++values; };
+            doc.onStructureChanged = [&] { ++structures; };
+            doc.discardUnsavedChanges();
+            doc.setAuxMono (aux, false);
+            doc.setAuxMono (juce::Uuid(), true);
+            expect (! doc.isDirty());
+            expectEquals (values, 0);
+            juce::AudioBuffer<float> input (2, 256), output (MixSession::maxDeviceChannels, 256);
+            juce::FloatVectorOperations::fill (input.getWritePointer (0), 0.8f, 256);
+            juce::FloatVectorOperations::fill (input.getWritePointer (1), 0.4f, 256);
+            const auto render = [&]
+            {
+                for (int i = 0; i < 3; ++i)
+                    engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), output.getNumChannels(), 256);
+            };
+            doc.setAuxMono (aux, true);
+            expect (doc.isDirty() && doc.getSession().findAux (aux)->mono);
+            expectEquals (values, 1);
+            expectEquals (doc.getSession().findAux (aux)->output.directFirst, 2);
+            render();
+            expectWithinAbsoluteError (output.getSample (2, 255), 0.6f, 1e-6f);
+            expectWithinAbsoluteError (output.getSample (3, 255), 0.0f, 1e-6f);
+            doc.discardUnsavedChanges();
+            doc.setAuxMono (aux, true);
+            expect (! doc.isDirty());
+            expectEquals (values, 1);
+            doc.setAuxOutput (aux, { false, true, 3 });
+            render();
+            expectWithinAbsoluteError (output.getSample (3, 255), 0.6f, 1e-6f);
+            doc.setAuxMono (aux, false);
+            expectEquals (values, 3);
+            expectEquals (doc.getSession().findAux (aux)->output.directFirst, 2);
+            render();
+            expectWithinAbsoluteError (output.getSample (2, 255), 0.8f, 1e-6f);
+            expectWithinAbsoluteError (output.getSample (3, 255), 0.4f, 1e-6f);
+            doc.setAuxMono (aux, true);
+            doc.setAuxOutput (aux, { false, true, 999 });
+            expectEquals (doc.getSession().findAux (aux)->output.directFirst, MixSession::maxDeviceChannels - 1);
+            render();
+            expectWithinAbsoluteError (output.getSample (MixSession::maxDeviceChannels - 1, 255), 0.6f, 1e-6f);
+            expectWithinAbsoluteError (output.getSample (MixSession::maxDeviceChannels - 2, 255), 0.0f, 1e-6f);
+            expect (engine.getAuxChain (aux) == chain);
+            expectEquals (structures, 0);
+            const auto file = juce::File::createTempFile (".livemix");
+            expect (doc.save (file).wasOk());
+            expect (doc.load (file).wasOk());
+            expect (doc.getSession().findAux (aux)->mono);
+            expectEquals (doc.getSession().findAux (aux)->output.directFirst, MixSession::maxDeviceChannels - 1);
+            render();
+            expectWithinAbsoluteError (output.getSample (MixSession::maxDeviceChannels - 1, 255), 0.6f, 1e-6f);
+            doc.setAuxMono (aux, false);
+            expectEquals (doc.getSession().findAux (aux)->output.directFirst, MixSession::maxDeviceChannels - 2);
+            doc.setAuxOutput (aux, { false, true, 999 });
+            expectEquals (doc.getSession().findAux (aux)->output.directFirst, MixSession::maxDeviceChannels - 2);
+            expect (file.deleteFile());
+        }
+
         beginTest ("aux sends, pan and output are live value edits; only add, rename and remove announce structure");
         {
             MixEngine engine;

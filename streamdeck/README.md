@@ -1,14 +1,15 @@
-# LiveMix Stream Deck 1.6.0
+# LiveMix Stream Deck 1.7.0
 
-Windows release `com.gomtwigim.livemix`, manifest version `1.6.0.0`
-(npm package `1.6.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64;
+Windows release `com.gomtwigim.livemix`, manifest version `1.7.0.0`
+(npm package `1.7.0`). Requires LiveMix 0.6.0+ on Windows 10/11 x64;
 the **Plugin Group (All Mics)** key requires **LiveMix 0.10.0+**, and
 the **FX On/Off** key requires **LiveMix 0.16.0+**.
 **Mute All Mics** and **Mute All FX** require **LiveMix 0.18.0+**.
 **Plugin Group Windows** requires **LiveMix 0.22.0+**.
 **Plugin Group (Master)** requires **LiveMix 0.23.0+**.
+**Aux On/Off** requires **LiveMix 0.24.1+**.
 The other eight actions still work with LiveMix 0.6.0+.
-This package implements fourteen actions, a shared LiveMix connection and a
+This package implements fifteen actions, a shared LiveMix connection and a
 hardware-free test harness. Node 24 and Stream Deck 7.1+ are the runtime baseline.
 It does not install, launch or change LiveMix or Stream Deck profiles.
 
@@ -27,7 +28,7 @@ npm.cmd run pack -- -f
 The build commands require the prepared dependency directory; retain it and the
 existing lockfile. Do not run npm install or rewrite package-lock.json for
 this release. Its preview package metadata is intentionally retained under that
-constraint; package.json, manifest and runtime hello advertise 1.6.0.
+constraint; package.json, manifest and runtime hello advertise 1.7.0.
 All direct dependencies use exact versions.
 The test script builds the actual distributable first, compiles the TypeScript
 tests with `tsconfig.test.json`, then runs `node:test` serially. No physical Stream
@@ -66,6 +67,7 @@ the new artwork and physical Stream Deck + remain separate visual/device checks.
 |---|---|
 | Microphone On/Off | Toggle / ON / OFF; original switch state with mute-group or all-mute and stopped-audio badges. |
 | FX On/Off / FX ON/OFF | LiveMix 0.16.0+. Toggle / ON / OFF for one FX channel. Blue ON (state 1), gray OFF (state 0), red group-muted or all-muted lamp with Originally ON/OFF while preserving the switch state; stopped-audio badge. Send amounts and the FX mute group stay independent. |
+| Aux On/Off / 억스 ON/OFF | LiveMix 0.24.1+. Toggle / ON / OFF for one aux channel, the same switch as Aux ON on the LiveMix aux card. Violet ON (state 1), gray OFF (state 0), stopped-audio badge. Mic sends to the aux, the aux chain and its output stay unchanged. A deleted aux shows Aux channel missing and alerts on press. |
 | All Microphones | Toggle turns everything OFF if any microphone is ON, otherwise ON. Explicit all ON/OFF modes. Shows all/some/none ON and the count; no command with zero microphones. |
 | Microphone Mute Group | Toggle / Mute / Unmute the LiveMix microphone latch. Shows membership count; a zero-member group remains operable. Membership is edited in LiveMix. |
 | FX Mute Group | Toggle / Mute / Unmute the LiveMix FX latch. Shows membership count; a zero-member group remains operable. Membership is edited in LiveMix. |
@@ -118,6 +120,10 @@ Plugin Group (Master) exposes group, mode and display name in its PI; the group
 list shows the master's groups and the note says it switches only the master's
 group. Without the `masterPluginGroups` capability, the key displays the existing
 update-LiveMix message and never sends this command.
+
+Aux On/Off exposes aux channel, mode, same-name fallback and display name in its PI,
+like FX On/Off. Without the `auxOn` capability, the key displays the existing
+update-LiveMix message and never sends a command.
 
 Plugin Group Windows reuses the microphone, group, mode and display-name fields.
 The first microphone choice is All mics; its group list combines existing slots
@@ -232,6 +238,11 @@ The master group key queues by `plugin-group-master/<index>` and sends
 `setMasterPluginGroupOff { index, off }` with the current session, computed from
 the latest state like the other group keys. Its ACK contains `{ index, off }`;
 only the `master.pluginGroups` state update changes the displayed values.
+
+The aux key queues by `aux/<auxId>` and sends `toggleAux { auxId }` (Toggle) or
+`setAuxOn { auxId, on }` (ON/OFF) with the current session. Its ACK contains `{ on }`;
+only the `auxes[]` state update changes the displayed values. Adding, removing or
+reordering aux channels arrives as a full state.
 
 Plugin Group Windows queues by `plugin-window/<all|channelId>/<index>` and sends
 `togglePluginGroupWindows { index, channelId? }` or

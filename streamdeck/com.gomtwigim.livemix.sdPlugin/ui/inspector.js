@@ -2,7 +2,7 @@
 (() => {
   "use strict";
   const byId = id => document.getElementById(id);
-  let socket, context, uuid, kind = "mic", settings = {}, channels = [], fx = [], groupIndices = [], counts;
+  let socket, context, uuid, kind = "mic", settings = {}, channels = [], fx = [], auxes = [], groupIndices = [], counts;
   let request = 0, requestId = "", sequence = -1, session, revision = -1, ready = false, isInMultiAction = false;
   let t = window.LiveMixStrings.en;
   const isMute = () => kind.endsWith("mute-group") || kind.endsWith("mute-all");
@@ -41,6 +41,7 @@
       isWindow() ? { id: "all", name: t.allMicsShort } : undefined);
     if (isWindow()) byId("fallback-row").hidden = allWindows();
     updateSelect("fx", fx, settings.fxId, settings.fxName, t.chooseFx);
+    updateSelect("aux", auxes, settings.auxId, settings.auxName, t.chooseAux);
     const group = byId("group"), index = settings.groupIndex || 1;
     const groupCounts = new Map();
     if (allGroups()) for (const channel of channels) for (const n of new Set(channel.groupIndices || [])) groupCounts.set(n, (groupCounts.get(n) || 0) + 1);
@@ -70,6 +71,10 @@
     const selected = fx.find(c => c.id === byId("fx").value);
     if (selected) save({ fxId: selected.id, fxName: selected.name });
   });
+  byId("aux").addEventListener("change", () => {
+    const selected = auxes.find(c => c.id === byId("aux").value);
+    if (selected) save({ auxId: selected.id, auxName: selected.name });
+  });
   byId("group").addEventListener("change", () => save({ groupIndex: Number(byId("group").value) }));
   byId("mode").addEventListener("change", () => { save({ mode: byId("mode").value }); showSettings(); });
   byId("step").addEventListener("change", () => save({ stepPercent: Number(byId("step").value) }));
@@ -88,11 +93,11 @@
     kind = action.action.split(".").at(-1);
     t = window.LiveMixStrings[info.application.language === "ko" ? "ko" : "en"];
     document.documentElement.lang = info.application.language === "ko" ? "ko" : "en";
-    for (const [id, key] of [["channel", "microphone"], ["fx", "fxChannel"], ["group", "group"], ["mode", "mode"], ["step", "step"], ["target", "targetValue"], ["press", "press"], ["display", "display"], ["fallback", "fallback"], ["title", "shortTitle"]]) byId(id + "-label").textContent = t[key];
+    for (const [id, key] of [["channel", "microphone"], ["fx", "fxChannel"], ["aux", "auxChannel"], ["group", "group"], ["mode", "mode"], ["step", "step"], ["target", "targetValue"], ["press", "press"], ["display", "display"], ["fallback", "fallback"], ["title", "shortTitle"]]) byId(id + "-label").textContent = t[key];
     const bound = ["mic", "plugin-group", "plugin-window", "fx-send", "fx-send-step"].includes(kind);
-    for (const [id, visible] of [["channel", bound], ["fx", kind === "fx" || kind === "fx-send" || isSendStep()], ["group", kind === "plugin-group" || isGroupAll() || isMaster() || isWindow()],
+    for (const [id, visible] of [["channel", bound], ["fx", kind === "fx" || kind === "fx-send" || isSendStep()], ["aux", kind === "aux"], ["group", kind === "plugin-group" || isGroupAll() || isMaster() || isWindow()],
       ["mode", !["fx-send", "status"].includes(kind)], ["step", kind === "fx-send"], ["press", kind === "fx-send"],
-      ["display", kind === "status"], ["fallback", bound || kind === "fx"], ["title", !["fx-send", "fx-send-step", "status"].includes(kind)]]) byId(id + "-row").hidden = !visible;
+      ["display", kind === "status"], ["fallback", bound || kind === "fx" || kind === "aux"], ["title", !["fx-send", "fx-send-step", "status"].includes(kind)]]) byId(id + "-row").hidden = !visible;
     choices("mode", isSendStep() ? [["up", t.increase], ["down", t.decrease], ["set", t.setValue]]
       : [["toggle", isWindow() ? t.windowToggle : t.toggle], ...(isWindow() ? [["open", t.windowOpen], ["close", t.windowClose]] : isMute() ? [["mute", t.mute], ["unmute", t.unmute]] : [["on", kind === "all-mics" ? t.setAllOn : t.on], ["off", kind === "all-mics" ? t.setAllOff : t.off]])]);
     choices("step", (isSendStep() ? [1, 5, 10] : [1, 5]).map(value => [value, value + "%"]));
@@ -119,12 +124,13 @@
       if (ready) { session = nextSession; revision = p.revision; }
       channels = ready && Array.isArray(p.channels) ? p.channels : [];
       fx = ready && Array.isArray(p.fx) ? p.fx : [];
+      auxes = ready && Array.isArray(p.auxes) ? p.auxes : [];
       groupIndices = ready && Array.isArray(p.groupIndices) ? p.groupIndices : [];
       counts = ready ? p.muteGroupCounts : undefined;
       byId("status").textContent = p.message;
       updateLists();
     };
-    socket.onclose = () => { ready = false; channels = []; fx = []; groupIndices = []; updateLists(); byId("status").textContent = t.offlineHelp; };
+    socket.onclose = () => { ready = false; channels = []; fx = []; auxes = []; groupIndices = []; updateLists(); byId("status").textContent = t.offlineHelp; };
   };
   window.addEventListener("beforeunload", () => socket?.close());
 })();

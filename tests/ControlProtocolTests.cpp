@@ -272,6 +272,50 @@ public:
             }
         }
 
+        beginTest ("aux commands require a wire aux id, a boolean switch and the edit-command envelope");
+        {
+            const std::string aux = "\"auxId\":\"22222222222242228222222222222222\"";
+            for (const auto* commandName : { "toggleAux", "setAuxOn" })
+            {
+                const auto args = "{" + aux + ",\"on\":true}";
+                auto request = juce::JSON::parse (command (commandName, args).c_str());
+                request.getDynamicObject()->setProperty ("ifRevision", (juce::int64) 7);
+                const auto validated = P::validate (request);
+                const auto* message = std::get_if<P::ClientMessage> (&validated);
+                expect (message != nullptr);
+                if (message != nullptr)
+                {
+                    const auto* c = std::get_if<P::Command> (message);
+                    expect (c != nullptr);
+                    if (c != nullptr)
+                    {
+                        expect (c->ifRevision == 7);
+                        if (const auto* a = std::get_if<P::SetAuxOn> (&c->args)) expect (a->on);
+                    }
+                }
+                for (const auto* field : { "auxId", "instanceId", "sessionId" })
+                {
+                    auto bad = request.clone();
+                    auto object = juce::String (field) == "auxId" ? bad["args"] : bad;
+                    object.getDynamicObject()->removeProperty (field);
+                    invalid (bad);
+                }
+                for (const auto* value : { "null", "1", "\"not-a-uuid\"", "\"00000000000000000000000000000000\"",
+                                          "\"22222222-2222-4222-8222-222222222222\"" })
+                    invalid (juce::JSON::parse (command (commandName, "{\"auxId\":" + std::string (value) + ",\"on\":true}").c_str()));
+            }
+            invalid (juce::JSON::parse (command ("setAuxOn", "{" + aux + "}").c_str()));
+            for (const auto* value : { "null", "0", "1", "\"true\"" })
+                invalid (juce::JSON::parse (command ("setAuxOn", "{" + aux + ",\"on\":" + value + "}").c_str()));
+            const P::CommandArgs invalidArgs[] { P::ToggleAux { juce::Uuid::null() }, P::SetAuxOn { juce::Uuid::null(), true } };
+            for (const auto& args : invalidArgs)
+            {
+                const auto error = P::validateCommand ({ "2", juce::Uuid(), juce::Uuid(), {}, args });
+                expect (error.has_value());
+                if (error) expect (error->code == P::ErrorCode::invalidArgument);
+            }
+        }
+
         beginTest ("all-mute commands require a mic/fx group, a boolean muted value and the edit-command envelope");
         {
             for (const auto* commandName : { "toggleMuteAll", "setMuteAll" })
@@ -407,7 +451,7 @@ public:
             expectEquals (error["code"].toString(), juce::String ("PLUGIN_GROUP_EMPTY"));
             expectEquals (error["message"].toString(), juce::String ("Plugin group has no plugins"));
             expect (error["retryable"].isBool() && ! (bool) error["retryable"]);
-            expectEquals ((int) P::ErrorCode::pluginGroupEmpty + 1, (int) P::ErrorCode::internalError);
+            expectEquals ((int) P::ErrorCode::pluginGroupEmpty + 1, (int) P::ErrorCode::auxNotFound);
         }
 
         beginTest ("strict ids, enums, required fields, bools, indexes, numeric ranges and unknown direction/command");
@@ -494,6 +538,45 @@ public:
             }
         }
 
+        beginTest ("aux snapshots include ordered ids, names and switches; deltas contain only changed fields");
+        {
+            P::Projection projection;
+            expect (P::toVar (projection)["auxes"].isArray());
+            expectEquals (P::toVar (projection)["auxes"].size(), 0);
+            const P::Aux first { juce::Uuid(), "Room", true }, second { juce::Uuid(), "Hall", false };
+            projection.auxes = { first, second };
+            const auto state = P::toVar (projection);
+            expectEquals (state["auxes"].size(), 2);
+            expectEquals (state["auxes"][0]["id"].toString(), first.id.toString());
+            expectEquals (state["auxes"][1]["id"].toString(), second.id.toString());
+            expectEquals (state["auxes"][0]["name"].toString(), first.name);
+            expect ((bool) state["auxes"][0]["on"] && ! (bool) state["auxes"][1]["on"]);
+            expectEquals (state["auxes"][0].getDynamicObject()->getProperties().size(), 3);
+            P::AuxChanges change;
+            change.id = first.id;
+            expect (change.empty());
+            P::Changes changes;
+            expect (changes.empty() && ! P::toVar (changes).hasProperty ("auxes"));
+            change.name = "Talk";
+            changes.auxes.push_back (change);
+            expect (! changes.empty() && ! changes.auxes[0].empty());
+            expectEquals (P::toVar (changes)["auxes"][0]["name"].toString(), juce::String ("Talk"));
+            expect (! P::toVar (changes)["auxes"][0].hasProperty ("on"));
+            changes.auxes[0].name.reset();
+            for (const bool on : { false, true })
+            {
+                changes.auxes[0].on = on;
+                const auto value = P::toVar (changes)["auxes"][0];
+                expect (! changes.auxes[0].empty());
+                expectEquals (value.getDynamicObject()->getProperties().size(), 2);
+                expectEquals (value["id"].toString(), first.id.toString());
+                expect (value["on"].isBool() && (bool) value["on"] == on);
+            }
+            expectEquals (juce::String (P::errorCode (P::ErrorCode::auxNotFound)), juce::String ("AUX_NOT_FOUND"));
+            expect (! P::isRetryable (P::ErrorCode::auxNotFound));
+            expectEquals ((int) P::ErrorCode::auxNotFound + 1, (int) P::ErrorCode::internalError);
+        }
+
         beginTest ("all-mute snapshots always include both switches and deltas include only present switches");
         {
             P::Projection projection;
@@ -537,13 +620,14 @@ public:
             expectEquals (hello["type"].toString(), juce::String ("helloAck"));
             expectEquals (hello["server"]["version"].toString(), juce::String ("0.5.3"));
             expectEquals ((int) hello["v"], 1);
-            expectEquals (hello["capabilities"].size(), 10);
+            expectEquals (hello["capabilities"].size(), 11);
             expectEquals (hello["capabilities"][4].toString(), juce::String ("sends"));
             expectEquals (hello["capabilities"][5].toString(), juce::String ("pluginGroupsEverywhere"));
             expectEquals (hello["capabilities"][6].toString(), juce::String ("fxOn"));
             expectEquals (hello["capabilities"][7].toString(), juce::String ("muteAll"));
             expectEquals (hello["capabilities"][8].toString(), juce::String ("pluginGroupWindows"));
             expectEquals (hello["capabilities"][9].toString(), juce::String ("masterPluginGroups"));
+            expectEquals (hello["capabilities"][10].toString(), juce::String ("auxOn"));
             expectEquals ((int) hello["eventIntervalMs"], 100); expectEquals ((int) hello["heartbeatIntervalMs"], 5000);
             P::Projection projection;
             projection.session.name = juce::String::fromUTF8 ("곰 \"방송\"\n");

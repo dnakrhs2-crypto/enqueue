@@ -1,16 +1,16 @@
 import streamDeck, { SingletonAction, type KeyAction, type DialAction, type WillAppearEvent, type WillDisappearEvent, type DidReceiveSettingsEvent, type KeyDownEvent, type SendToPluginEvent, type PropertyInspectorDidAppearEvent, type PropertyInspectorDidDisappearEvent } from "@elgato/streamdeck";
 import type { JsonValue } from "@elgato/utils";
 import { ConnectionError, type LiveMixConnection } from "../livemix/connection.js";
-import { MicBinding, FxBinding, actionSettings, type ActionKind, type ActionSettings } from "../livemix/bindings.js";
+import { MicBinding, FxBinding, AuxBinding, actionSettings, type ActionKind, type ActionSettings } from "../livemix/bindings.js";
 import type { CommandQueue } from "../livemix/command-queue.js";
-import { isObject, type Channel, type Fx, type Snapshot } from "../livemix/protocol.js";
+import { isObject, type Channel, type Fx, type Aux, type Snapshot } from "../livemix/protocol.js";
 import { KeyRenderer, keyImage, statusTitle, type Lamp } from "../ui/key-renderer.js";
 import { FeedbackRenderer } from "../ui/feedback.js";
 import { translator, type Language, type StringKey } from "../ui/i18n.js";
 
 export type ActionContext = {
   id: string; device: string; handle: KeyAction<ActionSettings> | DialAction<ActionSettings>; isInMultiAction: boolean;
-  key?: KeyRenderer; feedback?: FeedbackRenderer; binding: MicBinding; fxBinding: FxBinding;
+  key?: KeyRenderer; feedback?: FeedbackRenderer; binding: MicBinding; fxBinding: FxBinding; auxBinding: AuxBinding;
   settings: ActionSettings; valid: boolean; generation: number; error?: string; problem?: string; saveQueued?: boolean;
   press?: { at: number; rotated: boolean; session: string };
 };
@@ -19,7 +19,7 @@ export type ActionContext = {
 export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
   protected readonly contexts = new Map<string, ActionContext>();
   protected readonly t;
-  private readonly bindings = new Map<string, { mic: MicBinding; fx: FxBinding }>();
+  private readonly bindings = new Map<string, { mic: MicBinding; fx: FxBinding; aux: AuxBinding }>();
   private sessionKey = "";
   private readonly history = new Map<string, { calls: number[]; expiry?: ReturnType<typeof setTimeout> }>();
   private inspector: { context: string; requestId: string; sequence: number } | undefined;
@@ -35,12 +35,12 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
     this.remove(ev.action.id);
     const migrated = actionSettings(this.kind, ev.payload.settings), settings = migrated.settings;
     const history = this.history.get(ev.action.id) ?? { calls: [] }; clearTimeout(history.expiry); this.history.set(ev.action.id, history);
-    const binding = this.bindings.get(ev.action.id) ?? { mic: new MicBinding(settings), fx: new FxBinding(settings) };
-    binding.mic.update(settings); binding.fx.update(settings); this.bindings.set(ev.action.id, binding);
+    const binding = this.bindings.get(ev.action.id) ?? { mic: new MicBinding(settings), fx: new FxBinding(settings), aux: new AuxBinding(settings) };
+    binding.mic.update(settings); binding.fx.update(settings); binding.aux.update(settings); this.bindings.set(ev.action.id, binding);
     const isInMultiAction = ev.action.isKey() && ev.payload.isInMultiAction === true;
     const c: ActionContext = { id: ev.action.id, device: ev.action.device.id, handle: ev.action, isInMultiAction,
       ...(ev.action.isKey() ? { key: new KeyRenderer(ev.action, history.calls, { silent: isInMultiAction }) } : { feedback: new FeedbackRenderer(ev.action, history.calls) }),
-      binding: binding.mic, fxBinding: binding.fx, settings, valid: migrated.valid, generation: 0 };
+      binding: binding.mic, fxBinding: binding.fx, auxBinding: binding.aux, settings, valid: migrated.valid, generation: 0 };
     this.contexts.set(c.id, c); this.render(c);
     if (migrated.changed) void c.handle.setSettings(settings).catch(() => {});
   }
@@ -57,7 +57,7 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
     if (JSON.stringify(c.settings) !== JSON.stringify(migrated.settings) || c.valid !== migrated.valid) {
       c.generation++; c.press = undefined; this.queue.cancelOwner(c.id); c.error = undefined;
     }
-    c.settings = migrated.settings; c.valid = migrated.valid; c.binding.update(c.settings); c.fxBinding.update(c.settings);
+    c.settings = migrated.settings; c.valid = migrated.valid; c.binding.update(c.settings); c.fxBinding.update(c.settings); c.auxBinding.update(c.settings);
     this.render(c); this.sendOptions();
     if (migrated.changed) void c.handle.setSettings(c.settings).catch(() => {});
   }
@@ -93,6 +93,12 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
     if (r.renamedOrigin !== undefined) this.rename(c, { fxName: r.renamedOrigin });
     return r.fx;
   }
+  protected aux(c: ActionContext, snapshot: Snapshot): Aux {
+    const r = c.auxBinding.resolve(snapshot);
+    if (r.status !== "bound") throw new ConnectionError(r.status === "duplicate" ? "DUPLICATE_NAME" : "AUX_NOT_FOUND");
+    if (r.renamedOrigin !== undefined) this.rename(c, { auxName: r.renamedOrigin });
+    return r.aux;
+  }
   private rename(c: ActionContext, patch: Partial<ActionSettings>): void {
     c.settings = { ...c.settings, ...patch };
     if (c.saveQueued) return;
@@ -106,7 +112,7 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
   private errorKey(error: unknown): StringKey {
     const code = error instanceof ConnectionError ? error.code : "COMMAND_FAILED";
     if (code === "DISCONNECTED") return this.connection.status === "disabled" ? "disabled" : "disconnected";
-    const keys: Record<string, StringKey> = { INVALID_SETTINGS: "invalidSettings", CHANNEL_NOT_FOUND: "missing", FX_NOT_FOUND: "missingFx",
+    const keys: Record<string, StringKey> = { INVALID_SETTINGS: "invalidSettings", CHANNEL_NOT_FOUND: "missing", FX_NOT_FOUND: "missingFx", AUX_NOT_FOUND: "missingAux",
       SEND_NOT_FOUND: "missingFx", GROUP_NOT_FOUND: "missingGroup", PLUGIN_GROUP_NOT_FOUND: "missingGroup", NO_CHANNELS: "noMics", DUPLICATE_NAME: "duplicate",
       PLUGIN_GROUP_EMPTY: "emptyGroup",
       INPUT_BUSY: "delayed", INPUT_EXPIRED: "delayed", REVISION_CONFLICT: "conflict", UNSUPPORTED: "unsupported" };
@@ -169,6 +175,7 @@ export abstract class LiveMixAction extends SingletonAction<ActionSettings> {
       ...(ready ? { instanceId: snapshot.instanceId, sessionId: snapshot.sessionId, revision: snapshot.revision,
         channels: snapshot.state.channels.map(ch => ({ id: ch.id, name: ch.name, groupIndices: ch.pluginGroups.map(g => g.index) })),
         fx: snapshot.state.fx.map(fx => ({ id: fx.id, name: fx.name })),
+        auxes: snapshot.state.auxes.map(aux => ({ id: aux.id, name: aux.name })),
         groupIndices: this.kind === "plugin-group-master" ? snapshot.state.master.pluginGroups.map(g => g.index)
           : binding?.status === "bound" ? binding.channel.pluginGroups.map(g => g.index) : [],
         muteGroupCounts: { mic: snapshot.state.channels.filter(ch => ch.muteGroup).length, fx: snapshot.state.fx.filter(fx => fx.muteGroup).length }

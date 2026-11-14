@@ -24,6 +24,18 @@
       }
     ]
   },
+  "com.gomtwigim.livemix.aux": {
+    "Name": "Aux On/Off",
+    "Tooltip": "Toggle one LiveMix aux channel or explicitly set it on or off (LiveMix 0.24.1+).",
+    "States": [
+      {
+        "Name": "OFF"
+      },
+      {
+        "Name": "ON"
+      }
+    ]
+  },
   "com.gomtwigim.livemix.all-mics": {
     "Name": "All Microphones",
     "Tooltip": "Toggle all microphone switches, or turn them all on or off.",
@@ -172,6 +184,8 @@
     "tooltip": "Toggle a LiveMix microphone or explicitly set it on or off.",
     "fxAction": "FX On/Off",
     "fxActionTooltip": "Toggle one LiveMix FX channel or explicitly set it on or off (LiveMix 0.16.0+).",
+    "auxAction": "Aux On/Off",
+    "auxActionTooltip": "Toggle one LiveMix aux channel or explicitly set it on or off (LiveMix 0.24.1+).",
     "connected": "Connected",
     "disconnected": "LiveMix offline",
     "disabled": "Control disabled",
@@ -252,6 +266,9 @@
     "fxChannel": "FX channel",
     "chooseFx": "Select an FX channel",
     "missingFx": "FX channel missing",
+    "auxChannel": "Aux channel",
+    "chooseAux": "Select an aux channel",
+    "missingAux": "Aux channel missing",
     "step": "Step",
     "press": "Press",
     "prePost": "Pre / Post",

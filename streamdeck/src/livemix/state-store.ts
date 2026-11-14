@@ -23,14 +23,16 @@ export class StateStore extends EventEmitter {
       || old.revision !== message.baseRevision || message.revision <= message.baseRevision) return this.invalidate();
     const c = message.changes, s = old.state;
     // An unknown ID is a gap, never an implicit insert. Array order comes only from full state.
-    if (c.channels?.some(p => !s.channels.some(x => x.id === p.id)) || c.fx?.some(p => !s.fx.some(x => x.id === p.id))) return this.invalidate();
+    if (c.channels?.some(p => !s.channels.some(x => x.id === p.id)) || c.fx?.some(p => !s.fx.some(x => x.id === p.id))
+      || c.auxes?.some(p => !s.auxes.some(x => x.id === p.id))) return this.invalidate();
     try {
       const state = validateProjection({
         session: { ...s.session, ...c.session }, audio: { ...s.audio, ...c.audio }, muteGroups: { ...s.muteGroups, ...c.muteGroups },
         muteAll: { ...s.muteAll, ...c.muteAll },
         master: { ...s.master, ...c.master },
         channels: s.channels.map(x => ({ ...x, ...c.channels?.find(p => p.id === x.id) })),
-        fx: s.fx.map(x => ({ ...x, ...c.fx?.find(p => p.id === x.id) }))
+        fx: s.fx.map(x => ({ ...x, ...c.fx?.find(p => p.id === x.id) })),
+        auxes: s.auxes.map(x => ({ ...x, ...c.auxes?.find(p => p.id === x.id) }))
       });
       this.snapshot = { ...old, revision: message.revision, state };
       this.emit("change"); return true;

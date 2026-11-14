@@ -3,6 +3,7 @@ export const locales = {
   en: {
     action: "Microphone On/Off", tooltip: "Toggle a LiveMix microphone or explicitly set it on or off.",
     fxAction: "FX On/Off", fxActionTooltip: "Toggle one LiveMix FX channel or explicitly set it on or off (LiveMix 0.16.0+).",
+    auxAction: "Aux On/Off", auxActionTooltip: "Toggle one LiveMix aux channel or explicitly set it on or off (LiveMix 0.24.1+).",
     connected: "Connected", disconnected: "LiveMix offline", disabled: "Control disabled", checking: "Checking connection",
     version: "Update required", missing: "Channel missing", duplicate: "Duplicate name — select again", audioStopped: "Audio stopped",
     muted: "Mute group", mutedAll: "Mute all", originalOn: "Originally ON", originalOff: "Originally OFF", microphone: "Microphone", mode: "Mode", toggle: "Toggle",
@@ -35,6 +36,7 @@ export const locales = {
     membershipNote: "Assign members in LiveMix's mute groups.", group: "Group", missingGroup: "Group missing",
     groupNote: "Groups are numbered slots. Deleting a group shifts later numbers; check your selection after editing groups.",
     fxChannel: "FX channel", chooseFx: "Select an FX channel", missingFx: "FX channel missing",
+    auxChannel: "Aux channel", chooseAux: "Select an aux channel", missingAux: "Aux channel missing",
     step: "Step", press: "Press", prePost: "Pre / Post", pressNone: "Disabled", pre: "Pre", post: "Post",
     muteApplied: "Mute group applied", muteAllApplied: "Mute all applied", display: "Display", connection: "Connection", session: "Session", audio: "Audio", audioRunning: "Audio running",
     pushTrigger: "Short press and release: toggle pre/post (when enabled).",
@@ -45,6 +47,7 @@ export const locales = {
   ko: {
     action: "마이크 ON/OFF", tooltip: "LiveMix 마이크를 토글하거나 ON/OFF로 설정합니다.",
     fxAction: "FX ON/OFF", fxActionTooltip: "LiveMix FX 채널 하나를 토글하거나 ON/OFF로 설정합니다 (LiveMix 0.16.0 이상).",
+    auxAction: "억스 ON/OFF", auxActionTooltip: "LiveMix 억스 채널 하나를 토글하거나 ON/OFF로 설정합니다 (LiveMix 0.24.1 이상).",
     connected: "연결됨", disconnected: "LiveMix 미연결", disabled: "제어 꺼짐", checking: "연결 확인 중",
     version: "업데이트 필요", missing: "채널 없음", duplicate: "이름 중복 — 다시 선택", audioStopped: "오디오 멈춤",
     muted: "뮤트그룹", mutedAll: "전체 뮤트", originalOn: "원래 ON", originalOff: "원래 OFF", microphone: "마이크", mode: "동작", toggle: "토글",
@@ -77,6 +80,7 @@ export const locales = {
     membershipNote: "소속은 LiveMix의 뮤트그룹에서 지정합니다", group: "그룹", missingGroup: "그룹 없음",
     groupNote: "그룹은 번호 슬롯입니다. 앞 그룹을 삭제하면 뒤 번호가 당겨지므로 그룹 편집 후 선택을 다시 확인하세요.",
     fxChannel: "FX 채널", chooseFx: "FX 채널을 선택하세요", missingFx: "FX 채널 없음",
+    auxChannel: "억스 채널", chooseAux: "억스 채널을 선택하세요", missingAux: "억스 채널 없음",
     step: "한 칸", press: "누르기", prePost: "프리/포스트", pressNone: "사용 안 함", pre: "프리", post: "포스트",
     muteApplied: "뮤트그룹 적용", muteAllApplied: "전체 뮤트 적용", display: "표시", connection: "연결", session: "세션", audio: "오디오", audioRunning: "오디오 running",
     pushTrigger: "짧게 눌렀다 떼기: 프리/포스트 전환 (설정 시).",

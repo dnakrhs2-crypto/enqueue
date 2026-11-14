@@ -52,13 +52,14 @@ struct MixChannel
     std::vector<MixPluginGroup> pluginGroups;   // up to MixSession::maxPluginGroups, numbered 1.. on the card
 };
 
-/** The stereo sum of mic sends through its own chain, ON/OFF switch, balance and outputs. */
+/** The sum of mic sends through its own chain, ON/OFF switch, pan/balance and outputs. */
 struct MixAux
 {
     juce::Uuid id;
     juce::String name;
     bool on = true;
-    double pan = 0.0;   // -1..1, stereo balance
+    bool mono = false;  // average both sides before/after the chain; direct output uses one device channel
+    double pan = 0.0;   // -1..1, mono pan or stereo balance
     std::vector<PluginSlotState> chain;
     MixOutput output;
 };

@@ -1,3 +1,10 @@
+# LiveMix 1.7.0
+
+- Added Aux On/Off to toggle, turn on or turn off one LiveMix aux channel, including in Multi Actions.
+- It is the same switch as Aux ON on the aux card: mic sends, the aux chain and its output are unchanged.
+- A deleted aux channel shows Aux channel missing and an alert on press.
+- This key requires LiveMix 0.24.1+ with External Control enabled. Older versions show an update message and send no command. Existing action requirements are unchanged.
+
 # LiveMix 1.6.0
 
 - Added Plugin Group (Master) to toggle, turn on or turn off plugin group 1-5 on the LiveMix master card, including in Multi Actions.

@@ -99,6 +99,43 @@ public:
 
     void runTest() override
     {
+        beginTest ("aux commands share the document switch and engine path, with no-op sets and missing-id errors");
+        {
+            Fixture f;
+            const auto aux = f.document.addAux();
+            f.document.setChannelOutput (f.channel(), { false, false, 2 });
+            f.document.setChannelAuxSend (f.channel(), aux, true);
+            f.clean();
+            expectWithinAbsoluteError (f.render(), 0.5f, 1e-6f);
+            const auto before = f.state.getCurrent();
+            const auto off = ack (f, P::ToggleAux { aux });
+            expect (off.changed && ! result<P::OnResult> (off).on);
+            expect (f.document.isDirty() && ! f.document.getSession().findAux (aux)->on);
+            expectEquals (f.valueCalls, 1);
+            expectEquals (off.context.revision, before.revision + 1);
+            expectWithinAbsoluteError (f.render(), 0.0f, 1e-6f);
+            const auto delta = ControlState::diff (before, f.state.getCurrent());
+            expectEquals ((int) delta.changes.auxes.size(), 1);
+            expect (delta.changes.auxes[0].on == false);
+            const auto repeated = ack (f, P::SetAuxOn { aux, false });
+            expect (! repeated.changed && ! result<P::OnResult> (repeated).on);
+            expectEquals (repeated.context.revision, off.context.revision);
+            expectEquals (f.valueCalls, 1);
+            f.clean();
+            const auto unchanged = ack (f, P::SetAuxOn { aux, false });
+            expect (! unchanged.changed && ! f.document.isDirty());
+            expectEquals (f.valueCalls, 0);
+            const auto on = ack (f, P::SetAuxOn { aux, true });
+            expect (on.changed && result<P::OnResult> (on).on);
+            expectWithinAbsoluteError (f.render(), 0.5f, 1e-6f);
+            expectEquals (f.valueCalls, 1);
+            expectEquals (f.structureCalls, 0);
+            expectEquals (f.groupCalls, 0);
+            expect (f.callbacksOnMessageThread);
+            error (f, f.command (P::ToggleAux { juce::Uuid() }), P::ErrorCode::auxNotFound);
+            error (f, f.command (P::SetAuxOn { juce::Uuid(), false }), P::ErrorCode::auxNotFound);
+        }
+
         beginTest ("master group commands are isolated, repair equal OFF and report missing groups");
         {
             Fixture f;

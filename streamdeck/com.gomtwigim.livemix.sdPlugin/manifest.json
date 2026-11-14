@@ -3,7 +3,7 @@
   "UUID": "com.gomtwigim.livemix",
   "Name": "LiveMix",
   "Author": "Gomtwigim",
-  "Version": "1.6.0.0",
+  "Version": "1.7.0.0",
   "Description": "Control LiveMix microphones, FX channels, mute groups, mute-all, plugin groups and FX sends on this Windows PC.",
   "Category": "LiveMix",
   "CategoryIcon": "imgs/category",
@@ -76,6 +76,35 @@
         {
           "Name": "ON",
           "Image": "imgs/actions/fx/on",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "UUID": "com.gomtwigim.livemix.aux",
+      "Name": "Aux On/Off",
+      "Tooltip": "Toggle one LiveMix aux channel or explicitly set it on or off (LiveMix 0.24.1+).",
+      "Icon": "imgs/actions/aux-channel/icon",
+      "PropertyInspectorPath": "ui/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "DisableCaching": true,
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": true,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Name": "OFF",
+          "Image": "imgs/actions/aux-channel/off",
+          "TitleAlignment": "bottom",
+          "FontSize": 12
+        },
+        {
+          "Name": "ON",
+          "Image": "imgs/actions/aux-channel/on",
           "TitleAlignment": "bottom",
           "FontSize": 12
         }

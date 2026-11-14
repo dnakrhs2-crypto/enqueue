@@ -344,12 +344,28 @@ void MixDocument::setAuxOn (const juce::Uuid& id, bool on)
     }
 }
 
+void MixDocument::setAuxMono (const juce::Uuid& id, bool mono)
+{
+    if (auto* a = session.findAux (id))
+    {
+        if (a->mono == mono)
+            return;
+        a->mono = mono;
+        a->output.directFirst = juce::jlimit (0, MixSession::maxDeviceChannels - (mono ? 1 : 2), a->output.directFirst);
+        if (! mono)
+            a->output.directFirst -= a->output.directFirst % 2;
+        engine.setAuxMono (id, mono);
+        engine.setAuxOutput (id, a->output);
+        valueChanged();
+    }
+}
+
 void MixDocument::setAuxOutput (const juce::Uuid& id, const MixOutput& output)
 {
     if (auto* a = session.findAux (id))
     {
         a->output = output;
-        a->output.directFirst = juce::jlimit (0, MixSession::maxDeviceChannels - 2, output.directFirst);
+        a->output.directFirst = juce::jlimit (0, MixSession::maxDeviceChannels - (a->mono ? 1 : 2), output.directFirst);
         engine.setAuxOutput (id, a->output);
         valueChanged();
     }

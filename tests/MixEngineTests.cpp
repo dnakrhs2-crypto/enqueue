@@ -575,6 +575,7 @@ public:
 
     void runAuxTests()
     {
+        runAuxMonoTests();
         beginTest ("one send-only mic feeds two independent aux chains in the same chunk, before mic pan and master chain");
         {
             MixSession s;
@@ -848,6 +849,357 @@ public:
             expectWithinAbsoluteError (io.first (0), 0.3f, 1e-6f);
             expectWithinAbsoluteError (io.last (2), 0.0f, 1e-6f);
             expectWithinAbsoluteError (engine.readAuxMeter (s.auxes[0].id).left, 0.0f, 1e-6f);
+        }
+    }
+
+    void runAuxMonoTests()
+    {
+        beginTest ("mono aux folds stereo sends, pans only the master and routes ASIO direct to exactly one channel");
+        {
+            MixSession s;
+            s.addChannel();
+            s.addAux();
+            const auto aux = s.auxes[0].id;
+            s.channels[0].stereo = true;
+            s.channels[0].output.master = false;
+            s.channels[0].auxSends = { aux };
+            s.auxes[0].mono = true;
+            s.auxes[0].output = { true, true, 4 };
+            MixEngine engine;
+            engine.prepare (sampleRate, 64);
+            engine.applySession (s, nullptr, true);
+            juce::AudioBuffer<float> input (2, 173), output (8, 173);
+            input.clear();
+            for (int n = 0; n < 173; ++n) input.setSample (0, n, (float) (n + 1) / 512.0f);
+            engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 8, 173);
+            for (int n = 0; n < 173; ++n)
+                for (int ch = 0; ch < 8; ++ch)
+                    expectWithinAbsoluteError (output.getSample (ch, n),
+                        ch == 0 || ch == 1 || ch == 4 ? input.getSample (0, n) * 0.5f : 0.0f, 1e-6f);
+            engine.setAuxPan (aux, -1.0);
+            for (int block = 0; block < 4; ++block)
+                engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 8, 173);
+            expectWithinAbsoluteError (output.getSample (0, 172), input.getSample (0, 172) * 0.5f * std::sqrt (2.0f), 1e-6f);
+            expectWithinAbsoluteError (output.getMagnitude (1, 0, 173), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (output.getSample (4, 172), input.getSample (0, 172) * 0.5f, 1e-6f);
+            expectWithinAbsoluteError (output.getMagnitude (5, 0, 173), 0.0f, 1e-6f);
+
+            output.setSize (MixSession::maxDeviceChannels, 173);
+            s.auxes[0].output = { false, true, MixSession::maxDeviceChannels - 1 };
+            engine.applySession (s, nullptr, true);
+            engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), output.getNumChannels(), 173);
+            expectWithinAbsoluteError (output.getSample (MixSession::maxDeviceChannels - 1, 172), input.getSample (0, 172) * 0.5f, 1e-6f);
+            expectWithinAbsoluteError (output.getMagnitude (MixSession::maxDeviceChannels - 2, 0, 173), 0.0f, 1e-6f);
+            engine.setAuxOutput (aux, { false, true, 999 });
+            engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), output.getNumChannels(), 173);
+            expectWithinAbsoluteError (output.getSample (MixSession::maxDeviceChannels - 1, 172), input.getSample (0, 172) * 0.5f, 1e-6f);
+        }
+
+        beginTest ("mono aux folds before and after a stereo-making chain, retaining pre-switch meters and OFF chain skipping");
+        for (const bool skip : { false, true })
+        {
+            struct StereoPlugin : TestGainPlugin
+            {
+                StereoPlugin() : TestGainPlugin (1.0f) {}
+                float inputLeft = 0, inputRight = 0;
+                void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override
+                {
+                    inputLeft = buffer.getSample (0, 0);
+                    inputRight = buffer.getSample (1, 0);
+                    TestGainPlugin::processBlock (buffer, midi);
+                    buffer.applyGain (1, 0, buffer.getNumSamples(), 3.0f);
+                }
+            };
+            MixSession s;
+            s.addChannel();
+            s.addAux();
+            const auto aux = s.auxes[0].id;
+            s.channels[0].stereo = true;
+            s.channels[0].output.master = false;
+            s.channels[0].auxSends = { aux };
+            s.auxes[0].mono = true;
+            s.auxes[0].output = { true, true, 4 };
+            MixEngine engine;
+            engine.setSkipChainWhenOff (skip);
+            engine.applySession (s, nullptr, true);
+            auto plugin = std::make_unique<StereoPlugin>();
+            auto* probe = plugin.get();
+            engine.getAuxChain (aux)->addPlugin (std::move (plugin));
+            Io io;
+            io.in.clear();
+            io.setInput (0, 0.8f);
+            render (engine, io);
+            expectWithinAbsoluteError (probe->inputLeft, 0.4f, 1e-6f);
+            expectWithinAbsoluteError (probe->inputRight, 0.4f, 1e-6f);
+            for (int ch : { 0, 1, 4 }) expectWithinAbsoluteError (io.last (ch), 0.8f, 1e-6f);
+            expectWithinAbsoluteError (io.last (5), 0.0f, 1e-6f);
+            engine.setAuxOn (aux, false);
+            render (engine, io);
+            expectWithinAbsoluteError (io.first (4), 0.8f, 1e-6f);
+            const int processed = probe->processCount;
+            engine.readAuxMeter (aux);
+            render (engine, io, 2);
+            expectEquals (probe->processCount, processed + (skip ? 0 : 2));
+            expectWithinAbsoluteError (io.out.getMagnitude (0, blockSize), 0.0f, 1e-6f);
+            const auto meter = engine.readAuxMeter (aux);
+            expectWithinAbsoluteError (meter.left, skip ? 0.4f : 0.8f, 1e-6f);
+            expectWithinAbsoluteError (meter.right, meter.left, 1e-6f);
+        }
+
+        runAuxMonoSwitchTests();
+
+        beginTest ("mono aux direct output mirrors to both Windows outputs independent of pan and saved device channel");
+        {
+            MixSession s;
+            s.device.type = "Windows Audio";
+            s.addChannel();
+            s.addAux();
+            s.channels[0].stereo = true;
+            s.channels[0].output.master = false;
+            s.channels[0].auxSends = { s.auxes[0].id };
+            s.auxes[0].mono = true;
+            s.auxes[0].pan = -1.0;
+            s.auxes[0].output = { false, true, MixSession::maxDeviceChannels - 1 };
+            MixEngine engine;
+            engine.prepare (sampleRate, 64);
+            engine.applySession (s, nullptr, true);
+            Io io;
+            io.in.clear();
+            io.setInput (0, 0.8f);
+            render (engine, io);
+            for (int ch = 0; ch < numOuts; ++ch)
+                expectWithinAbsoluteError (io.last (ch), ch < 2 ? 0.4f : 0.0f, 1e-6f);
+        }
+
+        beginTest ("mono aux direct output reaches both sides of the independent split monitor");
+        {
+            MixEngine engine;
+            removeRealMixDeviceTypes (engine);
+            auto type = std::make_unique<MixFakeType> ("Windows Audio");
+            auto* fake = type.get();
+            engine.getDeviceManager().addAudioDeviceType (std::move (type));
+            expect (engine.openDevice ({ "Windows Audio", "Capture", "Headphones", 256, sampleRate }).isEmpty());
+            MixSession s;
+            s.addChannel();
+            s.addAux();
+            s.channels[0].stereo = true;
+            s.channels[0].output.master = false;
+            s.channels[0].auxSends = { s.auxes[0].id };
+            s.auxes[0].mono = true;
+            s.auxes[0].pan = 1.0;
+            s.auxes[0].output = { false, true, MixSession::maxDeviceChannels - 1 };
+            engine.applySession (s, nullptr, true);
+            const auto monitor = fake->playingOutput();
+            expect (engine.isSplitMonitor() && monitor != nullptr && monitor->callback != nullptr);
+            if (monitor != nullptr && monitor->callback != nullptr)
+            {
+                juce::AudioBuffer<float> input (2, 256), output (2, monitor->buffer);
+                input.clear();
+                juce::FloatVectorOperations::fill (input.getWritePointer (0), 0.8f, 256);
+                for (int b = 0; b < 32; ++b)
+                {
+                    engine.renderBlock (input.getArrayOfReadPointers(), 2, nullptr, 0, 256);
+                    monitor->callback->audioDeviceIOCallbackWithContext (nullptr, 0, output.getArrayOfWritePointers(), 2, output.getNumSamples(), {});
+                }
+                expectWithinAbsoluteError (output.getSample (0, output.getNumSamples() - 1), 0.4f, 0.01f);
+                expectWithinAbsoluteError (output.getSample (1, output.getNumSamples() - 1), 0.4f, 0.01f);
+
+                beginTest ("aux mode switches also fade the independent Windows split monitor without steps");
+                for (const bool mono : { false, true })
+                {
+                    std::array<float, 2> previous { output.getSample (0, output.getNumSamples() - 1),
+                                                    output.getSample (1, output.getNumSamples() - 1) };
+                    float peak = 0.0f, jump = 0.0f;
+                    engine.setAuxMono (s.auxes[0].id, mono);
+                    for (int b = 0; b < 32; ++b)
+                    {
+                        engine.renderBlock (input.getArrayOfReadPointers(), 2, nullptr, 0, 256);
+                        monitor->callback->audioDeviceIOCallbackWithContext (nullptr, 0, output.getArrayOfWritePointers(), 2, output.getNumSamples(), {});
+                        for (int n = 0; n < output.getNumSamples(); ++n)
+                            for (int side = 0; side < 2; ++side)
+                            {
+                                const float value = output.getSample (side, n);
+                                peak = juce::jmax (peak, std::abs (value));
+                                jump = juce::jmax (jump, std::abs (value - previous[(size_t) side]));
+                                previous[(size_t) side] = value;
+                            }
+                    }
+                    // Allow only the split monitor's small resampling error around each linear-ramp corner.
+                    expectLessThan (peak, 0.4f + 1e-4f);
+                    expectLessThan (jump, 0.4f / (float) (sampleRate * MixEngine::onOffRampSeconds) + 1e-4f);
+                    for (const float value : previous) expectWithinAbsoluteError (value, mono ? 0.4f : 0.0f, 0.01f);
+                }
+            }
+        }
+    }
+
+    void runAuxMonoSwitchTests()
+    {
+        struct Route
+        {
+            const char* name;
+            bool windows, master;
+            float pan, left, right;
+            int first;
+        };
+        const Route routes[] {
+            { "aux ASIO mode switches fade through silence without hard-pan direct-output peaks", false, false, -1, 0.4f, 0.4f, 2 },
+            { "aux mode switches keep odd ASIO output alignment silent until the mode changes", false, false, -1, 0.4f, 0.4f, 3 },
+            { "aux mode switches ramp unequal master channels without steps", false, true, 0, 0.8f, 0.2f, 2 },
+            { "aux mode switches ramp both Windows direct outputs without steps", true, false, -1, 0.8f, 0.2f, 63 }
+        };
+        for (const auto& route : routes)
+        {
+            beginTest (route.name);
+            for (const double rate : { 44100.0, 48000.0 })
+            for (const int chunk : { 48, 64, 256, 1024 })
+            for (const int request : { chunk, chunk * 3 + 7 })
+            {
+                // The fade reaches zero at callback boundaries and inside oversized callbacks, including short final chunks.
+                MixSession s;
+                s.device.type = route.windows ? "Windows Audio" : "ASIO";
+                s.addChannel(); s.addAux();
+                const auto aux = s.auxes[0].id;
+                s.channels[0].stereo = true;
+                s.channels[0].output.master = false;
+                s.channels[0].auxSends = { aux };
+                s.auxes[0].mono = true;
+                s.auxes[0].pan = route.pan;
+                s.auxes[0].output = { route.master, ! route.master, route.first };
+                MixEngine engine;
+                engine.prepare (rate, chunk);
+                engine.applySession (s, nullptr, true);
+                juce::AudioBuffer<float> input (2, request), output (8, request);
+                juce::FloatVectorOperations::fill (input.getWritePointer (0), route.left, request);
+                juce::FloatVectorOperations::fill (input.getWritePointer (1), route.right, request);
+                const auto renderChunk = [&] { engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 8, request); };
+                const auto levels = [&] (bool mono, int first)
+                {
+                    std::array<float, 8> values {};
+                    const float folded = (route.left + route.right) * 0.5f;
+                    const float left = mono ? folded * (route.pan == 0 ? 1.0f : std::sqrt (2.0f)) : route.left;
+                    const float right = route.pan == 0 ? (mono ? folded : route.right) : 0.0f;
+                    if (route.master) { values[0] = left; values[1] = right; }
+                    else if (route.windows) { values[0] = mono ? folded : left; values[1] = mono ? folded : right; }
+                    else if (mono) values[(size_t) first] = folded;
+                    else { values[(size_t) first] = left; values[(size_t) first + 1] = right; }
+                    return values;
+                };
+                int first = route.first;
+                auto before = levels (true, first);
+                renderChunk();
+                for (int ch = 0; ch < 8; ++ch)
+                    expectWithinAbsoluteError (output.getSample (ch, 0), before[(size_t) ch], 1e-6f);
+                for (const bool mono : { false, true })
+                {
+                    if (! mono) first -= first % 2;
+                    const auto after = levels (mono, first);
+                    auto previous = before;
+                    const float step = (float) (1.0 / (rate * MixEngine::onOffRampSeconds));
+                    const int ramp = (int) std::ceil (rate * MixEngine::onOffRampSeconds);
+                    const int settle = 2 * (ramp + chunk) + request;
+                    float overshoot = 0.0f, excessStep = 0.0f;
+                    int firstSilent = -1, firstSettled = -1;
+                    engine.setAuxMono (aux, mono);
+                    for (int elapsed = 0; elapsed < settle; elapsed += request)
+                    {
+                        renderChunk();
+                        for (int n = 0; n < request; ++n)
+                        {
+                            float peak = 0.0f, settledError = 0.0f;
+                            for (int ch = 0; ch < 8; ++ch)
+                            {
+                                const auto side = (size_t) ch;
+                                const float value = output.getSample (ch, n);
+                                const float limit = juce::jmax (std::abs (before[side]), std::abs (after[side]));
+                                overshoot = juce::jmax (overshoot, std::abs (value) - limit);
+                                excessStep = juce::jmax (excessStep, std::abs (value - previous[side]) - limit * step);
+                                peak = juce::jmax (peak, std::abs (value));
+                                settledError = juce::jmax (settledError, std::abs (value - after[side]));
+                                previous[side] = value;
+                            }
+                            if (firstSilent < 0 && peak < 2e-6f) firstSilent = elapsed + n;
+                            if (firstSilent >= 0 && firstSettled < 0 && settledError < 2e-6f) firstSettled = elapsed + n;
+                        }
+                    }
+                    const auto context = juce::String (rate) + " Hz, chunk=" + juce::String (chunk)
+                        + ", request=" + juce::String (request) + (mono ? ", to mono" : ", to stereo");
+                    expectLessThan (overshoot, 2e-6f, context);
+                    expectLessThan (excessStep, 2e-6f, context);
+                    expect (firstSilent >= 0 && firstSilent <= ramp + 1, "5 ms fade-out: " + context);
+                    expect (firstSettled >= firstSilent && firstSettled <= 2 * ramp + chunk + 1,
+                            "Two 5 ms fades plus at most one chunk of silence: " + context);
+                    for (int ch = 0; ch < 8; ++ch)
+                        expectWithinAbsoluteError (previous[(size_t) ch], after[(size_t) ch], 2e-6f, context);
+                    before = after;
+                }
+            }
+        }
+
+        beginTest ("OFF aux mode switches stay silent and unmute with only the normal ON ramp");
+        for (const bool mono : { false, true })
+        for (const bool skip : { false, true })
+        {
+            MixSession s;
+            s.addChannel(); s.addAux();
+            const auto aux = s.auxes[0].id;
+            s.channels[0].stereo = true;
+            s.channels[0].output.master = false;
+            s.channels[0].auxSends = { aux };
+            s.auxes[0].on = false;
+            s.auxes[0].mono = ! mono;
+            s.auxes[0].pan = -1.0;
+            s.auxes[0].output = { true, true, 2 };
+            MixEngine engine;
+            engine.prepare (sampleRate, 48);
+            engine.setSkipChainWhenOff (skip);
+            engine.applySession (s, nullptr, true);
+            juce::AudioBuffer<float> input (2, 48), output (4, 48);
+            juce::FloatVectorOperations::fill (input.getWritePointer (0), 0.8f, 48);
+            juce::FloatVectorOperations::fill (input.getWritePointer (1), 0.2f, 48);
+            engine.setAuxMono (aux, mono);
+            engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 4, 1);
+            expectWithinAbsoluteError (output.getMagnitude (0, 1), 0.0f, 1e-6f);
+            engine.setAuxOn (aux, true);
+            const float levels[] { mono ? 0.5f * std::sqrt (2.0f) : 0.8f, 0.0f, mono ? 0.5f : 0.8f, 0.0f };
+            float error = 0.0f;
+            for (int b = 0; b < 7; ++b)
+            {
+                engine.renderBlock (input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 4, 48);
+                for (int n = 0; n < 48; ++n)
+                    for (int ch = 0; ch < 4; ++ch)
+                    {
+                        const float expected = levels[ch] * juce::jmin (1.0f, (float) (b * 48 + n) / 240.0f);
+                        error = juce::jmax (error, std::abs (output.getSample (ch, n) - expected));
+                    }
+            }
+            expectLessThan (error, 2e-6f);
+        }
+
+        beginTest ("aux preparation and session restore start in the requested mode at full switch gain");
+        for (const bool mono : { false, true })
+        {
+            MixSession s;
+            s.addChannel(); s.addAux();
+            const auto aux = s.auxes[0].id;
+            s.channels[0].output.master = false;
+            s.channels[0].auxSends = { aux };
+            s.auxes[0].mono = mono;
+            s.auxes[0].pan = -1.0;
+            MixEngine engine;
+            engine.prepare (sampleRate, 48);
+            engine.applySession (s, nullptr, true);
+            Io io;
+            io.in.clear(); io.setInput (0, 0.4f);
+            render (engine, io);
+            expectWithinAbsoluteError (io.first (0), 0.4f * (mono ? std::sqrt (2.0f) : 1.0f), 1e-6f);
+            engine.setAuxMono (aux, ! mono);
+            engine.prepare (sampleRate, 48);
+            render (engine, io);
+            expectWithinAbsoluteError (io.first (0), 0.4f * (mono ? 1.0f : std::sqrt (2.0f)), 1e-6f);
+            engine.applySession (s, nullptr, true);
+            render (engine, io);
+            expectWithinAbsoluteError (io.first (0), 0.4f * (mono ? std::sqrt (2.0f) : 1.0f), 1e-6f);
         }
     }
 

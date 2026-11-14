@@ -45,7 +45,7 @@ AuxCard::AuxCard (MixDocument& doc, const juce::Uuid& id) : document (doc), auxI
 
     styleCaption (meterCaption, tr ("미터"));   // a bus like the FX drawer's: it has no device input
     addAndMakeVisible (meterCaption);
-    meter_.setStereo (true);   // the sum of its mics is a stereo bus
+    meter_.setStereo (true);   // set again in refresh(): one bar when the aux is mono
     addAndMakeVisible (meter_);
 
     styleCaption (chainCaption, tr ("VST3 체인   순서대로 통과"));
@@ -59,7 +59,7 @@ AuxCard::AuxCard (MixDocument& doc, const juce::Uuid& id) : document (doc), auxI
     addPluginButton.onClick = [this] { if (onAddPlugin) onAddPlugin (auxId); };
     addAndMakeVisible (addPluginButton);
 
-    styleCaption (sendersCaption, tr ("보내는 마이크 채널"));
+    styleCaption (sendersCaption, tr ("연결된 마이크 채널"));
     addAndMakeVisible (sendersCaption);
 
     styleCaption (outputCaption, tr ("출력"));
@@ -67,11 +67,21 @@ AuxCard::AuxCard (MixDocument& doc, const juce::Uuid& id) : document (doc), auxI
     masterChip.setTooltip (tr ("마스터를 거쳐 메인 출력으로"));
     masterChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (masterChip);
-    directChip.setTooltip (tr ("장치 출력 쌍으로 직접 (OBS 등에서 따로 받을 때)"));
     directChip.onClick = [this] { commitOutput(); };
     addAndMakeVisible (directChip);
     directCombo.setWantsKeyboardFocus (false);
     directCombo.onChange = [this] { commitOutput (true); };
+    monoChip.setButtonText (tr ("모노"));
+    stereoChip.setButtonText (tr ("스테레오"));
+    monoChip.setTooltip (tr ("좌우를 합친 소리로. 직접 출력은 장치 출력 1개"));
+    stereoChip.setTooltip (tr ("좌우 그대로. 직접 출력은 장치 출력 한 쌍(1-2 등)"));
+    monoChip.onClick = [this] { if (! refreshing) document.setAuxMono (auxId, true); };
+    stereoChip.onClick = [this] { if (! refreshing) document.setAuxMono (auxId, false); };
+    for (auto* chip : { &monoChip, &stereoChip })
+    {
+        chip->setRadioGroupId (1);   // clicking the lit one keeps it lit
+        addAndMakeVisible (*chip);
+    }
     addAndMakeVisible (directCombo);
 
     styleCaption (panCaption, tr ("팬"));
@@ -129,10 +139,15 @@ void AuxCard::refresh()
 
     masterChip.setToggleState (a->output.master, juce::dontSendNotification);
     directChip.setToggleState (a->output.direct, juce::dontSendNotification);
+    monoChip.setToggleState (a->mono, juce::dontSendNotification);
+    stereoChip.setToggleState (! a->mono, juce::dontSendNotification);
+    directChip.setTooltip (a->mono ? tr ("장치 출력 1개로 직접 (OBS 등에서 따로 받을 때)")
+                                   : tr ("장치 출력 쌍으로 직접 (OBS 등에서 따로 받을 때)"));
+    meter_.setStereo (! a->mono);
     const auto runningDevice = document.getEngine().getOpenDevice();
     const auto device = runningDevice.input.isNotEmpty() ? runningDevice : session.device;
     fillDirectOutputCombo (directCombo, directChip, outputNames, device.isAsio(), device.output.isNotEmpty(),
-                           a->output.directFirst, a->output.direct);
+                           a->output.directFirst, a->output.direct, ! a->mono);
     panSlider.setValue (a->pan, juce::dontSendNotification);
     panValue.setText (panSlider.getTextFromValue (a->pan), juce::dontSendNotification);
 
@@ -219,10 +234,11 @@ void AuxCard::commitOutput (bool pairSelected)
     auto output = a->output;
     output.master = masterChip.getToggleState();
     output.direct = directChip.getToggleState();
-    // as a mic card: toggle clicks keep the saved ASIO pair; a pair picked on a running ASIO device is stored
+    // as a mic card: toggle clicks keep the saved ASIO output; one picked on a running ASIO device is stored
+    const int width = a->mono ? 1 : 2;   // a mono aux uses one device output, a stereo one a pair
     auto& engine = document.getEngine();
     if (pairSelected && sel > 0 && directCombo.isEnabled() && engine.isDeviceRunning() && engine.getOpenDevice().isAsio()
-        && sel + 1 <= engine.getNumDeviceOutputs())
+        && sel - 1 + width <= engine.getNumDeviceOutputs())
         output.directFirst = sel - 1;
     document.setAuxOutput (auxId, output);
 }
@@ -358,8 +374,18 @@ void AuxCard::resized()
 
     auto layoutOut = [this] (juce::Rectangle<int> r, bool tight)
     {
-        // the mic card's output column, without its AUX chips: an aux feeds no other aux
-        outputCaption.setBounds (r.removeFromTop (26));
+        // the mic card's output column, without its AUX chips: an aux feeds no other aux. Mono / stereo sit next to
+        // the caption, as the FX drawer's mute-group chip does
+        auto captionRow = r.removeFromTop (26);
+        const auto chipWidth = [] (const Chip& chip)
+        {
+            const juce::Font font (juce::FontOptions (pt (13.0f), juce::Font::bold));   // Chip::paintButton's
+            return juce::jmax (58, juce::GlyphArrangement::getStringWidthInt (font, chip.getButtonText()) + 24);
+        };
+        stereoChip.setBounds (captionRow.removeFromRight (chipWidth (stereoChip)).reduced (0, 1));
+        captionRow.removeFromRight (4);
+        monoChip.setBounds (captionRow.removeFromRight (chipWidth (monoChip)).reduced (0, 1));
+        outputCaption.setBounds (captionRow);
         auto chipsRow = r.removeFromTop (34);
         masterChip.setBounds (chipsRow.removeFromLeft (tight ? 70 : 72));
         chipsRow.removeFromLeft (tight ? 6 : 8);

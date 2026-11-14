@@ -14,7 +14,8 @@ namespace gocue::livemix
 {
 
 /** One aux channel: the sum of the mic channels that send to it (the chips here, or the AUX chips on their cards)
-    through its own VST3 chain and ON/OFF switch, then pan, to the master and / or a device output pair. It has no
+    through its own VST3 chain and ON/OFF switch, then pan, to the master and / or a device output (one output when
+    mono, a pair when stereo). It has no
     device input or FX sends. The columns line up with the mic cards' (name, meter, chain, routing, output), so the two
     kinds read as one list. */
 class AuxCard : public juce::Component
@@ -69,6 +70,7 @@ private:
     juce::TextButton openChainButton, addPluginButton;
     std::vector<std::unique_ptr<SenderChip>> senders;   // one per mic channel, in card order
     Chip masterChip, directChip;
+    Chip monoChip, stereoChip;   // the output is mono or stereo: one of the two is lit
     juce::ComboBox directCombo;
     PanSlider panSlider;
     static constexpr int chainFooter = 1 + 30;               // the chain actions under the chip rows

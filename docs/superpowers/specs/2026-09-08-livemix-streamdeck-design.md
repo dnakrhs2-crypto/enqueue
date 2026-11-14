@@ -137,6 +137,7 @@ hello는 앞으로도 고정된 v1 bootstrap envelope로 보낸다. `supportedVe
 | `channels[].id/name/on/muteGroup` | Uuid, 실제 이름, 원래 ON 비트, 마이크 뮤트그룹 소속 |
 | `channels[].pluginGroups[]` | 실제로 존재하는 그룹만. `index`는 **1-based** 1~5, `off`는 그룹 OFF 비트 |
 | `state.master.pluginGroups[]` | 마스터에 존재하는 그룹의 `{index, off}` 목록. 번호는 **1-based** 1~5. 마이크 그룹과 독립. 구 서버에서 `master`가 없으면 빈 목록으로 읽는다. `helloAck.capabilities`의 `masterPluginGroups`로 지원 여부를 판단한다. |
+| `state.auxes[]` | 억스 채널(최대 4개, 카드 순서)의 `{id, name, on}`. 구 서버에서 `auxes`가 없으면 빈 목록으로 읽는다. `helloAck.capabilities`의 `auxOn`으로 지원 여부를 판단한다. 추가: **1.7.0 / LiveMix 0.24.1** |
 | `channels[].sends[]` | 실제 FX마다 `fxId`, `amount`(유한한 0~1), `pre`(boolean) |
 | `state.fx[]` | 현재 FX 채널(최대 4개)의 `id`, `name`, `on`, `muteGroup`, `return`. `on` 추가: **1.3.0 / LiveMix 0.16.0** |
 | `fx[].on` (**1.3.0 / LiveMix 0.16.0**) | 개별 FX의 원래 ON boolean. OFF이면 리턴은 무음, 보내는 양은 유지. FX 뮤트그룹과 독립된 스위치이며 차단 효과는 OR. LiveMix 0.6.0~0.15.5의 snapshot에서 생략되면 plugin은 true로 읽고, 값이 있으나 boolean이 아니면 `INVALID_MESSAGE` |
@@ -193,9 +194,10 @@ hello는 앞으로도 고정된 v1 bootstrap envelope로 보낸다. `supportedVe
 | `channels[]` | id로 기존 채널 검색 후 포함된 필드만 교체 | `{"channels":[{"id":"11111111111141118111111111111111","name":"방송 마이크","on":false}]}` |
 | `channels[].pluginGroups` | 해당 채널의 그룹 배열 **전체 교체** | `{"channels":[{"id":"11111111111141118111111111111111","pluginGroups":[{"index":1,"off":true}]}]}` |
 | `master.pluginGroups` | 마스터 그룹 배열 **전체 교체**. 빠진 필드는 유지. 그룹 개수·번호 변경은 full state | `{"master":{"pluginGroups":[{"index":1,"off":true}]}}` |
+| `auxes[]` | id로 기존 억스 검색 후 포함된 `name`·`on`만 교체. 억스 추가·삭제·순서 변경은 full state | `{"auxes":[{"id":"33333333333343338333333333333333","on":false}]}` |
 | `channels[].sends` | 해당 채널의 보내기 배열 **전체 교체** | `{"channels":[{"id":"11111111111141118111111111111111","sends":[{"fxId":"22222222222242228222222222222222","amount":0.38,"pre":false}]}]}` |
 | `fx[]` | id로 기존 FX 검색 후 포함된 scalar만 교체. `on` 추가: **1.3.0 / LiveMix 0.16.0**. delta에 없으면 기존 값을 유지하고, 있으면 boolean 검증 | `{"fx":[{"id":"22222222222242228222222222222222","on":false,"return":0.5,"muteGroup":true}]}` |
-| 채널/FX 추가·삭제·순서 변경, 그룹 개수 변경, 세션 교체 | delta 대신 full state. v1에는 JSON Patch 경로·삭제 연산 없음 | 최상위 `reason="structureChanged"` 또는 `"sessionChanged"` |
+| 채널/FX/억스 추가·삭제·순서 변경, 그룹 개수 변경, 세션 교체 | delta 대신 full state. v1에는 JSON Patch 경로·삭제 연산 없음 | 최상위 `reason="structureChanged"` 또는 `"sessionChanged"` |
 
 `baseRevision`은 그 client의 송신 FIFO에 마지막으로 발행한 상태의 revision이다. 합쳐진 delta가 12→17처럼 건너뛰는 것은 정상이다. 클라이언트 캐시 revision과 base가 다르거나 모르는 id가 들어오면 적용하지 않고 requestState를 보낸다. snapshot으로 기준을 다시 잡는다. 완성된 프레임을 FIFO에 넣은 뒤에는 delta만 임의로 제거하거나 순서를 바꾸지 않는다. 새 snapshot은 기존 프레임 뒤에 들어가며 이후 delta는 그 snapshot을 기준으로 한다. 출력 한도 초과는 해당 client를 끊고 재접속 시 full state로 복구한다.
 
@@ -206,6 +208,10 @@ ack의 `result`는 명령 처리 결과·후속 명령 계획용이며 **전역 
 마스터 그룹 명령은 `setMasterPluginGroupOff`이며 args는 `{"index":1,"off":true}`이다. `index`는 정수 1~5, `off`는 boolean이다. 기존 편집 명령과 같은 instance/session/revision 검증을 거치고 값이 바뀌거나 `off:true`일 때만 `MixDocument::setMasterPluginGroupOff(index - 1, off)`를 호출한다. ACK result는 `{"index":1,"off":true}`이며 없는 그룹은 `PLUGIN_GROUP_NOT_FOUND`이다. 같은 값은 `changed:false`이며 revision·dirty를 바꾸지 않는다. 같은 값 `off:true`는 라이브 바이패스를 다시 맞추고, 같은 값 `off:false`는 사용자가 손으로 정한 멤버 플러그인의 바이패스를 유지한다. 마이크의 `setPluginGroupOffEverywhere`와 그룹 화면 명령은 마스터를 포함하지 않는다.
 
 Stream Deck의 `com.gomtwigim.livemix.plugin-group-master`는 capability `masterPluginGroups`가 있어야 실행한다. 없는 서버(0.22.0 이하)는 기존 업데이트 안내를 표시한다. 토글은 최신 `master.pluginGroups`의 OFF 값을 반전해 위 명령으로 보낸다. 프로토콜 버전은 v1을 유지한다.
+
+억스 명령은 `toggleAux`(args `{"auxId":"…"}`)와 `setAuxOn`(args `{"auxId":"…","on":true}`)이다. 기존 편집 명령과 같은 instance/session/revision 검증을 거치고 값이 바뀔 때만 `MixDocument::setAuxOn`을 호출한다. ACK result는 `{"on":true}`이며 없는 억스는 `AUX_NOT_FOUND`이다. 같은 값은 `changed:false`이며 revision·dirty를 바꾸지 않는다. 억스의 ON/OFF만 바꾸며 마이크의 억스 보내기·억스 체인·출력(모노·스테레오 포함)은 바꾸지 않는다.
+
+Stream Deck의 `com.gomtwigim.livemix.aux`는 capability `auxOn`이 있어야 실행한다. 없는 서버(0.24.0 이하)는 기존 업데이트 안내를 표시한다. 토글은 `toggleAux`, ON/OFF는 `setAuxOn`으로 보낸다. 프로토콜 버전은 v1을 유지한다.
 
 모든 명령은 hello 이후만 허용한다. 아래 args를 2.2의 command envelope에 넣는다. **모든 변경 명령에 현재 `instanceId`와 `sessionId`가 필수**다. 서버는 이름을 대신 검색하지 않고, client가 snapshot에서 결정한 Uuid를 message thread에서 다시 확인한다. `requestState`는 sessionId 없이 현재 세션을 조회할 수 있다.
 

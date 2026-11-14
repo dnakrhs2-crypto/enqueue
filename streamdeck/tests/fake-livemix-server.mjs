@@ -28,11 +28,12 @@ export class FakeLiveMix extends EventEmitter {
   token = randomBytes(32).toString("base64url");
   behavior = { omitState: false, omitDelta: false, omitAck: false, omitPong: false, holdCommands: false, holdHello: false, split: false, version: 1, rejectAuth: false, helloInstance: "", sessionLoading: false,
     windowDelayMs: 0, commandMaxAgeMs: 1000 };
-  constructor({ pluginGroupsEverywhere = true, legacyFx = false, fxOn = !legacyFx, legacyMuteAll = legacyFx, muteAll = !legacyMuteAll, pluginGroupWindows = muteAll, masterPluginGroups = false } = {}) {
+  constructor({ pluginGroupsEverywhere = true, legacyFx = false, fxOn = !legacyFx, legacyMuteAll = legacyFx, muteAll = !legacyMuteAll, pluginGroupWindows = muteAll, masterPluginGroups = false, auxOn = false } = {}) {
     super(); this.pluginGroupsEverywhere = pluginGroupsEverywhere; this.fxOn = fxOn; this.legacyFx = legacyFx;
     this.muteAll = muteAll; this.legacyMuteAll = legacyMuteAll;
     this.pluginGroupWindows = pluginGroupWindows;
     this.masterPluginGroups = masterPluginGroups;
+    this.auxOn = auxOn;
   }
   async start() {
     this.appdata = await mkdtemp(join(tmpdir(), "livemix-sd-"));
@@ -52,6 +53,14 @@ export class FakeLiveMix extends EventEmitter {
     if (this.muteAll) this.helloFixture.capabilities.push("muteAll");
     if (this.pluginGroupWindows) this.helloFixture.capabilities.push("pluginGroupWindows");
     this.helloFixture.server.version = this.pluginGroupWindows ? "0.22.0" : this.muteAll ? "0.18.0" : this.fxOn ? "0.17.7" : this.pluginGroupsEverywhere ? "0.15.5" : "0.9.0";
+    if (this.auxOn) {
+      this.snapshot.state.auxes = [
+        { id: "66666666666646668666666666666666", name: "억스 1", on: true },
+        { id: "77777777777747778777777777777777", name: "억스 2", on: false }
+      ];
+      this.helloFixture.capabilities.push("auxOn");
+      this.helloFixture.server.version = "0.24.1";
+    }
     this.ordering = await fixture("ordering"); this.errorsFixture = await fixture("errors"); this.clientHello = await fixture("hello");
     await this.listen(); await this.publishDiscovery();
     this.heartbeatTimer = setInterval(() => { void this.publishDiscovery().catch(error => this.errors.push(error)); }, 5000);
@@ -140,6 +149,14 @@ export class FakeLiveMix extends EventEmitter {
       if (!fx) { this.error(client, m.id, "FX_NOT_FOUND"); return; }
       fx.on = m.command === "toggleFx" ? !fx.on : a.on;
       result = { on: fx.on };
+    } else if (m.command === "toggleAux" || m.command === "setAuxOn") {
+      if (!this.auxOn) { this.error(client, m.id, "UNKNOWN_COMMAND"); return; }
+      if (!a || typeof a !== "object" || Array.isArray(a) || typeof a.auxId !== "string" || !/^[0-9a-f]{32}$/.test(a.auxId) || !/[1-9a-f]/.test(a.auxId)
+        || (m.command === "setAuxOn" && typeof a.on !== "boolean")) { this.error(client, m.id, "INVALID_ARGUMENT"); return; }
+      const aux = state.auxes.find(aux => aux.id === a.auxId);
+      if (!aux) { this.error(client, m.id, "AUX_NOT_FOUND"); return; }
+      aux.on = m.command === "toggleAux" ? !aux.on : a.on;
+      result = { on: aux.on };
     } else if (m.command === "setAllChannelsOn") {
       assert.equal(typeof a.on, "boolean");
       for (const c of state.channels) c.on = a.on;
@@ -253,6 +270,12 @@ export class FakeLiveMix extends EventEmitter {
       if (channels.length) changes.channels = channels;
       const fx = this.snapshot.state.fx.filter(fx => JSON.stringify(fx) !== JSON.stringify(c.published.state.fx.find(old => old.id === fx.id)));
       if (fx.length) changes.fx = fx;
+      const auxes = (this.snapshot.state.auxes ?? []).flatMap(aux => {
+        const old = c.published.state.auxes?.find(a => a.id === aux.id);
+        const patch = Object.fromEntries(["name", "on"].filter(key => aux[key] !== old?.[key]).map(key => [key, aux[key]]));
+        return Object.keys(patch).length ? [{ id: aux.id, ...patch }] : [];
+      });
+      if (auxes.length) changes.auxes = auxes;
       for (const key of ["audio", "session", "muteGroups", "master"]) if (JSON.stringify(c.published.state[key]) !== JSON.stringify(this.snapshot.state[key])) changes[key] = this.snapshot.state[key];
       const muteAll = Object.fromEntries(Object.entries(this.snapshot.state.muteAll ?? {}).filter(([key, value]) => c.published.state.muteAll?.[key] !== value));
       if (Object.keys(muteAll).length) changes.muteAll = muteAll;

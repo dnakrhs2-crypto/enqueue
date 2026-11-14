@@ -1,5 +1,21 @@
 # LiveMix Stream Deck changelog
 
+## 1.7.0 - 2026-11-15
+
+### 한국어
+
+- 억스 ON/OFF 키를 추가했습니다. LiveMix 억스 채널 하나를 토글·켜기·끄기로 바꾸며, 다중 동작에서도 사용할 수 있습니다.
+- 억스 카드의 ‘억스 ON’과 같은 스위치입니다. 마이크가 억스로 보내는 설정, 억스 체인과 출력은 바꾸지 않습니다.
+- 키에 정한 억스가 지워졌으면 ‘억스 채널 없음’을 표시하고 누를 때 알림을 띄웁니다.
+- 이 키에는 LiveMix 0.24.1+의 `auxOn` 기능이 필요합니다. 이전 버전에서는 기존 업데이트 안내만 표시하고 명령을 보내지 않으며, 다른 키의 요구 버전은 그대로입니다.
+
+### English
+
+- Added Aux On/Off. It toggles, turns on or turns off one LiveMix aux channel; Multi Actions are supported.
+- It is the same switch as Aux ON on the aux card. Mic sends to the aux, the aux chain and its output are unchanged.
+- A deleted aux channel shows Aux channel missing and an alert on press.
+- This key requires LiveMix 0.24.1+ and `auxOn`. Older versions show the existing update message and send no command; other actions keep their requirements.
+
 ## 1.6.0 - 2026-11-14
 
 ### 한국어

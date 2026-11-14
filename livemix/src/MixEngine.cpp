@@ -65,6 +65,13 @@ namespace
         }
     }
 
+    void foldToMono (juce::AudioBuffer<float>& buffer, int n) noexcept
+    {
+        buffer.addFrom (0, 0, buffer, 1, 0, n);
+        buffer.applyGain (0, 0, n, 0.5f);
+        buffer.copyFrom (1, 0, buffer, 0, 0, n);
+    }
+
     float rampEnd (float start, float target, float step) noexcept
     {
         if (juce::approximatelyEqual (start, target))
@@ -595,6 +602,11 @@ void MixEngine::prepare (double newSampleRate, int newBlockSize)
     {
         a->bus.setSize (2, newBlockSize, false, true, true);
         a->chain->prepare (newSampleRate, newBlockSize);
+        a->monoApplied = a->mono.load (std::memory_order_relaxed);
+        a->switchGain = 1.0f;
+        a->directFirstApplied = a->directFirst.load (std::memory_order_relaxed);
+        a->panCurrent = a->panTarget = channelPanGains (a->pan.load (std::memory_order_relaxed), ! a->monoApplied);
+        a->panRemaining = 0;
     }
 
     for (auto& f : fxNodes)
@@ -844,12 +856,31 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
         for (auto& node : auxNodes)
         {
             auto& bus = node->bus;
+            const bool requestedMono = node->mono.load (std::memory_order_relaxed);
+            const int requestedFirst = node->directFirst.load (std::memory_order_relaxed);
+            const float pan = node->pan.load (std::memory_order_relaxed);
             const float target = node->on.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
             const float start = node->onGain;
             const float end = rampEnd (start, target, rampStepPerSample * (float) n);
             node->onGain = end;
             const bool fullyOff = start <= 0.0f && end <= 0.0f;
-            const auto panTarget = channelPanGains (node->pan.load (std::memory_order_relaxed), true);
+            if (fullyOff)
+            {
+                node->monoApplied = requestedMono;
+                node->switchGain = 1.0f;
+            }
+            if (node->monoApplied == requestedMono)
+                node->directFirstApplied = requestedFirst;
+            const bool mono = node->monoApplied;
+            const float switchStart = node->switchGain;
+            const float switchTarget = mono == requestedMono ? 1.0f : 0.0f;
+            const int switchSamples = juce::jmin (n, (int) std::ceil (std::abs (switchTarget - switchStart) / rampStepPerSample));
+            const float switchEnd = rampEnd (switchStart, switchTarget, rampStepPerSample * (float) switchSamples);
+            node->switchGain = switchEnd;
+
+            if (mono)
+                foldToMono (bus, n);
+            const auto panTarget = channelPanGains (pan, ! mono);
             if (panTarget != node->panTarget)
             {
                 node->panTarget = panTarget;
@@ -865,19 +896,46 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
             else
                 node->chain->process (bus, n);
 
+            if (mono)
+                foldToMono (bus, n);
+
             // Same as a mic: post-chain before the switch, or raw input when the sleeping chain is skipped.
             node->meter.push (bus.getMagnitude (0, 0, n), bus.getMagnitude (1, 0, n));
             if (fullyOff)
                 continue;
             if (! juce::approximatelyEqual (start, 1.0f) || ! juce::approximatelyEqual (end, 1.0f))
                 bus.applyGainRamp (0, n, start, end);
+            // Multiply the ON ramp by a separate 5 ms mode ramp on both output paths. A large chunk stays
+            // silent after the fade, so the mode can change at its end without stretching the fade itself.
+            if (switchSamples > 0)
+                bus.applyGainRamp (0, switchSamples, switchStart, switchEnd);
+            if (n > switchSamples && switchEnd != 1.0f)
+                bus.applyGain (switchSamples, n - switchSamples, switchEnd);
+
+            // A mono direct output is independent of pan. Stereo-only endpoints receive the same mono on both sides.
+            if (mono && node->direct.load (std::memory_order_relaxed))
+            {
+                const int first = outputFirst (node->directFirstApplied, true);
+                if (stereoOutputsOnly.load (std::memory_order_relaxed))
+                    addToOutputs (routedOutputs, routedCount, first, bus, routedOffset, n);
+                else if (first < routedCount && routedOutputs[first] != nullptr)
+                    juce::FloatVectorOperations::add (routedOutputs[first] + routedOffset, bus.getReadPointer (0), n);
+            }
             applyPanRamp (bus, n, node->panCurrent, panTarget, node->panRemaining);
 
             if (node->toMaster.load (std::memory_order_relaxed))
                 for (int side = 0; side < 2; ++side)
                     masterBus.addFrom (side, 0, bus, side, 0, n);
-            if (node->direct.load (std::memory_order_relaxed))
-                addToOutputs (routedOutputs, routedCount, outputFirst (node->directFirst.load (std::memory_order_relaxed)), bus, routedOffset, n);
+            if (! mono && node->direct.load (std::memory_order_relaxed))
+                addToOutputs (routedOutputs, routedCount, outputFirst (node->directFirstApplied), bus, routedOffset, n);
+
+            if (mono != requestedMono && switchEnd == 0.0f)
+            {
+                node->monoApplied = requestedMono;
+                node->directFirstApplied = requestedFirst;
+                node->panCurrent = node->panTarget = channelPanGains (pan, ! requestedMono);
+                node->panRemaining = 0;   // never carry a mono pan coefficient into stereo direct output
+            }
         }
 
         for (int f = 0; f < numFx; ++f)
@@ -1017,14 +1075,14 @@ MixEngine::FxNode* MixEngine::findFx (const juce::Uuid& id) const noexcept
     return nullptr;
 }
 
-int MixEngine::outputFirst (int requested) const noexcept
+int MixEngine::outputFirst (int requested, bool mono) const noexcept
 {
-    return stereoOutputsOnly.load (std::memory_order_relaxed) ? 0 : juce::jlimit (0, maxDeviceChannels - 2, requested);
+    return stereoOutputsOnly.load (std::memory_order_relaxed) ? 0 : juce::jlimit (0, maxDeviceChannels - (mono ? 1 : 2), requested);
 }
 
-void MixEngine::applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst)
+void MixEngine::applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst, bool mono)
 {
-    directFirst.store (juce::jlimit (0, maxDeviceChannels - 2, output.directFirst), std::memory_order_relaxed);
+    directFirst.store (juce::jlimit (0, maxDeviceChannels - (mono ? 1 : 2), output.directFirst), std::memory_order_relaxed);
     toMaster.store (output.master, std::memory_order_relaxed);
     direct.store (output.direct, std::memory_order_relaxed);
 }
@@ -1086,8 +1144,11 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
         auto node = std::make_unique<AuxNode>();
         node->id = a.id;
         node->onGain = a.on ? 1.0f : 0.0f;
+        node->monoApplied = a.mono;
+        node->switchGain = 1.0f;
+        node->directFirstApplied = juce::jlimit (0, maxDeviceChannels - (a.mono ? 1 : 2), a.output.directFirst);
         node->bus.setSize (2, bs);
-        node->panCurrent = node->panTarget = channelPanGains (clampedPan (a.pan), true);
+        node->panCurrent = node->panTarget = channelPanGains (clampedPan (a.pan), ! a.mono);
         restore (*node->chain, a.chain);
         freshAuxes.push_back (std::move (node));
     }
@@ -1140,8 +1201,9 @@ void MixEngine::applySession (const MixSession& session, juce::StringArray* erro
                 continue;
 
             node->on.store (a.on, std::memory_order_relaxed);
+            node->mono.store (a.mono, std::memory_order_relaxed);
             node->pan.store (clampedPan (a.pan), std::memory_order_relaxed);
-            applyOutput (a.output, node->toMaster, node->direct, node->directFirst);
+            applyOutput (a.output, node->toMaster, node->direct, node->directFirst, a.mono);
             newAuxes.push_back (std::move (node));
             if ((int) newAuxes.size() >= maxAux)
                 break;
@@ -1319,10 +1381,24 @@ void MixEngine::setAuxOn (const juce::Uuid& id, bool on)
         node->on.store (on, std::memory_order_relaxed);
 }
 
+void MixEngine::setAuxMono (const juce::Uuid& id, bool mono)
+{
+    if (auto* node = findAux (id))
+    {
+        if (node->mono.load (std::memory_order_relaxed) == mono)
+            return;
+        int first = juce::jlimit (0, maxDeviceChannels - (mono ? 1 : 2), node->directFirst.load (std::memory_order_relaxed));
+        if (! mono)
+            first -= first % 2;
+        node->directFirst.store (first, std::memory_order_relaxed);
+        node->mono.store (mono, std::memory_order_relaxed);
+    }
+}
+
 void MixEngine::setAuxOutput (const juce::Uuid& id, const MixOutput& output)
 {
     if (auto* node = findAux (id))
-        applyOutput (output, node->toMaster, node->direct, node->directFirst);
+        applyOutput (output, node->toMaster, node->direct, node->directFirst, node->mono.load (std::memory_order_relaxed));
 }
 
 void MixEngine::setAuxPan (const juce::Uuid& id, double pan)

@@ -176,7 +176,7 @@ export class LiveMixConnection extends EventEmitter {
     this.deadline = setTimeout(() => this.close("HANDSHAKE_TIMEOUT"), this.timing.hello);
     socket.on("connect", () => {
       if (this.socket !== socket) return;
-      this.send({ v: 1, type: "hello", id: this.nextId(), supportedVersions: [1], token: d.token, client: { name: "LiveMix Stream Deck", version: "1.6.0" } });
+      this.send({ v: 1, type: "hello", id: this.nextId(), supportedVersions: [1], token: d.token, client: { name: "LiveMix Stream Deck", version: "1.7.0" } });
     });
     socket.on("data", bytes => {
       if (this.socket !== socket) return;
@@ -233,7 +233,7 @@ export class LiveMixConnection extends EventEmitter {
     if (m.type === "error") {
       request.reject(new ConnectionError(m.code));
       if (["CONTROL_DISABLED", "SERVER_STOPPING", "INSTANCE_CHANGED"].includes(m.code)) this.close(m.code, m.code === "CONTROL_DISABLED" ? "disabled" : "disconnected");
-      else if (["SESSION_CHANGED", "REVISION_CONFLICT", "CHANNEL_NOT_FOUND", "FX_NOT_FOUND", "PLUGIN_GROUP_NOT_FOUND", "INTERNAL_ERROR"].includes(m.code)) {
+      else if (["SESSION_CHANGED", "REVISION_CONFLICT", "CHANNEL_NOT_FOUND", "FX_NOT_FOUND", "AUX_NOT_FOUND", "PLUGIN_GROUP_NOT_FOUND", "INTERNAL_ERROR"].includes(m.code)) {
         if (m.code === "SESSION_CHANGED") { this.cancelPending(m.code); this.store.reset(); }
         this.requestState();
       } else if (request.command.command === "requestState") this.close(m.code);

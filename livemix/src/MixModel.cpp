@@ -347,7 +347,7 @@ void MixSession::sanitise()
         if (a.name.isEmpty())
             a.name = trf ("억스 {0}", (int) i + 1);
         a.pan = juce::jlimit (-1.0, 1.0, finiteOr (a.pan, 0.0));
-        clampOutput (a.output);
+        a.output.directFirst = juce::jlimit (0, maxDeviceChannels - (a.mono ? 1 : 2), a.output.directFirst);
     }
 
     for (auto& c : channels)
@@ -435,6 +435,7 @@ juce::String MixSession::toJson() const
         obj->setProperty ("id", idText (a.id));
         obj->setProperty ("name", a.name);
         obj->setProperty ("on", a.on);
+        obj->setProperty ("mono", a.mono);
         obj->setProperty ("pan", a.pan);
         obj->setProperty ("output", outputToVar (a.output));
         obj->setProperty ("chain", ProjectSerializer::pluginSlotsToVar (a.chain));
@@ -535,6 +536,7 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
             a.id = juce::Uuid (item.getProperty ("id", "").toString());
             a.name = item.getProperty ("name", "").toString();
             a.on = (bool) item.getProperty ("on", true);
+            a.mono = (bool) item.getProperty ("mono", false);
             // 0.24.0's aux device input is intentionally ignored; without mic sends the bus is silent.
             a.pan = (double) item.getProperty ("pan", 0.0);
             a.output = outputFromVar (item.getProperty ("output", juce::var()), MixOutput());

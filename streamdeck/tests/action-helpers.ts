@@ -5,7 +5,7 @@ import { FakeLiveMix } from "./fake-livemix-server.mjs";
 import { until } from "./helpers.mjs";
 import type { Projection } from "../src/livemix/protocol.js";
 
-export async function setupActions(t: TestContext, language = "ko", serverOptions: { masterPluginGroups?: boolean; pluginGroupsEverywhere?: boolean; pluginGroupWindows?: boolean; fxOn?: boolean; legacyFx?: boolean; muteAll?: boolean; legacyMuteAll?: boolean } = {}) {
+export async function setupActions(t: TestContext, language = "ko", serverOptions: { auxOn?: boolean; masterPluginGroups?: boolean; pluginGroupsEverywhere?: boolean; pluginGroupWindows?: boolean; fxOn?: boolean; legacyFx?: boolean; muteAll?: boolean; legacyMuteAll?: boolean } = {}) {
   const server = await new FakeLiveMix(serverOptions).start(), host = new FakeHost();
   t.after(async () => { try { await host.close(); assert.ok(!host.output.includes(server.token)); } finally { await server.close(); } });
   const state = server.snapshot.state as Projection, channel = state.channels[0]!, fx = state.fx[0]!;
@@ -16,6 +16,7 @@ export async function setupActions(t: TestContext, language = "ko", serverOption
     { ...structuredClone(channel), id: "55555555555545558555555555555555", name: "예비", on: false });
   state.fx.push({ ...fx, id: "44444444444444448444444444444444", name: "딜레이", muteGroup: false });
   const settings = { settingsVersion: 1, channelId: channel.id, channelName: channel.name, fxId: fx.id, fxName: fx.name,
+    auxId: state.auxes?.[0]?.id ?? "", auxName: state.auxes?.[0]?.name ?? "",
     groupIndex: 1, mode: "toggle", nameFallback: true, shortTitle: "", stepPercent: 1, pressMode: "pre-post", display: "connection" };
   await host.start(server.appdata, language);
   return { server, host, settings };

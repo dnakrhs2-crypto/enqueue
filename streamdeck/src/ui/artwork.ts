@@ -7,9 +7,9 @@ export const palette = {
   background: "#15171B", bar: "#1B1E24", card: "#1F2228", card2: "#272B32",
   line: "#2F343C", text: "#F1F2F4", dimText: "#98A0AB", accent: "#4C8DFF",
   lampOn: "#35D07F", lampOff: "#3A3F47", brand: "#E5302D", danger: "#FF5A5F",
-  warning: "#FFB454", white: "#FFFFFF"
+  warning: "#FFB454", white: "#FFFFFF", auxOn: "#A78BFA"
 } as const;
-export type IconKind = "mic" | "fx" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "plugin-window" | "plugin-window-all" | "fx-send" | "fx-send-step" | "status";
+export type IconKind = "mic" | "fx" | "aux" | "all-mics" | "mic-mute-group" | "fx-mute-group" | "mic-mute-all" | "fx-mute-all" | "plugin-group" | "plugin-group-all" | "plugin-window" | "plugin-window-all" | "fx-send" | "fx-send-step" | "status";
 export type Lamp = "on" | "off" | "muted-on" | "muted-off" | "disconnected" | "disabled" | "checking" | "version" | "missing" | "duplicate";
 export type ActionLamp = "all-on" | "all-off" | "mixed" | "group-muted" | "group-clear" | "mute-every-muted" | "mute-every-clear" | "plugin-on" | "plugin-off" | "plugin-all-on" | "plugin-all-off" | "plugin-all-mixed" | "status-on" | "status-off";
 export type Labels = { [key: string]: string };
@@ -28,6 +28,7 @@ const stroke = (body: string, color: string, width = 1.8): string =>
   '<g fill="none" stroke="' + color + '" stroke-width="' + width + '" stroke-linecap="round" stroke-linejoin="round">' + body + '</g>';
 const mic = '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v4M9 22h6"/>';
 const fx = '<path d="M5 17V7h6M5 12h5M14 7l6 10M20 7l-6 10"/>';
+const aux = '<path d="M1.4 17l3.7-10 3.7 10M2.7 13.6h4.8M10.4 7v7.3a2.7 2.7 0 0 0 5.4 0V7M17.6 7l5 10M22.6 7l-5 10"/>';
 const brackets = '<path d="M6 2H3v20h3M18 2h3v20h-3"/>';
 const digits = [
   "", "M10 9l2-2v10M10 17h4", "M9 9a3 3 0 0 1 6 0c0 2-6 5-6 8h6",
@@ -42,6 +43,7 @@ export function glyph(kind: IconKind, color: string = palette.white, index = 1):
   switch (kind) {
     case "mic": body = mic; break;
     case "fx": body = fx; break;
+    case "aux": body = aux; break;
     case "all-mics": body = [4, 12, 20].map(x => '<rect x="' + (x - 2) + '" y="4" width="4" height="9" rx="2"/><path d="M' + (x - 3) + ' 11v2a3 3 0 0 0 6 0v-2M' + x + ' 16v4M' + (x - 2) + ' 20h4"/>').join(""); break;
     case "mic-mute-group": body = brackets + '<g transform="translate(4 3) scale(.667 .75)">' + mic + '</g>'; break;
     case "fx-mute-group": body = brackets + '<g transform="translate(2 2) scale(.833)">' + fx + '</g>'; break;
@@ -65,12 +67,13 @@ const key = (body: string, size: number): string => svgDocument(size,
   rect(0, 0, 144, 144, 12, palette.background) + '<g text-anchor="middle" font-family="Segoe UI,Malgun Gothic,sans-serif" font-weight="600">' + body + '</g>');
 const bounded = (value: number, max: number): number => Number.isFinite(value) ? Math.max(0, Math.min(max, Math.trunc(value))) : 0;
 
-export function micSvg(lamp: Lamp, labels: Labels, stopped = false, unknownValue = false, size = 144, lampGlyph: "mic" | "fx" = "mic", mutedBy: MuteCause = "group"): string {
+export function micSvg(lamp: Lamp, labels: Labels, stopped = false, unknownValue = false, size = 144, lampGlyph: "mic" | "fx" | "aux" = "mic", mutedBy: MuteCause = "group"): string {
   const on = lamp === "on" || lamp === "muted-on", muted = lamp.startsWith("muted-");
   let body: string, label = unknownValue ? "—" : "";
   if (["on", "off", "muted-on", "muted-off"].includes(lamp)) {
     // An ON FX lamp is the accent blue so an FX key never reads as a mic key (gom 2026-10-25: candidate 2).
-    const color = muted ? palette.danger : on ? lampGlyph === "fx" ? palette.accent : palette.lampOn : palette.lampOff;
+    // An ON aux lamp is violet so it reads apart from mic and FX keys (gom 2026-11-14: candidate 1).
+    const color = muted ? palette.danger : on ? lampGlyph === "fx" ? palette.accent : lampGlyph === "aux" ? palette.auxOn : palette.lampOn : palette.lampOff;
     body = '<circle cx="72" cy="39" r="30" fill="' + color + '"/>' + placed(glyph(lampGlyph), 51, 16, 42);
     if (muted) body += stroke('<path d="M49 18l46 43"/>', palette.white, 3);
     label = muted ? labels[on ? "originalOn" : "originalOff"]! : on ? labels.on! : labels.off!;

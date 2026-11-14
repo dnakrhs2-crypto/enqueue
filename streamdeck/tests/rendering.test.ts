@@ -96,9 +96,22 @@ test("release images have localized labels, distinct group shapes and independen
   }
 });
 
-test("thirteen manifest actions have required controllers/states, translated triggers and all assets", async () => {
+test("aux rendering: runtime and packaged ON/OFF images use the aux glyph with violet/grey lamps", async () => {
+  for (const lamp of ["off", "on"] as const) for (const [suffix, size] of [["", 72], ["@2x", 144]] as const) {
+    const expected = micSvg(lamp, strings.en, false, false, size, "aux");
+    assert.equal((await readFile(resolve(pluginRoot, `imgs/actions/aux-channel/${lamp}${suffix}.svg`), "utf8")).trim(), expected);
+    assert.ok(expected.includes(glyph("aux"))); assert.ok(expected.includes(lamp === "on" ? "#A78BFA" : "#3A3F47"));
+    if (size === 144) {
+      const image = keyImage(lamp, "en", false, false, "aux");
+      assert.equal(Buffer.from(image.split(",")[1]!, "base64").toString("utf8"), expected);
+      for (const other of ["mic", "fx"] as const) assert.notEqual(image, keyImage(lamp, "en", false, false, other), "Aux has its own glyph and cache entry");
+    }
+  }
+});
+
+test("fifteen manifest actions have required controllers/states, translated triggers and all assets", async () => {
   const manifest = JSON.parse(await readFile(resolve(pluginRoot, "manifest.json"), "utf8"));
-  assert.equal(manifest.Version, "1.6.0.0");
+  assert.equal(manifest.Version, "1.7.0.0");
   // The actual static previews and runtime rendering share the same geometry.
   const samples = [
     ["mic/on", micSvg("on", strings.en)],
@@ -135,7 +148,7 @@ test("thirteen manifest actions have required controllers/states, translated tri
     }
   }
   assert.notEqual(glyph("plugin-group-all"), glyph("plugin-group"), "Distinct white menu glyph");
-  assert.deepEqual(manifest.Actions.map((a: any) => a.UUID), ["mic", "fx", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-master", "plugin-group-all", "plugin-window", "fx-send", "fx-send-step", "status"].map(id => `com.gomtwigim.livemix.${id}`));
+  assert.deepEqual(manifest.Actions.map((a: any) => a.UUID), ["mic", "fx", "aux", "all-mics", "mic-mute-group", "fx-mute-group", "mic-mute-all", "fx-mute-all", "plugin-group", "plugin-group-master", "plugin-group-all", "plugin-window", "fx-send", "fx-send-step", "status"].map(id => `com.gomtwigim.livemix.${id}`));
   const ko = JSON.parse(await readFile(resolve(pluginRoot, "ko.json"), "utf8")), en = JSON.parse(await readFile(resolve(pluginRoot, "en.json"), "utf8"));
   assert.deepEqual(Object.keys(ko.Localization).sort(), Object.keys(en.Localization).sort());
   for (const a of manifest.Actions) {
@@ -145,6 +158,10 @@ test("thirteen manifest actions have required controllers/states, translated tri
     if (sendStep) { assert.equal(a.Name, "FX Send ±"); assert.equal(ko[a.UUID].Name, "FX 보내는 양 ±"); }
     if (a.UUID.endsWith(".fx")) {
       assert.equal(a.Name, "FX On/Off"); assert.equal(ko[a.UUID].Name, "FX ON/OFF");
+      assert.deepEqual(a.States.map((s: any) => s.Name), ["OFF", "ON"]);
+    }
+    if (a.UUID.endsWith(".aux")) {
+      assert.equal(a.Name, strings.en.auxAction); assert.equal(ko[a.UUID].Name, strings.ko.auxAction);
       assert.deepEqual(a.States.map((s: any) => s.Name), ["OFF", "ON"]);
     }
     if (a.UUID.endsWith("-mute-all")) {

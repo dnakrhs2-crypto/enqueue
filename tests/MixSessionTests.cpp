@@ -17,6 +17,44 @@ public:
 
     void runTest() override
     {
+        beginTest ("aux mono round trips, missing mono stays stereo, and mono direct output keeps the last device channel");
+        {
+            MixSession s;
+            s.addAux ("Mono");
+            s.addAux ("Stereo");
+            expect (! s.auxes[0].mono && ! s.auxes[1].mono);
+            s.auxes[0].mono = true;
+            s.auxes[0].output = { false, true, MixSession::maxDeviceChannels - 1 };
+            s.auxes[1].output = { false, true, MixSession::maxDeviceChannels - 1 };
+            MixSession loaded;
+            expect (MixSession::fromJson (s.toJson(), loaded).wasOk());
+            expect (loaded.auxes[0].mono && ! loaded.auxes[1].mono);
+            expectEquals (loaded.auxes[0].output.directFirst, MixSession::maxDeviceChannels - 1);
+            expectEquals (loaded.auxes[1].output.directFirst, MixSession::maxDeviceChannels - 2);
+            expect (! loaded.auxes[0].output.master && loaded.auxes[0].output.direct);
+            const auto json = juce::JSON::parse (loaded.toJson());
+            expect ((bool) json["auxes"][0]["mono"] && ! (bool) json["auxes"][1]["mono"]);
+            expectEquals ((int) json["version"], 4);
+            for (const bool legacyInput : { false, true })
+            {
+                auto legacy = json.clone();
+                for (auto& aux : *legacy["auxes"].getArray())
+                {
+                    aux.getDynamicObject()->removeProperty ("mono");
+                    if (legacyInput)
+                        aux.getDynamicObject()->setProperty ("input", juce::JSON::parse (R"({"first":3,"stereo":false})"));
+                }
+                expect (MixSession::fromJson (juce::JSON::toString (legacy), loaded).wasOk());
+                expect (! loaded.auxes[0].mono && ! loaded.auxes[1].mono);
+                expectEquals (loaded.auxes[0].output.directFirst, MixSession::maxDeviceChannels - 2);
+            }
+            s.auxes[0].output.directFirst = 999;
+            s.auxes[1].output.directFirst = -1;
+            s.sanitise();
+            expectEquals (s.auxes[0].output.directFirst, MixSession::maxDeviceChannels - 1);
+            expectEquals (s.auxes[1].output.directFirst, 0);
+        }
+
         beginTest ("aux defaults, free names, limits and removal of sends");
         {
             MixSession s;

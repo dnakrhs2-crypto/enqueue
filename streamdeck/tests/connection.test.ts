@@ -22,7 +22,7 @@ test("hello token, v1, instance and complete snapshot gate readiness", async t =
   assert.equal(connection.ready, false);
   await assert.rejects(connection.command(mic(server.snapshot.state.channels[0].id)), /DISCONNECTED/);
   assert.equal(server.received[0].token, server.token); assert.deepEqual(server.received[0].supportedVersions, [1]);
-  assert.equal(server.received[0].client.version, "1.6.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
+  assert.equal(server.received[0].client.version, "1.7.0"); assert.ok(connection.capabilities.includes("pluginGroupsEverywhere"));
   assert.deepEqual(connection.capabilities.slice(-3), ["fxOn", "muteAll", "pluginGroupWindows"]);
   server.broadcastState("initial"); await ready();
   assert.equal(connection.store.snapshot?.instanceId, server.snapshot.instanceId);
@@ -141,7 +141,7 @@ for (const group of ["mic", "fx"] as const) test(`${group} mute-all wire: canoni
   const restored = await connection.command({ command: "setMuteAll", args: { group, muted: false } });
   await until(connection.store, "change", () => connection.store.snapshot?.revision === restored.revision);
   assert.equal(restored.changed, true); assert.deepEqual(restored.result, { group, muted: false });
-  assert.deepEqual(connection.store.snapshot?.state, initial);
+  assert.deepEqual(connection.store.snapshot?.state, { ...initial, auxes: [] });
   for (const command of ["toggleMuteAll", "setMuteAll"]) for (const args of [null, [], {}, { group: "all", muted: true }, { group: 1, muted: true }]) {
     await assert.rejects(connection.command({ command, args } as unknown as Command), /INVALID_ARGUMENT/);
   }
@@ -176,7 +176,7 @@ test("UTF-8 byte splitting, coalesced messages, CRLF and framing limits", async 
   const source = await fixture("initial-state"), bytes = Buffer.from(JSON.stringify(source) + "\r\n");
   const decoder = new NdjsonDecoder(), messages: unknown[] = [];
   for (const byte of bytes) messages.push(...decoder.push(Buffer.from([byte])));
-  assert.deepEqual(validateServerMessage(messages[0]), source);
+  assert.deepEqual(validateServerMessage(messages[0]), { ...source, state: { ...source.state, auxes: [] } });
   assert.equal(new NdjsonDecoder().push(Buffer.concat([bytes, bytes])).length, 2);
   for (const bad of [Buffer.from("\n"), Buffer.from("[]\n"), Buffer.from("\ufeff{}\n"), Buffer.from([0xff, 10]), Buffer.from(" ".repeat(65537))]) assert.throws(() => new NdjsonDecoder().push(bad));
   const partial = new NdjsonDecoder(); partial.push(Buffer.from("{}")); assert.throws(() => partial.finish());

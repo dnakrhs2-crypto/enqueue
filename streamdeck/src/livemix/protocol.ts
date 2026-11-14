@@ -30,11 +30,13 @@ export type PluginGroup = { index: number; off: boolean };
 export type Send = { fxId: string; amount: number; pre: boolean };
 export type Channel = { id: string; name: string; on: boolean; muteGroup: boolean; pluginGroups: PluginGroup[]; sends: Send[] };
 export type Fx = { id: string; name: string; on: boolean; muteGroup: boolean; return: number };
+export type Aux = { id: string; name: string; on: boolean };
 export type Projection = {
   session: { name: string; dirty: boolean };
   audio: { running: boolean };
   channels: Channel[];
   fx: Fx[];
+  auxes: Aux[];
   muteGroups: { mic: boolean; fx: boolean };
   muteAll: { mic: boolean; fx: boolean };
   master: { pluginGroups: PluginGroup[] };
@@ -47,6 +49,7 @@ export type Changes = {
   muteAll?: Partial<Projection["muteAll"]>;
   channels?: (Partial<Channel> & { id: string })[];
   fx?: (Partial<Fx> & { id: string })[];
+  auxes?: (Partial<Aux> & { id: string })[];
 };
 export type Context = { instanceId: string; sessionId: string; revision: number };
 export type Snapshot = Context & { v: 1; type: "state"; reason: string; requestId?: string; state: Projection };
@@ -63,6 +66,8 @@ export type MicCommand = { command: "toggleChannel"; args: { channelId: string }
 export type EditCommand = MicCommand
   | { command: "toggleFx"; args: { fxId: string } }
   | { command: "setFxOn"; args: { fxId: string; on: boolean } }
+  | { command: "toggleAux"; args: { auxId: string } }
+  | { command: "setAuxOn"; args: { auxId: string; on: boolean } }
   | { command: "setAllChannelsOn"; args: { on: boolean } }
   | { command: "toggleMuteGroup"; args: { group: "mic" | "fx" } }
   | { command: "setMuteGroup"; args: { group: "mic" | "fx"; muted: boolean } }
@@ -81,7 +86,7 @@ export function validAck(command: Command, ack: Ack): boolean {
   const r = ack.result;
   switch (command.command) {
     case "requestState": return isRevision(r.snapshotRevision) && r.snapshotRevision === ack.revision && !ack.changed;
-    case "toggleChannel": case "setChannelOn": case "toggleFx": case "setFxOn": return typeof r.on === "boolean";
+    case "toggleChannel": case "setChannelOn": case "toggleFx": case "setFxOn": case "toggleAux": case "setAuxOn": return typeof r.on === "boolean";
     case "setAllChannelsOn": return typeof r.on === "boolean" && isRevision(r.count) && r.count <= 8;
     case "toggleMuteGroup": case "setMuteGroup": case "toggleMuteAll": case "setMuteAll": return r.group === command.args.group && typeof r.muted === "boolean";
     case "setPluginGroupOff": case "setMasterPluginGroupOff": return r.index === command.args.index && typeof r.off === "boolean";
@@ -114,6 +119,9 @@ function channel(value: unknown): Channel {
 function fx(value: unknown): Fx {
   const o = object(value); return { id: uuid(o.id), name: str(o.name), on: "on" in o ? bool(o.on) : true, muteGroup: bool(o.muteGroup), return: fraction(o.return) };
 }
+function aux(value: unknown): Aux {
+  const o = object(value); return { id: uuid(o.id), name: str(o.name), on: bool(o.on) };
+}
 export function validateProjection(value: unknown): Projection {
   const o = object(value), session = object(o.session), audio = object(o.audio), mute = object(o.muteGroups);
   const all = "muteAll" in o ? object(o.muteAll) : {};
@@ -121,7 +129,8 @@ export function validateProjection(value: unknown): Projection {
     master: { pluginGroups: "master" in o ? groups(object(o.master).pluginGroups) : [] },
     session: { name: str(session.name), dirty: bool(session.dirty) }, audio: { running: bool(audio.running) },
     muteAll: { mic: "mic" in all ? bool(all.mic) : false, fx: "fx" in all ? bool(all.fx) : false },
-    muteGroups: { mic: bool(mute.mic), fx: bool(mute.fx) }, channels: list(o.channels, 8, channel, c => c.id), fx: list(o.fx, 4, fx, f => f.id)
+    muteGroups: { mic: bool(mute.mic), fx: bool(mute.fx) }, channels: list(o.channels, 8, channel, c => c.id), fx: list(o.fx, 4, fx, f => f.id),
+    auxes: "auxes" in o ? list(o.auxes, 4, aux, a => a.id) : []
   };
   requireValue(p.channels.every(c => c.sends.every(s => p.fx.some(f => f.id === s.fxId))));
   return p;
@@ -165,6 +174,12 @@ function changes(value: unknown): Changes {
     if (f.return !== undefined) patch.return = fraction(f.return);
     return patch;
   }, f => f.id);
+  if ("auxes" in o) result.auxes = list(o.auxes, 4, value => {
+    const a = object(value), patch: Partial<Aux> & { id: string } = { id: uuid(a.id) };
+    if ("name" in a) patch.name = str(a.name);
+    if ("on" in a) patch.on = bool(a.on);
+    return patch;
+  }, a => a.id);
   return result;
 }
 function context(o: ObjectValue): Context { return { instanceId: uuid(o.instanceId), sessionId: uuid(o.sessionId), revision: rev(o.revision) }; }

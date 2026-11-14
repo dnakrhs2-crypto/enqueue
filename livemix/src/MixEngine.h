@@ -26,7 +26,8 @@ class MonitorOutput;
 /** The live graph driven by one capture device, with an optional independent monitor:
 
         mic: device input(s) -> [FX pre tap] -> chain -> meter / [FX post tap] -> mic ON/OFF ramp -> [aux sends] -> pan -> master bus / direct output pair
-        aux: sum of stereo mic sends -> aux chain -> meter -> ON/OFF ramp -> balance -> master bus / direct output pair
+        aux: sum of stereo mic sends -> [mono fold] -> aux chain -> [mono fold] -> meter -> ON/OFF ramp
+             -> mono direct output (before pan); pan/balance -> master bus / stereo direct output pair
         FX channel: sum of sends -> FX chain -> return amount -> master bus / direct output pair
         master bus -> master chain -> main output pair
 
@@ -143,6 +144,7 @@ public:
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
     void setChannelAuxSend (const juce::Uuid& channelId, const juce::Uuid& auxId, bool send);
     void setAuxOn (const juce::Uuid& id, bool on);
+    void setAuxMono (const juce::Uuid& id, bool mono);
     void setAuxOutput (const juce::Uuid& id, const MixOutput& output);
     void setAuxPan (const juce::Uuid& id, double pan);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
@@ -212,12 +214,16 @@ private:
     {
         juce::Uuid id;
         std::atomic<bool> on { true };
+        std::atomic<bool> mono { false };
         std::atomic<float> pan { 0.0f };
         std::atomic<bool> toMaster { true }, direct { false };
         std::atomic<int> directFirst { 2 };
         std::unique_ptr<PluginChain> chain = std::make_unique<PluginChain>();
         juce::AudioBuffer<float> bus;   // sized outside the callback; one prepared chunk, always two channels
         float onGain = 1.0f;   // audio thread
+        bool monoApplied = false;   // audio thread: fold, pan law and direct routing change together at silence
+        float switchGain = 1.0f;
+        int directFirstApplied = 2;   // keep the old mono output until its pair alignment can change silently
         std::array<float, 2> panCurrent { 1.0f, 1.0f }, panTarget { 1.0f, 1.0f };
         int panRemaining = 0;
         MeterCell meter;
@@ -275,11 +281,11 @@ private:
     void removeCallback();
     struct MonitorAccess;
     void timerCallback() override; // device lifecycle work, never posted from either audio callback
-    int outputFirst (int requested) const noexcept;
+    int outputFirst (int requested, bool mono = false) const noexcept;
     ChannelNode* findChannel (const juce::Uuid& id) const noexcept;
     AuxNode* findAux (const juce::Uuid& id) const noexcept;
     FxNode* findFx (const juce::Uuid& id) const noexcept;
-    void applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst);
+    void applyOutput (const MixOutput& output, std::atomic<bool>& toMaster, std::atomic<bool>& direct, std::atomic<int>& directFirst, bool mono = false);
     static void addToOutputs (float* const* outputs, int numOutputs, int first, const juce::AudioBuffer<float>& source, int offset, int numSamples) noexcept;
     void finishOutput (float* const* outputs, int numOutputs, int offset, int frames,
                        float* const* splitBuffer, MonitorOutput*, collab::contracts::AudioSourceView masterSource) noexcept;

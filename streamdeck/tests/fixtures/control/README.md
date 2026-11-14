@@ -7,6 +7,15 @@ keeps earlier capability configurations for the existing action tests. Master gr
 deltas replace the whole list. A missing master object on older servers defaults
 to an empty list, and the new action requires the capability before sending commands.
 
+The aux extension (LiveMix 0.24.1) adds `state.auxes: [{id, name, on}]` in card
+order, the final `auxOn` capability, and `toggleAux {auxId}` / `setAuxOn {auxId, on}`.
+The fake server enables two aux channels and version `0.24.1` with `auxOn:true`;
+the default omits both the field and capability, preserving earlier versions.
+Both commands return `{on}`; identical sets return `changed:false`, and missing
+targets return `AUX_NOT_FOUND`. Name/ON changes use partial `changes.auxes` entries;
+additions, removals and reordering use a full state. Older snapshots default a
+missing `auxes` field to an empty list, and the action requires `auxOn` before sending.
+
 `tests/ControlServerTests.cpp` constructs JSON with `Client::hello`, `command`,
 `toggle`, `ping`, and `wire` rather than containing literal JSON transcript files.
 The fixtures transcribe those objects with fixed non-null JUCE-format UUIDs,

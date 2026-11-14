@@ -40,6 +40,8 @@ ControlState::Snapshot ControlState::capture (const MixDocument& document, const
     }
     for (const auto& f : session.fx)
         p.fx.push_back ({ f.id, f.name, f.muteGroup, f.returnAmount, f.on });
+    for (const auto& a : session.auxes)
+        p.auxes.push_back ({ a.id, a.name, a.on });
     return result;
 }
 
@@ -48,7 +50,7 @@ bool ControlState::sameStructure (const ControlProtocol::Projection& a, const Co
     if (a.masterPluginGroups.size() != b.masterPluginGroups.size()) return false;
     for (size_t i = 0; i < a.masterPluginGroups.size(); ++i)
         if (a.masterPluginGroups[i].index != b.masterPluginGroups[i].index) return false;
-    if (a.channels.size() != b.channels.size() || a.fx.size() != b.fx.size()) return false;
+    if (a.channels.size() != b.channels.size() || a.fx.size() != b.fx.size() || a.auxes.size() != b.auxes.size()) return false;
     for (size_t i = 0; i < a.channels.size(); ++i)
     {
         const auto& x = a.channels[i];
@@ -61,6 +63,8 @@ bool ControlState::sameStructure (const ControlProtocol::Projection& a, const Co
     }
     for (size_t i = 0; i < a.fx.size(); ++i)
         if (a.fx[i].id != b.fx[i].id) return false;
+    for (size_t i = 0; i < a.auxes.size(); ++i)
+        if (a.auxes[i].id != b.auxes[i].id) return false;
     return true;
 }
 
@@ -136,6 +140,16 @@ ControlState::Difference ControlState::diff (const Snapshot& published, const Sn
         if (x.returnAmount != y.returnAmount) f.returnAmount = y.returnAmount;
         if (x.on != y.on) f.on = y.on;
         if (! f.empty()) changes.fx.push_back (std::move (f));
+    }
+    for (size_t i = 0; i < a.auxes.size(); ++i)
+    {
+        const auto& x = a.auxes[i];
+        const auto& y = b.auxes[i];
+        ControlProtocol::AuxChanges aux;
+        aux.id = y.id;
+        if (x.name != y.name) aux.name = y.name;
+        if (x.on != y.on) aux.on = y.on;
+        if (! aux.empty()) changes.auxes.push_back (std::move (aux));
     }
     return result;
 }

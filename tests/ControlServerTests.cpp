@@ -285,11 +285,12 @@ public:
         expectEquals (hello["type"].toString(), juce::String ("helloAck"));
         expectEquals (hello["server"]["version"].toString(),
                       f.options.appVersion.isEmpty() ? appVersionString() : f.options.appVersion);
-        expectEquals (hello["capabilities"].size(), 10);
+        expectEquals (hello["capabilities"].size(), 11);
         expectEquals (hello["capabilities"][6].toString(), juce::String ("fxOn"));
         expectEquals (hello["capabilities"][7].toString(), juce::String ("muteAll"));
         expectEquals (hello["capabilities"][8].toString(), juce::String ("pluginGroupWindows"));
         expectEquals (hello["capabilities"][9].toString(), juce::String ("masterPluginGroups"));
+        expectEquals (hello["capabilities"][10].toString(), juce::String ("auxOn"));
         c.initial = c.take ("state");
         expectEquals (c.initial["reason"].toString(), juce::String ("initial"));
         c.instance = hello["instanceId"].toString(); c.session = c.initial["sessionId"].toString();
@@ -308,6 +309,7 @@ public:
         handshake();
         orderingAndState();
         fxOnOff();
+        auxOnOff();
         muteAll();
         pluginGroupWindows();
         masterPluginGroups();
@@ -518,6 +520,72 @@ public:
         expect (delta["changes"]["fx"][0]["on"].isBool() && ! (bool) delta["changes"]["fx"][0]["on"]);
         expect (! f.document.getSession().fx[0].on);
         expectEquals (f.values, 1); expectEquals (f.structures, 0); expectEquals (f.groupChanges, 0);
+        expect (f.allOnMessageThread && ! c.malformed);
+    }
+
+    void auxOnOff()
+    {
+        beginTest ("aux commands over loopback publish switch deltas, preserve no-op revisions and report missing auxes");
+        Fixture f;
+        if (! start (f)) return;
+        Client c;
+        if (! authenticate (f, c)) return;
+        expect (c.initial["state"]["auxes"].isArray());
+        expectEquals (c.initial["state"]["auxes"].size(), 0);
+        const auto first = f.document.addAux();
+        f.document.renameAux (first, "Room");
+        const auto second = f.document.addAux();
+        f.document.renameAux (second, "Hall");
+        const auto added = c.take ("state");
+        expectEquals (added["reason"].toString(), juce::String ("structureChanged"));
+        expectEquals (added["state"]["auxes"].size(), 2);
+        expectEquals (added["state"]["auxes"][0]["id"].toString(), first.toString());
+        expectEquals (added["state"]["auxes"][1]["id"].toString(), second.toString());
+        expectEquals (added["state"]["auxes"][0]["name"].toString(), juce::String ("Room"));
+        expect ((bool) added["state"]["auxes"][0]["on"]);
+        f.values = f.structures = 0;
+        auto args = object(); put (args, "auxId", first.toString());
+        expect (c.send (c.command (2, "toggleAux", args)));
+        const auto off = c.take ("ack", "2");
+        expect ((bool) off["changed"] && ! (bool) off["result"]["on"]);
+        const auto delta = c.take ("stateDelta");
+        expectEquals ((juce::int64) delta["baseRevision"], (juce::int64) added["revision"]);
+        expectEquals ((juce::int64) delta["revision"], (juce::int64) off["revision"]);
+        expectEquals (delta["changes"]["auxes"].size(), 1);
+        expectEquals (delta["changes"]["auxes"][0]["id"].toString(), first.toString());
+        expect (delta["changes"]["auxes"][0]["on"].isBool() && ! (bool) delta["changes"]["auxes"][0]["on"]);
+        expect (! delta["changes"].hasProperty ("channels") && ! delta["changes"].hasProperty ("fx"));
+        expect (! f.document.getSession().findAux (first)->on && f.document.getSession().findAux (second)->on);
+        expectEquals (f.values, 1); expectEquals (f.structures, 0); expectEquals (f.groupChanges, 0);
+        put (args, "on", false);
+        expect (c.send (c.command (3, "setAuxOn", args)));
+        const auto repeated = c.take ("ack", "3");
+        expect (! (bool) repeated["changed"] && ! (bool) repeated["result"]["on"]);
+        expectEquals ((juce::int64) repeated["revision"], (juce::int64) off["revision"]);
+        pumpFor (150); c.collect(); expect (c.incoming.empty());
+        expectEquals (f.values, 1);
+        put (args, "on", true);
+        expect (c.send (c.command (4, "setAuxOn", args)));
+        const auto on = c.take ("ack", "4");
+        expect ((bool) on["changed"] && (bool) on["result"]["on"]);
+        expect ((bool) c.take ("stateDelta")["changes"]["auxes"][0]["on"]);
+        f.document.renameAux (second, "Long Hall");
+        const auto renamed = c.take ("stateDelta");
+        expectEquals (renamed["changes"]["auxes"][0]["id"].toString(), second.toString());
+        expectEquals (renamed["changes"]["auxes"][0]["name"].toString(), juce::String ("Long Hall"));
+        expect (! renamed["changes"]["auxes"][0].hasProperty ("on"));
+        put (args, "auxId", juce::Uuid().toString());
+        expect (c.send (c.command (5, "toggleAux", args)));
+        code (c.take ("error", "5"), "AUX_NOT_FOUND");
+        expect (c.send (c.command (6, "setAuxOn", args)));
+        code (c.take ("error", "6"), "AUX_NOT_FOUND");
+        f.document.removeAux (first);
+        const auto removed = c.take ("state");
+        expectEquals (removed["reason"].toString(), juce::String ("structureChanged"));
+        expectEquals (removed["state"]["auxes"].size(), 1);
+        expectEquals (removed["state"]["auxes"][0]["id"].toString(), second.toString());
+        f.document.removeAux (second);
+        expectEquals (c.take ("state")["state"]["auxes"].size(), 0);
         expect (f.allOnMessageThread && ! c.malformed);
     }
 

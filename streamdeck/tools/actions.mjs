@@ -1,7 +1,9 @@
 // Manifest, localization and release assets use the same action catalogue.
+// dir: image folder when the id is a Windows device name (Git for Windows refuses an "aux" path segment).
 export const actions = [
   { id: "mic", name: "action", tooltip: "tooltip", states: ["off", "on"] },
   { id: "fx", name: "fxAction", tooltip: "fxActionTooltip", states: ["off", "on"] },
+  { id: "aux", dir: "aux-channel", name: "auxAction", tooltip: "auxActionTooltip", states: ["off", "on"] },
   { id: "all-mics", name: "allMics", tooltip: "allMicsTooltip", states: ["allOff", "allOn"] },
   { id: "mic-mute-group", name: "micMuteGroup", tooltip: "micMuteGroupTooltip", states: ["unmuteState", "muteState"] },
   { id: "fx-mute-group", name: "fxMuteGroup", tooltip: "fxMuteGroupTooltip", states: ["unmuteState", "muteState"] },

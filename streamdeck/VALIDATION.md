@@ -1,3 +1,32 @@
+# 1.7.0 검증 - 2026-11-15
+
+작업 폴더 `C:\Users\claude\gocue-auxrev`(가지 `livemix-aux-reverse`), LiveMix 0.24.1과 같이 배포.
+패키지·hello 판 **1.7.0**, 생성 manifest **1.7.0.0**. 새 키 `com.gomtwigim.livemix.aux`(억스 ON/OFF).
+그림 폴더와 소스·시험 파일 이름은 `aux-channel`이다. AUX는 윈도우 장치 이름이라 윈도우용 깃이 `aux` 경로 조각을 거부한다(`tools/actions.mjs`의 `dir`).
+
+| 명령 (`streamdeck/`에서) | 결과 |
+|---|---|
+| `npm test` (빌드·타입 검사 포함) | 242개 통과, 실패 0 (새 `aux-channel.test.ts` 12개 포함), 353.8초 |
+| `npm run validate` | manifest 그림 참조 45개 / 파일 90개, 묶음 그림 288개가 디자인 원본과 같음, ko/en 완비, CLI 검증 통과 |
+| `npm run pack` | `dist/com.gomtwigim.livemix.streamDeckPlugin` 287,145바이트, 항목 298개, manifest 1.7.0.0, SHA-256 `1c9928fc8916c264612cf9b89b7af5d9480aae3b3e2bdf1e10e08e18b40fd66d` |
+
+## 실제 LiveMix 0.24.1과 맞춘 확인
+
+- 도구 `C:\Users\claude\tools\claude_harness\auxtracks_1114\sdaux_chain_check.mjs`(`e2e_auxsd.py`가 부름): 숨은 바탕화면의
+  LiveMix 0.24.1 작업본(억스 둘: 스테레오 'Input', 모노 '억스 2')에 가짜 Stream Deck 호스트로 빌드한 플러그인을 올려 확인 11개 통과(`SDAUX_CHAIN_OK`).
+  - 토글 키 끄기·다시 켜기(키 그림이 따라옴), 이미 켜진 억스에 켜기 키(그대로·알림 없음), 끄기 키(억스 2만), 다른 연결이 억스를 켜면 키 그림이 따라옴,
+    저장된 id가 없어도 같은 이름 억스에 붙음, 없는 억스('억스 채널 없음'·누르면 알림), 기존 마이크 키는 보컬만 바꾸고 억스는 그대로, 토큰이 플러그인 기록에 없음.
+- 같은 실행에서 LiveMix 쪽 확인 9개 통과: 기능 목록 `auxOn`, `toggleAux`·`setAuxOn`(같은 값은 바뀐 것 없음), 없는 억스 `AUX_NOT_FOUND`,
+  창을 닫을 때 저장한 파일에서 억스 둘 켜짐·모노 설정 그대로.
+- 실제 Stream Deck 기기·Stream Deck 앱으로는 재지 못했다.
+
+## 검토
+
+- 아스트라 검토 2바퀴(LiveMix와 같이). 플러그인 쪽 지적 없음: 프로토콜·상태 저장소·설정 화면 시험과 생성 그림 288개 일치를 다시 확인했다.
+- LiveMix 쪽 1바퀴 지적 1건(모노↔스테레오 전환 순간 직접 출력이 튐)은 5ms 무음 전환으로 고쳤다.
+  2바퀴 남은 1건(좌우가 다른 소리 + 지연 플러그인이 든 억스를 재생 중 전환하면 지연 뒤 작은 튐)은 드문 겹침이라 이 판에서 고치지 않았다. 플러그인과는 관계없다.
+- 위 이름 바꾸기(`aux-channel`)는 2바퀴 뒤 고친 것이라 그 수정분만 따로 검증했다: SHIP.
+
 # 1.6.0 검증 - 2026-11-14
 
 작업 폴더 `C:\Users\claude\gocue-mastergroups`(가지 `livemix-master-groups`), LiveMix 0.23.0과 같이 배포.

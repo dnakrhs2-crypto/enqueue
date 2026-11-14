@@ -859,14 +859,15 @@ inline void selectSavedChannel (juce::ComboBox& combo, const juce::StringArray& 
     combo.setColour (juce::ComboBox::textColourId, available ? Palette::text : Palette::meterYellow);
 }
 
-/** Display the effective pair without changing the session's requested ASIO routing. */
+/** Display the effective pair (one output for a mono bus: pairs = false) without changing the session's requested
+    ASIO routing. Off ASIO a mono bus still goes to 1-2. */
 inline void fillDirectOutputCombo (juce::ComboBox& combo, juce::Button& toggle, const juce::StringArray& names,
-                                   bool asio, bool hasOutput, int requested, bool enabled)
+                                   bool asio, bool hasOutput, int requested, bool enabled, bool pairs = true)
 {
     combo.setTooltip ({});
     if (asio)
     {
-        fillChannelCombo (combo, names, true, MixSession::maxDeviceChannels);
+        fillChannelCombo (combo, names, pairs, MixSession::maxDeviceChannels);
         combo.setSelectedId (requested + 1, juce::dontSendNotification);
         if (combo.getSelectedId() == 0) combo.setText (tr ("없음"), juce::dontSendNotification);
     }
@@ -876,7 +877,8 @@ inline void fillDirectOutputCombo (juce::ComboBox& combo, juce::Button& toggle, 
         combo.addItem (hasOutput ? juce::String ("1-2") : tr ("없음"), 1);
         combo.setSelectedId (1, juce::dontSendNotification);
         if (requested != 0)
-            combo.setTooltip (trf ("ASIO에서는 {0}-{1}로 나갑니다", juce::String (requested + 1), juce::String (requested + 2)));
+            combo.setTooltip (pairs ? trf ("ASIO에서는 {0}-{1}로 나갑니다", juce::String (requested + 1), juce::String (requested + 2))
+                                    : trf ("ASIO에서는 {0}번으로 나갑니다", juce::String (requested + 1)));
     }
     toggle.setEnabled (asio || hasOutput);
     combo.setEnabled ((asio || hasOutput) && enabled);

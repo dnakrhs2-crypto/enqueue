@@ -7,27 +7,27 @@
 | Category | Audio |
 | Price | Free |
 | Maker / manifest Author | Gomtwigim — match the client's Maker organization before submission |
-| Version | 1.6.0 (manifest 1.6.0.0) |
+| Version | 1.7.0 (manifest 1.7.0.0) |
 | Suggested tags | LiveMix, microphone, audio, streaming, effects; select relevant available Console tags |
 | Support URL | https://곰튀김.com/livemix/#streamdeck-support |
 
 ## Description
 
-Control LiveMix microphones and FX from Stream Deck while you stream. Toggle one microphone, one FX channel or all microphones, mute assigned groups or every mic/FX channel without group marks, switch numbered plugin groups on one mic, every mic at once or the master, and open or close the plugin windows in a group without bringing LiveMix to the front.
+Control LiveMix microphones and FX from Stream Deck while you stream. Toggle one microphone, one FX or aux channel, or all microphones, mute assigned groups or every mic/FX channel without group marks, switch numbered plugin groups on one mic, every mic at once or the master, and open or close the plugin windows in a group without bringing LiveMix to the front.
 
 Adjust FX send amounts with keys on Stream Deck hardware or Stream Deck Mobile. With Stream Deck +, turn a dial to fine-tune the send and short press and release to switch between Pre and Post. Key faces show ON, OFF, mixed and muted states, including all-mute, with clear feedback when LiveMix is offline or a selected channel is missing. All-mute is independent of mute groups and individual switches, so releasing it preserves any muted group. The plugin reconnects automatically after either app restarts.
 
-Requires LiveMix 0.6.0 or later and Stream Deck 7.1 or later on the same Windows 10/11 x64 PC. Plugin Group (Master) requires LiveMix 0.23.0+; Plugin Group Windows requires 0.22.0+; Mute All Mics and Mute All FX require 0.18.0+; FX On/Off requires 0.16.0+; Plugin Group (All Mics) requires 0.10.0+; the other eight actions still support 0.6.0+. Enable External Control in LiveMix settings before use. A supported ASIO device is needed for audio processing, but not to test the controls. Keys support Stream Deck Mobile through the Windows desktop app; dials require Stream Deck +. The plugin includes English and Korean interfaces. LiveMix itself offers Korean, English and Japanese screens from 0.20.0.
+Requires LiveMix 0.6.0 or later and Stream Deck 7.1 or later on the same Windows 10/11 x64 PC. Aux On/Off requires LiveMix 0.24.1+; Plugin Group (Master) requires 0.23.0+; Plugin Group Windows requires 0.22.0+; Mute All Mics and Mute All FX require 0.18.0+; FX On/Off requires 0.16.0+; Plugin Group (All Mics) requires 0.10.0+; the other eight actions still support 0.6.0+. Enable External Control in LiveMix settings before use. A supported ASIO device is needed for audio processing, but not to test the controls. Keys support Stream Deck Mobile through the Windows desktop app; dials require Stream Deck +. The plugin includes English and Korean interfaces. LiveMix itself offers Korean, English and Japanese screens from 0.20.0.
 
 ## Requirements
 
 - Windows 10/11 x64; LiveMix 0.6.0+ and Stream Deck desktop app 7.1+ running as the same Windows user.
-- Plugin Group (Master) requires LiveMix 0.23.0+; Plugin Group Windows requires LiveMix 0.22.0+; Mute All Mics and Mute All FX require LiveMix 0.18.0+; FX On/Off requires LiveMix 0.16.0+; Plugin Group (All Mics) requires LiveMix 0.10.0+. On older versions the affected key shows an update message and sends no command. The other eight actions require 0.6.0+.
+- Aux On/Off requires LiveMix 0.24.1+; Plugin Group (Master) requires LiveMix 0.23.0+; Plugin Group Windows requires LiveMix 0.22.0+; Mute All Mics and Mute All FX require LiveMix 0.18.0+; FX On/Off requires LiveMix 0.16.0+; Plugin Group (All Mics) requires LiveMix 0.10.0+. On older versions the affected key shows an update message and sends no command. The other eight actions require 0.6.0+.
 - In LiveMix: 설정 (Settings) → 외부 제어 (Stream Deck) → 외부 제어 사용 (Enable external control). This is off by default.
 - Stream Deck hardware or Stream Deck Mobile for keys. Mobile connects through the Windows Stream Deck desktop app; it does not run LiveMix independently.
 - Stream Deck + for the FX Send Amount dial action.
 - A supported ASIO audio device for sound. Control/state testing works while audio is stopped.
-- Create microphone/FX channels and plugin groups in LiveMix before selecting them in the plugin.
+- Create microphone/FX/aux channels and plugin groups in LiveMix before selecting them in the plugin.
 
 ## Key and dial actions
 
@@ -35,6 +35,7 @@ Requires LiveMix 0.6.0 or later and Stream Deck 7.1 or later on the same Windows
 |---|---|
 | Microphone On/Off | Toggle, ON or OFF for a selected microphone; shows its original switch state during group mute or all-mute. |
 | FX On/Off | LiveMix 0.16.0+. Toggle, ON or OFF for one FX channel, keeping send amounts. Shows the individual switch during FX group mute or all-mute. Available in Multi Actions. |
+| Aux On/Off | LiveMix 0.24.1+. Toggle, ON or OFF for one aux channel, the same switch as Aux ON on the aux card. Mic sends, the aux chain and its output are unchanged. Available in Multi Actions. |
 | All Microphones | Toggle or explicitly turn all microphone switches ON/OFF; shows how many are ON. |
 | Microphone Mute Group | Toggle, mute or unmute microphones assigned to the LiveMix mute group. |
 | FX Mute Group | Toggle, mute or unmute assigned FX returns. |
