@@ -152,7 +152,7 @@ JUCE 8.0.15는 CMake `FetchContent`가 GitHub에서 자동으로 받는다.
 ```bat
 cmake --preset vs2022
 cmake --build --preset vs2022-release
-ctest --preset vs2022-release        :: 단위 테스트, load 제외 (VST3 설치 시 실물 검사 포함). MIDI 부하: ctest --preset vs2022-release-midi-load
+ctest --preset vs2022-release -E EnqueueGateShortTests   :: 단위 테스트, load 제외 (VST3 설치 시 실물 검사 포함, 배포 관문용 짧은 묶음은 전체의 일부라 뺌). MIDI 부하: ctest --preset vs2022-release-midi-load
 ```
 
 결과물: `build\vs2022\Enqueue_artefacts\Release\Enqueue.exe` (+ `WinSparkle.dll`)

@@ -884,7 +884,9 @@ def recorder_build(args, public_key):
     # ALL and all registered CTests pick up later merged Recorder/probe/test targets.
     recorder_run([cmake, "--build", build_dir, "--config", "Release", "--parallel",
                   os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4")])
-    recorder_run([ctest, "--test-dir", build_dir, "-C", "Release", "--output-on-failure", "--no-tests=error"])
+    # EnqueueGateShortTests is the short release gate, a subset of EnqueueUnitTests: running both would double the time.
+    recorder_run([ctest, "--test-dir", build_dir, "-C", "Release", "--output-on-failure", "--no-tests=error",
+                  "-E", release_gate_scope.SHORT_FILTER])
     recorder_run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/recorder/tests"])
     descriptions = list(build_dir.rglob("recorder-package-Release.json"))
     if len(descriptions) != 1:

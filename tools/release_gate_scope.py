@@ -232,6 +232,7 @@ def decide(root, app, working=False, force_full=False, cycles_dir=None, rev="HEA
                 trace.append(f"Ignore {label}: invalid summary ({error})")
         trace.append(f"Records: {len(records)} readable, newest first")
         last_reason = "no complete cycle matches the target content (see --explain)"
+        nearest = None  # why the newest complete cycle did not match: the reason a reader of the release log needs
         with tempfile.TemporaryDirectory(prefix="release-gate-snapshot-") as temporary:
             scratch = Path(temporary)
             (scratch / "objects").mkdir()
@@ -257,6 +258,7 @@ def decide(root, app, working=False, force_full=False, cycles_dir=None, rev="HEA
                 if problem:
                     trace.append(f"Cycle {label}: {problem} ({elapsed:.3f}s)")
                     last_reason = problem
+                    nearest = nearest or f"newest complete cycle {label}: {problem}"
                     continue
                 trace.append(f"Cycle {label}: MATCH; full passed, stable fingerprints; base {commit[:10]} ({elapsed:.3f}s)")
                 trace.append("Changes: only this app's version/current notes after verifying recorded untracked additions (or no changes)")
@@ -270,7 +272,7 @@ def decide(root, app, working=False, force_full=False, cycles_dir=None, rev="HEA
                 reason = (f"cycle {label} passed the whole suite on snapshot based on {commit[:10]}; "
                           f"only version/notes or verified additions: {', '.join(paths) or 'no changes'}")
                 return GateDecision(True, reason, count, tuple(trace))
-        return full(last_reason)
+        return full(nearest or last_reason)
     except (OSError, ValueError) as error:
         trace.append(f"Inspection failed: {error}")
         return full(f"cannot verify gate scope: {error}")
