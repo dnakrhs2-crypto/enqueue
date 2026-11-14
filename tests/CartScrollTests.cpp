@@ -21,6 +21,9 @@ public:
         selectionComesIntoView();
         clickDoesNotMoveTheView();
         gridChangeShowsSelection();
+        resizeKeepsBottom();
+        resizeKeepsBrowsedRow();
+        resizeAfterScrollBarMove();
         shrinkBack();
     }
 
@@ -46,17 +49,18 @@ private:
             cols = gridCols;
         }
 
-        /** The centre of grid cell (row, col) on screen, rows counted from the first cue. */
-        juce::Point<int> centre (int row, int col) const
+        /** Grid cell (row, col) on screen, rows counted from the first cue. */
+        juce::Rectangle<int> cell (int row, int col) const
         {
-            const int areaW = width - 2 * gap - (view.isScrollable() ? Palette::scrollBarWidth : 0);
+            const int areaW = view.getWidth() - 2 * gap - (view.isScrollable() ? Palette::scrollBarWidth : 0);
             const int cellW = (areaW - gap * (cols - 1)) / cols;
-            const int cellH = (height - 2 * gap - gap * (rows - 1)) / rows;
-            return { gap + col * (cellW + gap) + cellW / 2, gap + row * (cellH + gap) + cellH / 2 - view.getScrollPosition() };
+            const int cellH = cellHeight();
+            return { gap + col * (cellW + gap), gap + row * (cellH + gap) - view.getScrollPosition(), cellW, cellH };
         }
 
-        int cellHeight() const { return (height - 2 * gap - gap * (rows - 1)) / rows; }
-        int maxScroll (int totalRows) const { return gap + totalRows * (cellHeight() + gap) - height; }
+        juce::Point<int> centre (int row, int col) const { return cell (row, col).getCentre(); }
+        int cellHeight() const { return (view.getHeight() - 2 * gap - gap * (rows - 1)) / rows; }
+        int maxScroll (int totalRows) const { return gap + totalRows * (cellHeight() + gap) - view.getHeight(); }
 
         void click (juce::Point<int> p)
         {
@@ -159,6 +163,9 @@ private:
         Cart cart (40, 4, 4);
         cart.cues.setSelectedIndex (39);
         expectEquals (cart.view.getScrollPosition(), cart.maxScroll (10), "the last cue is shown");
+        cart.view.setSize (width, 360);
+        expectEquals (cart.view.getScrollPosition(), cart.maxScroll (10), "selection scrolling remembers the bottom across a resize");
+        cart.view.setSize (width, height);
         cart.click (cart.centre (9, 3));
         expect (cart.fired == std::vector<int> { 39 });
 
@@ -205,6 +212,72 @@ private:
         cart.rows = cart.cols = 15;
         expect (! cart.view.isScrollable(), "40 cues fit a 15 x 15 grid");
         expectEquals (cart.view.getScrollPosition(), 0);
+    }
+
+    void resizeKeepsBottom()
+    {
+        beginTest ("the last selected row stays fully visible when the inspector or window changes the cart height");
+        Cart cart (40, 4, 4);
+        cart.view.setScrollPosition (100000);
+        cart.click (cart.centre (9, 3));
+        expectEquals (cart.cues.getSelectedIndex(), 39);
+        const int original = cart.view.getScrollPosition();
+
+        for (const int newHeight : { 360, height, 903, height })
+        {
+            cart.view.setSize (width, newHeight);
+            expectEquals (cart.cues.getSelectedIndex(), 39, "the selection stays on cue 40");
+            expect (cart.view.getLocalBounds().contains (cart.cell (9, 3)), "the whole last button remains in view");
+            expectEquals (cart.view.getScrollPosition(), cart.maxScroll (10), "the bottom uses the new view height");
+
+            if (newHeight == height)
+                expectEquals (cart.view.getScrollPosition(), original, "restoring the height restores the original scroll position");
+        }
+    }
+
+    void resizeKeepsBrowsedRow()
+    {
+        beginTest ("resizing keeps the row and fraction browsed with the wheel instead of returning to the selected cue");
+        Cart cart (40, 4, 4);
+        cart.cues.setSelectedIndex (0);
+        const auto e = juce::MouseEvent { juce::Desktop::getInstance().getMainMouseSource(), {}, {}, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                          &cart.view, &cart.view, juce::Time::getCurrentTime(), {}, juce::Time::getCurrentTime(), 0, false };
+        cart.view.mouseWheelMove (e, notches (-2.0f));
+        const int original = cart.view.getScrollPosition();
+        const double rowPosition = (double) original / (cart.cellHeight() + gap);
+        const int topRow = (original - gap) / (cart.cellHeight() + gap);
+        expect (topRow > 0, "the selected first row is above the browsed rows");
+
+        for (const int newHeight : { 903, 360, height })
+        {
+            cart.view.setSize (width, newHeight);
+            expectEquals (cart.cues.getSelectedIndex(), 0);
+            expectEquals ((cart.view.getScrollPosition() - gap) / (cart.cellHeight() + gap), topRow, "the same row stays at the top");
+            expectWithinAbsoluteError ((double) cart.view.getScrollPosition(), rowPosition * (cart.cellHeight() + gap), 0.5,
+                                       "the position within that row is kept to the nearest pixel");
+        }
+
+        expectEquals (cart.view.getScrollPosition(), original, "a round trip does not accumulate rounding error");
+    }
+
+    void resizeAfterScrollBarMove()
+    {
+        beginTest ("scrollbar dragging and paging update the row position and bottom used by the next resize");
+        Cart cart (40, 4, 4);
+        auto* bar = dynamic_cast<juce::ScrollBar*> (cart.view.getChildComponent (0));
+        expect (bar != nullptr);
+        if (bar == nullptr) return;
+
+        bar->setCurrentRangeStart (2.5 * (cart.cellHeight() + gap), juce::sendNotificationSync);
+        cart.view.setSize (width, 903);
+        expectWithinAbsoluteError ((double) cart.view.getScrollPosition(), 2.5 * (cart.cellHeight() + gap), 0.5,
+                                   "dragging remembers the fraction of a row");
+
+        bar->moveScrollbarInPages (1, juce::sendNotificationSync);
+        expectEquals (cart.view.getScrollPosition(), cart.maxScroll (10), "paging reaches the bottom");
+        cart.view.setSize (width, 360);
+        expectEquals (cart.view.getScrollPosition(), cart.maxScroll (10), "the scrollbar's bottom stays at the bottom after shrinking");
+        expect (cart.view.getLocalBounds().contains (cart.cell (9, 3)));
     }
 
     void shrinkBack()

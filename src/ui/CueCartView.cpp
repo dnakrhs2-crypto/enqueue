@@ -49,7 +49,7 @@ void CueCartView::setGrid (int newRows, int newCols)
 
 void CueCartView::resized()
 {
-    updateScrollRange();
+    updateScrollRange (true);
 }
 
 void CueCartView::cueListStructureChanged()
@@ -96,16 +96,32 @@ juce::Rectangle<int> CueCartView::gridArea() const
     return area;
 }
 
-void CueCartView::updateScrollRange()
+void CueCartView::updateScrollRange (bool restoreRowPosition)
 {
     const int cellH = cellHeight();
     const int content = cellGap + totalRows() * (cellH + cellGap);
     const bool scrolls = cellH > 0 && content > getHeight();
+    const bool atBottom = scrollBar.isVisible() && scrollBar.getCurrentRange().getEnd() >= scrollBar.getMaximumRangeLimit();
+    const double position = restoreRowPosition ? (atBottom ? (double) (content - getHeight()) : scrollPositionInRows * (cellH + cellGap))
+                                               : scrollBar.getCurrentRangeStart();
 
     scrollBar.setBounds (getLocalBounds().removeFromRight (Palette::scrollBarWidth));
     scrollBar.setRangeLimits (0.0, (double) juce::jmax (content, getHeight()), juce::dontSendNotification);
-    scrollBar.setCurrentRange (scrolls ? scrollBar.getCurrentRangeStart() : 0.0, (double) getHeight(), juce::dontSendNotification);
+    // setRangeLimits may clamp using the old view height. Apply the saved position with the new height together.
+    scrollBar.setCurrentRange (scrolls ? position : 0.0, (double) getHeight(), juce::dontSendNotification);
     scrollBar.setVisible (scrolls);
+    rememberScrollPosition();
+}
+
+void CueCartView::rememberScrollPosition()
+{
+    scrollPositionInRows = scrollBar.isVisible() ? scrollBar.getCurrentRangeStart() / (cellHeight() + cellGap) : 0.0;
+}
+
+void CueCartView::scrollBarMoved (juce::ScrollBar*, double)
+{
+    rememberScrollPosition();
+    repaint();
 }
 
 int CueCartView::getScrollPosition() const
@@ -119,6 +135,7 @@ void CueCartView::setScrollPosition (int pixels)
         return;
 
     scrollBar.setCurrentRangeStart ((double) pixels, juce::dontSendNotification);   // clamped by the bar
+    rememberScrollPosition();
     repaint();
 }
 

@@ -56,12 +56,13 @@ private:
     void cueListStructureChanged() override;
     void cueChanged (int) override { repaint(); }
     void cueSelectionChanged (int) override;
-    void scrollBarMoved (juce::ScrollBar*, double) override { repaint(); }
+    void scrollBarMoved (juce::ScrollBar*, double) override;
 
     juce::Rectangle<int> gridArea() const;
     int cellHeight() const;
     int totalRows() const;
-    void updateScrollRange();
+    void updateScrollRange (bool restoreRowPosition = false);
+    void rememberScrollPosition();
     void scrollToShow (int slot);
     juce::Rectangle<int> cellBounds (int slot) const;
     int slotAt (juce::Point<int> p) const;
@@ -77,6 +78,7 @@ private:
     bool editable = true;
     bool clicking = false;   // a press selects its own button: the view must not move under the mouse
     juce::ScrollBar scrollBar { true };
+    double scrollPositionInRows = 0.0;   // includes the fraction of a row; resizing changes its pixel height
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CueCartView)
 };
