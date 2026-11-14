@@ -23,6 +23,8 @@ public:
 
     /** Reloads the controls from the standby cue. */
     void refresh();
+    /** Commits pending input before show mode locks the panel. */
+    void setEditable (bool editable);
     /** Playback state of the standby cue (null when it is not playing). */
     void setPlayback (const AudioEngine::PlayingCue* playing);
     /** The gain's unit (true = %), shared with the 기본 tab: either tab's gain button switches both. */

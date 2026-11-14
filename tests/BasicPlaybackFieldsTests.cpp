@@ -281,6 +281,125 @@ public:
             }
         }
 
+        beginTest ("entering show mode commits all five focused playback inputs on either tab before locking");
+        {
+            const char* inputs[] { "2", "8", "3", "1.5", "2.5" };
+            const double wanted[] { 2.0, 8.0, 3.0, 1.5, 2.5 };
+            const char* names[] { "시작 시간", "끝 시간", "재생 횟수", "속도", "페이드 인 시간" };
+            for (int source : { 0, 1 })
+                for (int field = 0; field < 5; ++field)
+                {
+                    Fixture f;
+                    addSound (f);
+                    const auto id = f.document().cues.get (0).id;
+                    const auto other = f.addSound ("Other");
+                    f.document().cues.setSelectedIndex (0);
+                    f.hiddenMain();
+                    auto basic = fields (openTab (f, 0));
+                    auto play = fields (openTab (f, 1));
+                    openTab (f, source);
+                    auto* editor = (source == 0 ? basic : play).editors[(size_t) field];
+                    const auto before = snapshot (f);
+                    editor->grabKeyboardFocus();
+                    editor->setText (inputs[field], false);
+                    expect (editor->hasKeyboardFocus (false));
+
+                    f.inspector().setEditable (false);
+                    expectWithinAbsoluteError (value (*f.document().cues.findById (id), field), wanted[field], 1e-9,
+                                               "show mode commits synchronously before disabling the field");
+                    expect (! editor->isEnabled());
+                    dispatch();
+                    const auto committed = snapshot (f);
+                    same (basic, play);
+                    expectEquals (f.document().getHistory().getUndoDepth(), 1);
+                    expectEquals (f.document().getUndoName(), ko (names[field]));
+                    for (int i = 0; i < 5; ++i)
+                        expectWithinAbsoluteError (value (*f.document().cues.findById (other.id), i), value (other, i), 1e-9);
+
+                    f.inspector().setEditable (true);
+                    dispatch();
+                    expect (editor->isEnabled());
+                    expectWithinAbsoluteError (value (*f.document().cues.findById (id), field), wanted[field], 1e-9);
+                    expectEquals (snapshot (f), committed);
+                    expectEquals (editor->getText(), field == 2 ? juce::String ("3") : field == 3 ? juce::String ("1.50")
+                                                                                             : formatTimeMs (wanted[field]));
+                    expectEquals (f.document().getHistory().getUndoDepth(), 1);
+                    expect (f.document().undo());
+                    dispatch();
+                    expectEquals (snapshot (f), before);
+                    expect (! f.document().canUndo());
+                    expect (f.document().redo());
+                    dispatch();
+                    expectEquals (snapshot (f), committed);
+                    same (basic, play);
+                }
+        }
+
+        beginTest ("entering show mode also commits the six existing basic inputs with their original undo names");
+        {
+            struct Edit { int focusOrder; const char* input; const char* display; const char* undoName; };
+            const Edit edits[] {
+                { 1, "3", "3", "번호" }, { 2, "Show cue", "Show cue", "이름 변경" },
+                { 6, "0:02.5", "0:02.500", "프리웨이트" }, { 7, "3.25", "0:03.250", "포스트웨이트" },
+                { 8, "750", "750", "정지 페이드 변경" }, { 12, "First line\nSecond line", "First line\nSecond line", "메모" }
+            };
+            for (const auto& edit : edits)
+            {
+                Fixture f;
+                addSound (f);
+                const auto id = f.document().cues.get (0).id;
+                const auto otherId = f.addSound ("Other").id;
+                f.document().cues.setSelectedIndex (0);
+                f.hiddenMain();
+                auto& panel = openTab (f, 0);
+                auto* editor = child<juce::TextEditor> (panel, [&edit] (const auto& e) { return e.getExplicitFocusOrder() == edit.focusOrder; });
+                expect (editor != nullptr);
+                if (editor == nullptr) return;
+                const auto stored = [&] (const juce::Uuid& cueId)
+                {
+                    const auto& c = *f.document().cues.findById (cueId);
+                    switch (edit.focusOrder)
+                    {
+                        case 1: return c.number;
+                        case 2: return c.name;
+                        case 6: return formatTimeMs (c.preWaitSeconds);
+                        case 7: return formatTimeMs (c.postWaitSeconds);
+                        case 8: return juce::String (c.fadeOutMs);
+                        default: return c.notes;
+                    }
+                };
+                const auto before = snapshot (f);
+                const auto otherBefore = stored (otherId);
+                editor->grabKeyboardFocus();
+                editor->setText (edit.input, false);
+                expect (editor->hasKeyboardFocus (false));
+
+                f.inspector().setEditable (false);
+                expectEquals (stored (id), juce::String (edit.display), "the displayed cue keeps its pending input");
+                expect (! editor->isEnabled());
+                dispatch();
+                const auto committed = snapshot (f);
+                expectEquals (stored (otherId), otherBefore);
+                expectEquals (f.document().getHistory().getUndoDepth(), 1);
+                expectEquals (f.document().getUndoName(), ko (edit.undoName));
+
+                f.inspector().setEditable (true);
+                dispatch();
+                expect (editor->isEnabled());
+                expectEquals (stored (id), juce::String (edit.display));
+                expectEquals (editor->getText(), juce::String (edit.display));
+                expectEquals (snapshot (f), committed);
+                expectEquals (f.document().getHistory().getUndoDepth(), 1);
+                expect (f.document().undo());
+                dispatch();
+                expectEquals (snapshot (f), before);
+                expect (! f.document().canUndo());
+                expect (f.document().redo());
+                dispatch();
+                expectEquals (snapshot (f), committed);
+            }
+        }
+
         beginTest ("show mode, no selection, infinite count and zero length disable the matching fields");
         {
             Fixture f;

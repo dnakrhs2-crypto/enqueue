@@ -352,6 +352,9 @@ public:
 
     void setEditable (bool shouldBeEditable)
     {
+        if (editable && ! shouldBeEditable)
+            commitPending();   // keep pending input before show mode locks the fields
+
         editable = shouldBeEditable;
         refresh();
     }
@@ -380,14 +383,7 @@ public:
         {
             // Mouse focus moves before JUCE delivers onFocusLost. Finish genuine
             // user input against shownId before any field is synced to the new cue.
-            const juce::ScopedValueSetter<bool> committing (committingPending, true);
-            commitNumber();
-            commitName();
-            commitWait (true);
-            commitWait (false);
-            commitStopFade();
-            commitNotes();
-            playback.commitPending();
+            commitPending();
         }
 
         const juce::ScopedValueSetter<bool> guard (refreshing, true);
@@ -646,6 +642,18 @@ public:
     }
 
 private:
+    void commitPending()
+    {
+        const juce::ScopedValueSetter<bool> committing (committingPending, true);
+        commitNumber();
+        commitName();
+        commitWait (true);
+        commitWait (false);
+        commitStopFade();
+        commitNotes();
+        playback.commitPending();
+    }
+
     void edit (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey = {})
     {
         if (refreshing || cancellingEdit || document.isReplacingModel() || ! editable)
@@ -4044,7 +4052,7 @@ void CueInspector::setEditable (bool shouldBeEditable)
     levels->setEditable (editable);
     trim->setEditable (editable);
     triggers->setEditable (editable);
-    timeLoops->setEnabled (editable);
+    timeLoops->setEditable (editable);
     effects->setEnabled (editable);
     fadePanel->setEditable (editable);
     fadeInOutPanel->setEditable (editable);

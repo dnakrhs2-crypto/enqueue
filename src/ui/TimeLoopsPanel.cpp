@@ -127,6 +127,14 @@ void TimeLoopsPanel::setupToggle (juce::ToggleButton& toggle, const char* text)
 }
 
 //==============================================================================
+void TimeLoopsPanel::setEditable (bool shouldBeEditable)
+{
+    if (isEnabled() && ! shouldBeEditable)
+        playback.commitPending();
+
+    setEnabled (shouldBeEditable);
+}
+
 void TimeLoopsPanel::refresh()
 {
     playback.refresh (true);   // show mode is inherited from this panel's enabled state
