@@ -17,6 +17,12 @@
 <main class="wrap">
   <h1 style="font-size:28px;margin-top:12px">바뀐 점</h1>
   <p class="meta" style="margin-top:6px">버전별 변경 사항. 최신 버전이 맨 위입니다.</p>
+  <article class="notes"><h2>LiveMix 0.24.0</h2>
+<ul>
+  <li><b>억스 채널.</b> 카드 목록 아래 ‘+ 억스 채널 추가’로 억스 채널을 만들 수 있습니다(최대 4개). 억스 채널은 장치 입력 하나를 받아 자기 VST3 체인을 거친 뒤, 마스터로는 나가지 않고 그 억스를 입력으로 고른 마이크 채널들에 똑같이 들어갑니다. 공통 처리는 억스에 한 번만 걸어 두고, 마이크 채널마다 다른 체인·ON/OFF·핫키로 나눠 쓸 수 있습니다. 마이크 채널의 입력 상자에서 억스를 고르거나, 억스 카드의 ‘받는 마이크 채널’을 눌러 연결합니다. 억스를 끄면 받는 마이크 채널이 모두 조용해지고, 억스를 지우면 받던 마이크 채널은 같은 장치 입력을 직접 받습니다.</li>
+  <li><b>English.</b> New aux channels (up to 4), added with ‘+ Add aux channel’ under the cards. An aux takes one device input through its own VST3 chain and does not go to the master; the mic channels that pick it as their input each keep their own chain, ON/OFF and hotkeys. Turning an aux off silences the mic channels taking it; deleting it returns them to the same device input.</li>
+  <li><b>日本語.</b> AUXチャンネルを追加できるようになりました(最大4つ)。カード一覧の下の「+ AUXチャンネル追加」から作成します。AUXはデバイス入力を1つ受けて自分のVST3チェーンを通し、マスターには出さず、そのAUXを入力に選んだマイクチャンネルにそのまま入ります。各マイクチャンネルのチェーン・ON/OFF・ホットキーはそのままです。AUXをOFFにすると受け取るマイクチャンネルはすべて無音になり、AUXを削除すると同じデバイス入力を直接受けます。</li>
+</ul></article>
   <article class="notes"><h2>LiveMix 0.23.0</h2>
 <ul>
   <li><b>마스터에도 플러그인 그룹.</b> 마스터 카드에 마이크 카드처럼 ‘플러그인 그룹’ 단추와 번호 1~5가 생겼습니다. 마스터 체인의 플러그인을 골라 그룹으로 묶어 두고 번호를 누르면 그 플러그인이 한꺼번에 꺼지고(번호가 빨갛게), 다시 누르면 켜집니다. 마이크 그룹과는 따로 움직여서 마이크 그룹 핫키나 Stream Deck ‘플러그인 그룹 (전체 마이크)’ 키를 눌러도 마스터는 그대로입니다. 마스터 그룹은 설정의 ‘마스터 플러그인 그룹 1~5’ 핫키와 Stream Deck 플러그인 1.6.0의 새 ‘플러그인 그룹 (마스터)’ 키로도 껐다 켤 수 있습니다. 플러그인 1.6.0은 곰튀김.com/livemix의 Stream Deck 절에서 받습니다.</li>
