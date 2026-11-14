@@ -834,6 +834,12 @@
     "where": "livemix/src/TrackHotkeys.cpp:78"
   },
   {
+    "ko": "억스 {0} ON/OFF",
+    "en": "Aux {0} ON/OFF",
+    "ja": "AUX {0} ON/OFF",
+    "where": "livemix/src/TrackHotkeys.cpp"
+  },
+  {
     "ko": "아이디",
     "en": "ID",
     "ja": "ID",
@@ -4518,12 +4524,6 @@
     "where": "livemix/src/ui/ChainDrawer.cpp"
   },
   {
-    "ko": "억스 채널: 마스터로 나가지 않고, 받는 마이크 채널의 입력으로만 쓰입니다",
-    "en": "Aux channel: it does not go to the master; it is only the input of the mic channels that take it",
-    "ja": "AUXチャンネル: マスターには出さず、受け取るマイクチャンネルの入力としてだけ使います",
-    "where": "livemix/src/ui/AuxCard.cpp"
-  },
-  {
     "ko": "억스 ON",
     "en": "Aux ON",
     "ja": "AUX ON",
@@ -4536,40 +4536,10 @@
     "where": "livemix/src/ui/AuxCard.cpp"
   },
   {
-    "ko": "받는 마이크 채널",
-    "en": "Mic channels taking it",
-    "ja": "受け取るマイクチャンネル",
-    "where": "livemix/src/ui/AuxCard.cpp"
-  },
-  {
-    "ko": "켜면 이 마이크 채널이 이 억스를 입력으로 받습니다. 끄면 같은 장치 입력을 직접 받습니다",
-    "en": "On: this mic channel takes this aux as its input. Off: it takes the same device input directly",
-    "ja": "オン: このマイクチャンネルがこのAUXを入力にします。オフ: 同じデバイス入力を直接受けます",
-    "where": "livemix/src/ui/AuxCard.cpp"
-  },
-  {
     "ko": "이 억스 채널 삭제",
     "en": "Delete aux channel",
     "ja": "AUXチャンネル削除",
     "where": "livemix/src/ui/AuxCard.cpp"
-  },
-  {
-    "ko": "억스 채널",
-    "en": "Aux channels",
-    "ja": "AUXチャンネル",
-    "where": "livemix/src/ui/ChannelCard.cpp"
-  },
-  {
-    "ko": "억스 (없음)",
-    "en": "Aux (missing)",
-    "ja": "AUX (なし)",
-    "where": "livemix/src/ui/ChannelCard.cpp"
-  },
-  {
-    "ko": "억스에서 받는 동안은 억스의 스테레오 설정을 따릅니다",
-    "en": "While it takes an aux, the aux's stereo setting applies",
-    "ja": "AUXから受けている間はAUXのステレオ設定に従います",
-    "where": "livemix/src/ui/ChannelCard.cpp"
   },
   {
     "ko": "+ 억스 채널 추가",
@@ -4590,15 +4560,21 @@
     "where": "livemix/src/ui/MainComponent.cpp"
   },
   {
-    "ko": "이 억스 채널과 그 플러그인 설정이 지워집니다.\n이 억스를 받던 마이크 채널은 같은 장치 입력을 직접 받습니다.\n삭제할까요?",
-    "en": "This aux channel and its plugin settings will be deleted.\nThe mic channels that took it will take the same device input directly.\nDelete?",
-    "ja": "このAUXチャンネルとプラグイン設定が削除されます。\nこのAUXを受けていたマイクチャンネルは同じデバイス入力を直接受けます。\n削除しますか?",
-    "where": "livemix/src/ui/MainComponent.cpp"
-  },
-  {
     "ko": " (억스 체인에는 플러그인만 넣었습니다)",
     "en": " (Only plugins were loaded into the aux chain)",
     "ja": " (AUXチェーンにはプラグインのみ読み込みました)",
     "where": "livemix/src/ui/ChainDrawer.cpp"
+  },
+  {
+    "ko": "보내는 마이크 채널",
+    "en": "Mic channels sending to it",
+    "ja": "送るマイクチャンネル",
+    "where": "livemix/src/ui/AuxCard.cpp"
+  },
+  {
+    "ko": "이 억스 채널과 그 플러그인 설정이 지워집니다.\n삭제할까요?",
+    "en": "This aux channel and its plugin settings will be deleted.\nDelete?",
+    "ja": "このAUXチャンネルとプラグイン設定が削除されます。\n削除しますか?",
+    "where": "livemix/src/ui/MainComponent.cpp"
   }
 ]

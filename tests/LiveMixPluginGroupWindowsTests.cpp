@@ -224,7 +224,7 @@ public:
             expectEquals (MainComponent::allFxHotkeyId, 22);
             expectEquals (MainComponent::firstPluginGroupWindowHotkeyId, 23);
             expectEquals (MainComponent::firstMasterPluginGroupHotkeyId, 28);
-            expectEquals (MainComponent::lastHotkeyId, 32);
+            expectEquals (MainComponent::lastHotkeyId, 36);
             expectEquals (MainComponent::firstMasterPluginGroupHotkeyId - MainComponent::firstPluginGroupWindowHotkeyId, MixSession::maxPluginGroups);
             Rig rig;
             for (int group = 1; group <= 5; ++group)
@@ -882,10 +882,48 @@ public:
             rig.press();   // group-window hotkeys still open only microphone editors
             expectEquals (rig.windows().getNumOpenWindows(), 1);
             expect (editorFor (*master.getSlot (0).plugin) == nullptr);
-            rig.main->hotkeyPressed (MainComponent::lastHotkeyId);
+            rig.main->hotkeyPressed (MainComponent::firstMasterPluginGroupHotkeyId + 4);
             expectEquals (rig.status().getText(), trf ("마스터에 플러그인 그룹 {0}이(가) 없습니다 (마스터 카드의 '플러그인 그룹'에서 만듭니다)", 5));
             master.removePlugin (0);   // keep the member ID for a preset restore until the session is reloaded
             expect (rig.document.getSession().master.pluginGroups[0].slots == std::vector<juce::Uuid> { masterSlot });
+        }
+
+        beginTest ("aux hotkeys register by number, toggle only the aux and release when its number disappears");
+        {
+            Rig rig;
+            const auto aux = rig.document.addAux();
+            rig.document.renameAux (aux, "Hall");
+            rig.settings.setAuxOnHotkey (1, "Ctrl + Alt + Shift + F24");
+            rig.registerKeys();
+           #if JUCE_WINDOWS
+            GlobalHotkeys probe;
+            const auto key = juce::KeyPress::createFromDescription (rig.settings.getAuxOnHotkey (1));
+            const auto available = [&]
+            {
+                juce::String error;
+                const bool result = probe.set (1, key, error);
+                probe.clear (1);
+                return result;
+            };
+            expect (! available());
+           #endif
+            rig.main->hotkeyPressed (TrackHotkeys::idFor (TrackHotkeys::Kind::aux, 1));
+            expect (! rig.document.getSession().findAux (aux)->on);
+            expect (rig.document.getSession().channels[0].on);
+            expectEquals (rig.status().getText(), juce::String ("Hall OFF"));
+            rig.main->hotkeyPressed (TrackHotkeys::idFor (TrackHotkeys::Kind::aux, 1));
+            expect (rig.document.getSession().findAux (aux)->on);
+            expectEquals (rig.status().getText(), juce::String ("Hall ON"));
+            rig.document.removeAux (aux);
+           #if JUCE_WINDOWS
+            expect (available());
+           #endif
+            const auto replacement = rig.document.addAux();
+           #if JUCE_WINDOWS
+            expect (! available());
+           #endif
+            rig.main->hotkeyPressed (TrackHotkeys::idFor (TrackHotkeys::Kind::aux, 1));
+            expect (! rig.document.getSession().findAux (replacement)->on);
         }
 
         beginTest ("master hotkey settings persist independently");

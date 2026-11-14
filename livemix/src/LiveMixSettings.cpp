@@ -53,6 +53,7 @@ namespace Keys
     constexpr const char* pluginGroupWindowHotkey = "pluginGroupWindowHotkey";   // + the group number (1..5)
     constexpr const char* micOnHotkey = "micOnHotkey";               // + the mic number (1..8)
     constexpr const char* fxOnHotkey = "fxOnHotkey";                 // + the FX number (1..4)
+    constexpr const char* auxOnHotkey = "auxOnHotkey";               // + the aux number (1..4)
     constexpr const char* vst2Enabled = "vst2Enabled";
     constexpr const char* disabledPlugins = "disabledPlugins";
     constexpr const char* lufsTarget = "lufsTarget";
@@ -326,6 +327,16 @@ juce::String LiveMixSettings::getFxOnHotkey (int number) const
 void LiveMixSettings::setFxOnHotkey (int number, const juce::String& description)
 {
     settings->setValue (juce::String (Keys::fxOnHotkey) + juce::String (number), description.trim());
+}
+
+juce::String LiveMixSettings::getAuxOnHotkey (int number) const
+{
+    return settings->getValue (juce::String (Keys::auxOnHotkey) + juce::String (number));
+}
+
+void LiveMixSettings::setAuxOnHotkey (int number, const juce::String& description)
+{
+    settings->setValue (juce::String (Keys::auxOnHotkey) + juce::String (number), description.trim());
 }
 
 bool LiveMixSettings::getLatencyNoticeDismissed() const { return settings->getBoolValue (Keys::latencyNoticeDismissed, false); }

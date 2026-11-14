@@ -243,24 +243,20 @@ void MixDocument::removeAux (const juce::Uuid& id)
     structureChanged();
 }
 
-bool MixDocument::setChannelAux (const juce::Uuid& channelId, const juce::Uuid& auxId)
+void MixDocument::setChannelAuxSend (const juce::Uuid& channelId, const juce::Uuid& auxId, bool send)
 {
     auto* c = session.findChannel (channelId);
-    const auto* a = auxId.isNull() ? nullptr : session.findAux (auxId);
-    if (c == nullptr || (! auxId.isNull() && a == nullptr))
-        return false;
-    if (c->aux == auxId)
-        return true;
-
-    c->aux = auxId;
-    if (a != nullptr)
-    {
-        c->inputFirst = a->inputFirst;
-        c->stereo = a->stereo;
-    }
-    engine.applySession (session);
-    structureChanged();
-    return true;
+    if (c == nullptr || session.findAux (auxId) == nullptr)
+        return;
+    const auto found = std::find (c->auxSends.begin(), c->auxSends.end(), auxId);
+    if ((found != c->auxSends.end()) == send)
+        return;
+    if (send)
+        c->auxSends.push_back (auxId);
+    else
+        c->auxSends.erase (std::remove (c->auxSends.begin(), c->auxSends.end(), auxId), c->auxSends.end());
+    engine.setChannelAuxSend (channelId, auxId, send);
+    valueChanged();
 }
 
 juce::Uuid MixDocument::addFx()
@@ -317,20 +313,10 @@ void MixDocument::setChannelInput (const juce::Uuid& id, int first, bool stereo)
 {
     if (auto* c = session.findChannel (id))
     {
-        const bool wasAux = ! c->aux.isNull();
-        c->aux = juce::Uuid::null();
         c->inputFirst = juce::jlimit (0, MixSession::maxDeviceChannels - (stereo ? 2 : 1), first);
         c->stereo = stereo;
-        if (wasAux)
-        {
-            engine.applySession (session);
-            structureChanged();
-        }
-        else
-        {
-            engine.setChannelInput (id, c->inputFirst, stereo);
-            valueChanged();
-        }
+        engine.setChannelInput (id, c->inputFirst, stereo);
+        valueChanged();
     }
 }
 
@@ -358,23 +344,27 @@ void MixDocument::setAuxOn (const juce::Uuid& id, bool on)
     }
 }
 
-void MixDocument::setAuxInput (const juce::Uuid& id, int first, bool stereo)
+void MixDocument::setAuxOutput (const juce::Uuid& id, const MixOutput& output)
 {
     if (auto* a = session.findAux (id))
     {
-        first = juce::jlimit (0, MixSession::maxDeviceChannels - (stereo ? 2 : 1), first);
-        if (a->inputFirst == first && a->stereo == stereo)
+        a->output = output;
+        a->output.directFirst = juce::jlimit (0, MixSession::maxDeviceChannels - 2, output.directFirst);
+        engine.setAuxOutput (id, a->output);
+        valueChanged();
+    }
+}
+
+void MixDocument::setAuxPan (const juce::Uuid& id, double pan)
+{
+    if (auto* a = session.findAux (id))
+    {
+        pan = juce::jlimit (-1.0, 1.0, std::isfinite (pan) ? pan : 0.0);
+        if (a->pan == pan)
             return;
-        a->inputFirst = first;
-        a->stereo = stereo;
-        for (auto& c : session.channels)
-            if (c.aux == id)
-            {
-                c.inputFirst = first;
-                c.stereo = stereo;
-            }
-        engine.setAuxInput (id, first, stereo);
-        structureChanged();
+        a->pan = pan;
+        engine.setAuxPan (id, pan);
+        valueChanged();
     }
 }
 

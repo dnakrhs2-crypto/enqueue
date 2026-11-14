@@ -25,8 +25,8 @@ class MonitorOutput;
 
 /** The live graph driven by one capture device, with an optional independent monitor:
 
-        aux: device input(s) -> aux chain -> meter -> ON/OFF ramp -> stereo tap (no output or sends)
-        device input(s) or aux tap -> [pre tap] -> channel VST3 chain -> [post tap] -> mic ON/OFF ramp -> pan -> master bus / direct output pair
+        mic: device input(s) -> [FX pre tap] -> chain -> meter / [FX post tap] -> mic ON/OFF ramp -> [aux sends] -> pan -> master bus / direct output pair
+        aux: sum of stereo mic sends -> aux chain -> meter -> ON/OFF ramp -> balance -> master bus / direct output pair
         FX channel: sum of sends -> FX chain -> return amount -> master bus / direct output pair
         master bus -> master chain -> main output pair
 
@@ -141,8 +141,10 @@ public:
     bool areAllChannelsMuted() const noexcept { return allChannelsMuted.load (std::memory_order_relaxed); }
     bool areAllFxMuted() const noexcept { return allFxMuted.load (std::memory_order_relaxed); }
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
+    void setChannelAuxSend (const juce::Uuid& channelId, const juce::Uuid& auxId, bool send);
     void setAuxOn (const juce::Uuid& id, bool on);
-    void setAuxInput (const juce::Uuid& id, int first, bool stereo);
+    void setAuxOutput (const juce::Uuid& id, const MixOutput& output);
+    void setAuxPan (const juce::Uuid& id, double pan);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
     void setChannelPan (const juce::Uuid& id, double pan);
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);
@@ -200,15 +202,24 @@ private:
         float current = 0.0f;   // audio thread: the level the last block ended on (a change ramps across the block)
     };
 
+    struct AuxSend
+    {
+        std::atomic<bool> enabled { false };
+        float current = 0.0f;   // audio thread: the same duration as the mic ON/OFF ramp
+    };
+
     struct AuxNode
     {
         juce::Uuid id;
         std::atomic<bool> on { true };
-        std::atomic<int> inputFirst { 0 };
-        std::atomic<bool> stereo { false };
+        std::atomic<float> pan { 0.0f };
+        std::atomic<bool> toMaster { true }, direct { false };
+        std::atomic<int> directFirst { 2 };
         std::unique_ptr<PluginChain> chain = std::make_unique<PluginChain>();
-        juce::AudioBuffer<float> tap;   // sized outside the callback; one prepared chunk, always two channels
+        juce::AudioBuffer<float> bus;   // sized outside the callback; one prepared chunk, always two channels
         float onGain = 1.0f;   // audio thread
+        std::array<float, 2> panCurrent { 1.0f, 1.0f }, panTarget { 1.0f, 1.0f };
+        int panRemaining = 0;
         MeterCell meter;
     };
 
@@ -219,13 +230,12 @@ private:
         std::atomic<bool> muted { false };   // by the mic mute group: silent like OFF, the switch untouched
         std::atomic<int> inputFirst { 0 };
         std::atomic<bool> stereo { false };
-        bool fromAux = false;   // routing changes only under the graph lock
-        AuxNode* aux = nullptr; // resolved during applySession; null with fromAux means missing, hence silence
         std::atomic<float> pan { 0.0f };
         std::atomic<bool> toMaster { true }, direct { false };
         std::atomic<int> directFirst { 2 };
         std::unique_ptr<PluginChain> chain = std::make_unique<PluginChain>();
         std::array<Send, (size_t) maxFx> sends;
+        std::array<AuxSend, (size_t) maxAux> auxSends;
         float onGain = 1.0f;   // audio thread
         std::array<float, 2> panCurrent { 1.0f, 1.0f }, panTarget { 1.0f, 1.0f };   // audio thread: gain ramps continue across blocks
         int panRemaining = 0;   // samples left in the 10 ms ramp

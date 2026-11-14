@@ -1,0 +1,8 @@
+<h2>LiveMix 0.24.1</h2>
+<ul>
+  <li><b>억스 채널 방향을 바꿨습니다.</b> 이제 마이크 채널이 억스로 보냅니다. 마이크 카드 ‘출력’ 칸의 AUX1~4 칩을 켜면 그 마이크 소리가 억스로 들어가고, ‘마스터’를 끄면 억스로만 보냅니다(send only). 억스 카드의 ‘보내는 마이크 채널’ 칩으로도 같은 연결을 켜고 끌 수 있습니다.</li>
+  <li><b>억스 채널.</b> 보내온 마이크 채널들을 모아 자기 VST3 체인과 ON/OFF를 거쳐, 팬을 지나 마스터(또는 직접 출력)로 나갑니다. 마이크 채널을 끄거나 뮤트하면 억스로도 가지 않습니다. 설정의 핫키에서 억스마다 ON/OFF 핫키를 정할 수 있습니다. 억스에는 장치 입력이 없습니다.</li>
+  <li><b>0.24.0에서 만든 억스.</b> 이름과 체인은 그대로 남고, 억스를 입력으로 받던 마이크 채널은 원래 장치 입력으로 돌아갑니다. 억스로 보낼 마이크는 칩으로 다시 켜 주세요.</li>
+  <li><b>English.</b> Aux channels now work the other way round: mic channels send to them. Turn on the AUX1–4 chips in a mic card's Output column to send that mic to an aux, and turn Master off to send it only to the aux. The aux card's ‘Mic channels sending to it’ chips switch the same sends. An aux sums the mics sending to it through its own VST3 chain and ON/OFF, then its pan, to the master or a direct output; a mic that is off or muted sends nothing. Each aux can have an ON/OFF hotkey in Settings. Auxes made in 0.24.0 keep their name and chain, and the mic channels that took one go back to their device input.</li>
+  <li><b>日本語.</b> AUXチャンネルの向きを変えました。マイクチャンネルからAUXへ送ります。マイクカードの「出力」欄のAUX1〜4チップをオンにするとそのマイクの音がAUXへ送られ、「マスター」をオフにするとAUXにだけ送ります(センドオンリー)。AUXカードの「送るマイクチャンネル」チップでも同じ送りを切り替えられます。AUXは送られてきたマイクをまとめて自分のVST3チェーンとON/OFFを通し、パンを経てマスター(またはダイレクト出力)へ出します。オフやミュート中のマイクは送られません。設定のホットキーでAUXごとにON/OFFホットキーを設定できます。0.24.0で作ったAUXは名前とチェーンが残り、AUXを入力にしていたマイクチャンネルは元のデバイス入力に戻ります。</li>
+</ul>

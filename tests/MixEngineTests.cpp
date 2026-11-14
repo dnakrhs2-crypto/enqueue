@@ -575,30 +575,29 @@ public:
 
     void runAuxTests()
     {
-        beginTest ("aux fans out in the same chunk through independent chains and pans, regardless of channel or aux order");
+        beginTest ("one send-only mic feeds two independent aux chains in the same chunk, before mic pan and master chain");
         {
             MixSession s;
-            s.addChannel ("Talk");
-            s.addAux ("Unused");
-            s.addAux ("Input");
-            s.addChannel ("Room");
-            const auto aux = s.auxes[1].id, talk = s.channels[0].id, room = s.channels[1].id;
-            s.auxes[1].stereo = true;
-            s.channels[0].aux = s.channels[1].aux = aux;
-            // Deliberately stale fallback fields: the pan law comes from the source, even before sanitise.
+            s.addChannel ("Input");
+            s.addAux ("Room");
+            s.addAux ("Hall");
+            const auto mic = s.channels[0].id, room = s.auxes[0].id, hall = s.auxes[1].id;
+            s.channels[0].stereo = true;
             s.channels[0].pan = -1.0;
-            s.channels[1].pan = 1.0;
-            s.channels[0].output = { true, true, 2 };
-            s.channels[1].output = { true, true, 4 };
+            s.channels[0].output.master = false;
+            s.channels[0].auxSends = { room, hall };
+            s.auxes[0].output = { true, true, 2 };
+            s.auxes[1].output = { true, true, 4 };
             MixEngine engine;
             engine.prepare (sampleRate, 64);
             engine.applySession (s, nullptr, true);
-            auto* auxChain = engine.getAuxChain (aux);
-            auto* talkChain = engine.getChannelChain (talk);
-            auto* roomChain = engine.getChannelChain (room);
-            auxChain->addPlugin (std::make_unique<TestGainPlugin> (0.5f));
-            talkChain->addPlugin (std::make_unique<TestGainPlugin> (0.25f));
-            roomChain->addPlugin (std::make_unique<TestGainPlugin> (0.75f));
+            auto* micChain = engine.getChannelChain (mic);
+            auto* roomChain = engine.getAuxChain (room);
+            auto* hallChain = engine.getAuxChain (hall);
+            micChain->addPlugin (std::make_unique<TestGainPlugin> (0.5f));
+            roomChain->addPlugin (std::make_unique<TestGainPlugin> (0.25f));
+            hallChain->addPlugin (std::make_unique<TestGainPlugin> (0.75f));
+            engine.getMasterChain().addPlugin (std::make_unique<TestGainPlugin> (0.5f));
             juce::AudioBuffer<float> in (2, 173), out (6, 173);
             for (int pass = 0; pass < 2; ++pass)
             {
@@ -609,48 +608,49 @@ public:
                 }
                 engine.renderBlock (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 6, 173);
                 for (int n = 0; n < 173; ++n)
-                {
-                    expectWithinAbsoluteError (out.getSample (0, n), in.getSample (0, n) * 0.125f, 1e-6f);
-                    expectWithinAbsoluteError (out.getSample (1, n), in.getSample (1, n) * 0.375f, 1e-6f);
-                    expectWithinAbsoluteError (out.getSample (2, n), out.getSample (0, n), 1e-6f);
-                    expectWithinAbsoluteError (out.getSample (5, n), out.getSample (1, n), 1e-6f);
-                    expectWithinAbsoluteError (out.getSample (3, n), 0.0f, 1e-6f);
-                    expectWithinAbsoluteError (out.getSample (4, n), 0.0f, 1e-6f);
-                }
-                std::reverse (s.channels.begin(), s.channels.end());
+                    for (int side = 0; side < 2; ++side)
+                    {
+                        expectWithinAbsoluteError (out.getSample (side, n), in.getSample (side, n) * 0.25f, 1e-6f);
+                        expectWithinAbsoluteError (out.getSample (2 + side, n), in.getSample (side, n) * 0.125f, 1e-6f);
+                        expectWithinAbsoluteError (out.getSample (4 + side, n), in.getSample (side, n) * 0.375f, 1e-6f);
+                    }
                 std::reverse (s.auxes.begin(), s.auxes.end());
                 engine.applySession (s);
-                expect (engine.getAuxChain (aux) == auxChain && engine.getChannelChain (talk) == talkChain
-                        && engine.getChannelChain (room) == roomChain);
+                expect (engine.getChannelChain (mic) == micChain && engine.getAuxChain (room) == roomChain
+                        && engine.getAuxChain (hall) == hallChain);
             }
-            engine.prepare (sampleRate, blockSize);   // taps resize with the other graph buffers
+            engine.prepare (sampleRate, blockSize);   // buses resize outside the callback with the rest of the graph
             Io io;
             io.in.clear();
-            io.setInput (2, 0.4f);
-            engine.setAuxInput (aux, 2, false);
+            io.setInput (0, 0.8f);
+            io.setInput (1, 0.4f);
+            engine.setChannelOutput (mic, { true, false, 2 });
             render (engine, io, 3);
-            expectWithinAbsoluteError (io.last (0), 0.4f * 0.5f * 0.25f * std::sqrt (2.0f), 1e-6f);
-            expectWithinAbsoluteError (io.last (1), 0.4f * 0.5f * 0.75f * std::sqrt (2.0f), 1e-6f);
+            expectWithinAbsoluteError (io.last (0), 0.4f, 1e-6f);   // panned dry mic + aux sum, then master gain
+            expectWithinAbsoluteError (io.last (1), 0.1f, 1e-6f);   // sends retain the right side despite mic pan
 
-            s.removeAux (aux);
+            s.removeAux (room);
             engine.applySession (s);
             render (engine, io);
-            expectWithinAbsoluteError (io.out.getMagnitude (0, blockSize), 0.0f, 1e-6f);
-            expect (engine.getAuxChain (aux) == nullptr);
-            expect (s.findChannel (talk)->aux == aux && s.findChannel (room)->aux == aux);
-            expectWithinAbsoluteError (engine.readAuxMeter (aux).left, 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.last (0), 0.15f, 1e-6f);
+            expectWithinAbsoluteError (io.last (1), 0.075f, 1e-6f);
+            expect (s.channels[0].auxSends == std::vector<juce::Uuid> { hall });
+            expect (engine.getAuxChain (room) == nullptr && engine.getAuxChain (hall) == hallChain);
+            expectWithinAbsoluteError (io.last (2), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (engine.readAuxMeter (room).left, 0.0f, 1e-6f);
         }
 
-        beginTest ("aux OFF silences both receivers after the mic ramp; meters and skip-chain preference match microphones");
+        beginTest ("aux OFF silences only that aux with a ramp; pre-switch meters and chain sleeping match microphones");
         for (const bool skip : { false, true })
         {
             MixSession s;
+            s.addChannel();
             s.addAux();
-            s.addChannel();
-            s.addChannel();
-            const auto aux = s.auxes[0].id;
-            s.channels[0].aux = s.channels[1].aux = aux;
-            s.channels[1].output = { false, true, 2 };
+            s.addAux();
+            const auto aux = s.auxes[0].id, other = s.auxes[1].id;
+            s.channels[0].auxSends = { aux, other };
+            s.auxes[0].output = { true, true, 2 };
+            s.auxes[1].output = { true, true, 4 };
             MixEngine engine;
             engine.prepare (sampleRate, blockSize);
             engine.setSkipChainWhenOff (skip);
@@ -658,49 +658,53 @@ public:
             auto plugin = std::make_unique<TestGainPlugin> (0.5f);
             auto* gain = plugin.get();
             engine.getAuxChain (aux)->addPlugin (std::move (plugin));
+            engine.getAuxChain (other)->addPlugin (std::make_unique<TestGainPlugin> (0.25f));
             Io io;
             io.in.clear();
             io.setInput (0, 0.8f);
             render (engine, io);
-            expectWithinAbsoluteError (io.first (0), 0.4f, 1e-6f);
+            expectWithinAbsoluteError (io.first (0), 1.4f, 1e-6f);
             expectWithinAbsoluteError (io.first (2), 0.4f, 1e-6f);
             engine.setAuxOn (aux, false);
             render (engine, io);
-            expectWithinAbsoluteError (io.first (0), 0.4f, 1e-6f);
-            expectWithinAbsoluteError (io.last (0), 0.0f, 0.002f);
+            expectWithinAbsoluteError (io.first (2), 0.4f, 1e-6f);
+            expectWithinAbsoluteError (io.last (2), 0.0f, 0.002f);
             const int processed = gain->processCount;
             engine.readAuxMeter (aux);
             render (engine, io, 2);
             expectEquals (gain->processCount, processed + (skip ? 0 : 2));
-            expectWithinAbsoluteError (io.out.getMagnitude (0, blockSize), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.last (0), 1.0f, 1e-6f);
+            expectWithinAbsoluteError (io.last (2), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.last (4), 0.2f, 1e-6f);
             const auto meter = engine.readAuxMeter (aux);
             expectWithinAbsoluteError (meter.left, skip ? 0.8f : 0.4f, 1e-6f);
             expectWithinAbsoluteError (meter.right, meter.left, 1e-6f);
             engine.setAuxOn (aux, true);
             render (engine, io, 2);
-            expectWithinAbsoluteError (io.last (0), 0.4f, 1e-6f);
+            expectWithinAbsoluteError (io.last (0), 1.4f, 1e-6f);
             expectWithinAbsoluteError (io.last (2), 0.4f, 1e-6f);
             s.auxes[0].on = false;
             engine.applySession (s, nullptr, true);
             render (engine, io);
-            expectWithinAbsoluteError (io.out.getMagnitude (0, blockSize), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.out.getMagnitude (2, 0, blockSize), 0.0f, 1e-6f);
         }
 
-        beginTest ("aux receivers retain ON/OFF, mute groups and pre/post sends; global mutes never sleep the aux");
+        beginTest ("two mic sends sum; OFF, mute group and all-mute gate sends even when chains sleep; FX sends stay pre/post");
+        for (const bool skip : { false, true })
         {
             MixEngine engine;
+            engine.setSkipChainWhenOff (skip);
             MixDocument doc (engine);
             doc.applyToEngine();
             const auto first = doc.getSession().channels[0].id, fx = doc.getSession().fx[0].id;
             const auto aux = doc.addAux(), second = doc.addChannel();
-            expect (doc.setChannelAux (first, aux) && doc.setChannelAux (second, aux));
+            doc.setChannelAuxSend (first, aux, true);
+            doc.setChannelAuxSend (second, aux, true);
             doc.setChannelOutput (second, { false, true, 2 });
             doc.setFxOutput (fx, { false, true, 4 });
             doc.setSend (first, fx, 0.5, true);
             doc.setSend (second, fx, 0.5, false);
-            auto plugin = std::make_unique<TestGainPlugin> (0.5f);
-            auto* auxGain = plugin.get();
-            engine.getAuxChain (aux)->addPlugin (std::move (plugin));
+            engine.getAuxChain (aux)->addPlugin (std::make_unique<TestGainPlugin> (0.5f));
             engine.getChannelChain (first)->addPlugin (std::make_unique<TestGainPlugin> (0.25f));
             engine.getChannelChain (second)->addPlugin (std::make_unique<TestGainPlugin> (0.75f));
             MuteGroups groups (doc);
@@ -708,49 +712,142 @@ public:
             Io io;
             io.in.clear();
             io.setInput (0, 0.8f);
-            const auto check = [&] (float talk, float room, float send)
+            io.setInput (1, 0.4f);
+            const auto check = [&] (float master, float direct, float send, float auxLevel)
             {
+                engine.readAuxMeter (aux);
                 render (engine, io, 3);
-                expectWithinAbsoluteError (io.last (0), talk, 1e-6f);
-                expectWithinAbsoluteError (io.last (2), room, 1e-6f);
+                engine.readAuxMeter (aux);
+                render (engine, io);
+                expectWithinAbsoluteError (io.last (0), master, 1e-6f);
+                expectWithinAbsoluteError (io.last (2), direct, 1e-6f);
                 expectWithinAbsoluteError (io.last (4), send, 1e-6f);
+                expectWithinAbsoluteError (engine.readAuxMeter (aux).left, auxLevel, 1e-6f);
             };
-            check (0.1f, 0.3f, 0.35f);
+            check (0.45f, 0.3f, 0.55f, 0.25f);
+            doc.setChannelOn (first, false);
+            check (0.15f, 0.3f, 0.15f, 0.15f);
             doc.setChannelOn (second, false);
-            check (0.1f, 0.0f, 0.2f);
-            groups.set (MuteGroups::Group::mic, true);
-            check (0.0f, 0.0f, 0.0f);
-            groups.set (MuteGroups::Group::mic, false);
+            check (0.0f, 0.0f, 0.0f, 0.0f);
+            doc.setChannelAuxSend (first, aux, false);   // editing while off must not restore an old send level
+            doc.setChannelOn (first, true);
+            check (0.2f, 0.0f, 0.4f, 0.0f);
+            doc.setChannelAuxSend (first, aux, true);
             doc.setChannelOn (second, true);
-            check (0.1f, 0.3f, 0.35f);
+            groups.set (MuteGroups::Group::mic, true);
+            check (0.15f, 0.3f, 0.15f, 0.15f);
+            groups.set (MuteGroups::Group::mic, false);
+            check (0.45f, 0.3f, 0.55f, 0.25f);
             groups.setAll (MuteGroups::Group::mic, true);
-            const auto before = auxGain->processCount;
-            check (0.0f, 0.0f, 0.0f);
-            expectEquals (auxGain->processCount, before + 3);
+            check (0.0f, 0.0f, 0.0f, 0.0f);
+            doc.setChannelAuxSend (second, aux, false);
+            render (engine, io);
+            doc.setChannelAuxSend (second, aux, true);
+            render (engine, io);
             groups.setAll (MuteGroups::Group::mic, false);
             groups.setAll (MuteGroups::Group::fx, true);
-            check (0.1f, 0.3f, 0.0f);
+            check (0.45f, 0.3f, 0.0f, 0.25f);
             groups.setAll (MuteGroups::Group::fx, false);
             doc.setAuxOn (aux, false);
-            check (0.0f, 0.0f, 0.0f);
+            check (0.2f, 0.3f, 0.55f, skip ? 0.5f : 0.25f);
             doc.setAuxOn (aux, true);
-            check (0.1f, 0.3f, 0.35f);
+            check (0.45f, 0.3f, 0.55f, 0.25f);
         }
 
-        beginTest ("an aux without receivers never reaches master, direct outputs or FX sends");
+        beginTest ("aux balance uses the stereo law and live document output edits reach master and direct pairs");
         {
             MixEngine engine;
+            MixDocument doc (engine);
+            doc.applyToEngine();
+            const auto mic = doc.getSession().channels[0].id, aux = doc.addAux();
+            doc.setChannelInput (mic, 0, true);
+            doc.setChannelOutput (mic, { false, false, 2 });
+            doc.setChannelAuxSend (mic, aux, true);
+            doc.setAuxOutput (aux, { true, true, 2 });
+            Io io;
+            io.in.clear();
+            io.setInput (0, 0.8f);
+            io.setInput (1, 0.4f);
+            render (engine, io, 3);
+            for (const double pan : { -1.0, -0.5, 0.0, 0.5, 1.0 })
+            {
+                const float before = io.last (2);
+                doc.setAuxPan (aux, pan);
+                render (engine, io);
+                expectWithinAbsoluteError (io.first (2), before, 1e-6f);
+                render (engine, io, 3);
+                const float attenuated = std::abs (pan) == 1.0 ? 0.0f
+                    : (float) std::cos (pan * juce::MathConstants<double>::halfPi);
+                const float left = 0.8f * (pan > 0.0 ? attenuated : 1.0f);
+                const float right = 0.4f * (pan < 0.0 ? attenuated : 1.0f);
+                expectWithinAbsoluteError (io.last (0), left, 1e-6f);
+                expectWithinAbsoluteError (io.last (1), right, 1e-6f);
+                expectWithinAbsoluteError (io.last (2), left, 1e-6f);
+                expectWithinAbsoluteError (io.last (3), right, 1e-6f);
+            }
+            doc.setAuxOutput (aux, { false, true, 4 });
+            render (engine, io);
+            expectWithinAbsoluteError (io.last (0), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.last (3), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.last (5), 0.4f, 1e-6f);
+        }
+
+        beginTest ("live aux send toggles ramp over the mic switch duration across chunks, preserving the first sample");
+        {
+            MixEngine engine;
+            engine.prepare (sampleRate, 48);   // five chunks in the 5 ms switch ramp
+            MixDocument doc (engine);
+            doc.applyToEngine();
+            const auto mic = doc.getSession().channels[0].id, aux = doc.addAux(), other = doc.addAux();
+            doc.setChannelOutput (mic, { false, false, 2 });
+            doc.setAuxOutput (other, { false, true, 2 });
+            doc.setChannelAuxSend (mic, other, true);
+            juce::AudioBuffer<float> in (1, 48), out (4, 48);
+            juce::FloatVectorOperations::fill (in.getWritePointer (0), 0.8f, 48);
+            const auto run = [&] { engine.renderBlock (in.getArrayOfReadPointers(), 1, out.getArrayOfWritePointers(), 4, 48); };
+            for (int b = 0; b < 6; ++b) run();
+            for (const bool enabled : { true, false })
+            {
+                doc.setChannelAuxSend (mic, aux, enabled);
+                for (int b = 0; b < 5; ++b)
+                {
+                    run();
+                    for (int n = 0; n < 48; ++n)
+                    {
+                        const float ramp = (float) (b * 48 + n) / 240.0f;
+                        expectWithinAbsoluteError (out.getSample (0, n), 0.8f * (enabled ? ramp : 1.0f - ramp), 2e-6f);
+                        expectWithinAbsoluteError (out.getSample (2, n), 0.8f, 1e-6f);
+                    }
+                }
+                run();
+                expectWithinAbsoluteError (out.getSample (0, 0), enabled ? 0.8f : 0.0f, 1e-6f);
+            }
+            // Removing an earlier aux must keep the remaining send with its own bus and gain.
+            doc.removeAux (aux);
+            run();
+            expectWithinAbsoluteError (out.getSample (2, 0), 0.8f, 1e-6f);
+            expectWithinAbsoluteError (out.getSample (0, 0), 0.0f, 1e-6f);
+        }
+
+        beginTest ("aux with no sends, including a 0.24.0 file, is silent while its mic keeps the copied device input");
+        {
             MixSession s;
-            s.addAux();
-            s.addFx();
-            s.fx[0].output = { true, true, 2 };
+            expect (MixSession::fromJson (R"json({
+                "app":"LiveMix","version":4,
+                "channels":[{"input":{"first":2,"stereo":false,"aux":"22222222222222222222222222222222"}}],
+                "auxes":[{"id":"22222222222222222222222222222222","name":"Input","input":{"first":0,"stereo":true}}]
+            })json", s).wasOk());
+            s.auxes[0].output = { true, true, 2 };
+            MixEngine engine;
             engine.applySession (s, nullptr, true);
             Io io;
             io.in.clear();
             io.setInput (0, 0.8f);
+            io.setInput (2, 0.3f);
             render (engine, io);
-            expectWithinAbsoluteError (engine.readAuxMeter (s.auxes[0].id).left, 0.8f, 1e-6f);
-            expectWithinAbsoluteError (io.out.getMagnitude (0, blockSize), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (io.first (0), 0.3f, 1e-6f);
+            expectWithinAbsoluteError (io.last (2), 0.0f, 1e-6f);
+            expectWithinAbsoluteError (engine.readAuxMeter (s.auxes[0].id).left, 0.0f, 1e-6f);
         }
     }
 

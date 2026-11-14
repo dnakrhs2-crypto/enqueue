@@ -215,7 +215,8 @@ public:
             expect (! rig.anyMicMuted() && ! mic->getToggleState());
 
             // the ids never clash with the other global hotkeys
-            expectGreaterThan (MainComponent::allMicsHotkeyId, TrackHotkeys::lastId);
+            expectGreaterThan (MainComponent::allMicsHotkeyId, TrackHotkeys::lastMicFxId);
+            expectGreaterThan (TrackHotkeys::firstAuxId, MainComponent::allFxHotkeyId);
             expectEquals (MainComponent::allFxHotkeyId, MainComponent::allMicsHotkeyId + 1);
         }
 

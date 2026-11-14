@@ -57,7 +57,6 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     addAuxButton.setButtonText (tr ("+ 억스 채널 추가"));
     addAuxButton.setWantsKeyboardFocus (false);
     addAuxButton.setColour (juce::TextButton::buttonColourId, Palette::background);
-    addAuxButton.setTooltip (tr ("억스 채널: 마스터로 나가지 않고, 받는 마이크 채널의 입력으로만 쓰입니다"));
     addAuxButton.onClick = [this]
     {
         const auto id = document.addAux();
@@ -444,7 +443,7 @@ void MainComponent::rebuildCards()
             cardsHolder.addAndMakeVisible (*card);
         }
 
-        card->setDeviceChannels (inputNames);   // and re-reads the aux
+        card->setDeviceChannels (outputNames);   // its direct output pair; and re-reads the aux
         nextAux.push_back (std::move (card));
     }
 
@@ -554,7 +553,7 @@ void MainComponent::layoutCards()
     addAuxButton.setBounds (width - half, y, half, 56);
     addChannelButton.setEnabled ((int) cards.size() < MixSession::maxChannels);
     addAuxButton.setEnabled ((int) auxCards.size() < MixSession::maxAux);
-    addAuxButton.setTooltip (addAuxButton.isEnabled() ? tr ("억스 채널: 마스터로 나가지 않고, 받는 마이크 채널의 입력으로만 쓰입니다")
+    addAuxButton.setTooltip (addAuxButton.isEnabled() ? juce::String()
                                                       : trf ("억스 채널은 최대 {0}개입니다", MixSession::maxAux));   // greyed out: say why
     y += 56;
     cardsHolder.setSize (width, juce::jmax (1, y));
@@ -756,7 +755,7 @@ void MainComponent::askRemoveAux (const juce::Uuid& id)
     juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
                                       .withTitle (tr ("억스 채널 삭제"))
-                                      .withMessage (tr ("이 억스 채널과 그 플러그인 설정이 지워집니다.\n이 억스를 받던 마이크 채널은 같은 장치 입력을 직접 받습니다.\n삭제할까요?"))
+                                      .withMessage (tr ("이 억스 채널과 그 플러그인 설정이 지워집니다.\n삭제할까요?"))
                                       .withButton (tr ("삭제"))
                                       .withButton (tr ("취소")),
                                   [safeThis, id] (int result)
@@ -764,18 +763,7 @@ void MainComponent::askRemoveAux (const juce::Uuid& id)
         if (safeThis == nullptr || result != 1)
             return;
 
-        // its mics first take the device input it had (their saved input is the aux's), so none goes silent
-        auto& doc = safeThis->document;
-        std::vector<juce::Uuid> receivers;
-
-        for (const auto& c : doc.getSession().channels)
-            if (c.aux == id)
-                receivers.push_back (c.id);
-
-        for (const auto& r : receivers)
-            doc.setChannelAux (r, juce::Uuid::null());
-
-        doc.removeAux (id);
+        safeThis->document.removeAux (id);   // the mics' sends to it go with it
     });
 }
 
@@ -2160,7 +2148,7 @@ void MainComponent::hotkeyPressed (int id)
             {
                 togglePluginGroupEverywhere (id - firstPluginGroupHotkeyId);
             }
-            else if (id >= firstMasterPluginGroupHotkeyId && id <= lastHotkeyId)
+            else if (id >= firstMasterPluginGroupHotkeyId && id < firstMasterPluginGroupHotkeyId + MixSession::maxPluginGroups)
             {
                 toggleMasterPluginGroup (id - firstMasterPluginGroupHotkeyId);
             }

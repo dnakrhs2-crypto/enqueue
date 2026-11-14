@@ -1,8 +1,17 @@
 #include "Localisation.h"
 #include "ChannelCard.h"
 
+#include <algorithm>
+
 namespace gocue::livemix
 {
+
+/** An aux channel this mic can feed, under 마스터 / 직접 출력: the aux card's badge, lit while the mic sends to it. */
+struct ChannelCard::AuxSendChip : public Chip
+{
+    explicit AuxSendChip (const juce::Uuid& id) : auxId (id) {}
+    juce::Uuid auxId;
+};
 
 /** One "이펙터" row: FX badge + name, the send fader, the value, the 프리/포스트 chip. */
 struct ChannelCard::SendRow : public juce::Component
@@ -257,46 +266,8 @@ void ChannelCard::refresh()
     micButton.setOn (c->on);
 
     fillChannelCombo (inputCombo, inputNames, c->stereo, MixSession::maxDeviceChannels);
-    int auxIndex = -1;
-
-    if (! session.auxes.empty() || ! c->aux.isNull())
-    {
-        // the aux channels after the device inputs: picking one makes this mic take that aux's sound
-        inputCombo.addSeparator();
-        inputCombo.addSectionHeading (tr ("억스 채널"));
-
-        for (size_t i = 0; i < session.auxes.size(); ++i)
-        {
-            // its card's badge first, like the receiver chips ('1  보컬'): a name cut short in the 160 px box still says which
-            inputCombo.addItem ("AUX" + juce::String ((int) i + 1) + "  " + session.auxes[i].name, auxItemBase + (int) i);
-
-            if (session.auxes[i].id == c->aux)
-                auxIndex = (int) i;
-        }
-    }
-
-    if (c->aux.isNull())
-    {
-        selectSavedChannel (inputCombo, inputNames, c->inputFirst, c->stereo);   // its text: plain, or yellow for an input the device lacks
-        inputCombo.removeColour (juce::ComboBox::outlineColourId);
-        inputCombo.setTooltip ({});
-    }
-    else
-    {
-        // fed by an aux: the box edged in the accent, like a lit routing chip; an aux the session does not have
-        // (a file from elsewhere) reads yellow - the mic is silent until another input is picked
-        inputCombo.setSelectedId (auxIndex >= 0 ? auxItemBase + auxIndex : 0, juce::dontSendNotification);
-        if (auxIndex < 0)
-            inputCombo.setText (tr ("억스 (없음)"), juce::dontSendNotification);
-        inputCombo.setColour (juce::ComboBox::textColourId, auxIndex >= 0 ? Palette::text : Palette::meterYellow);
-        inputCombo.setColour (juce::ComboBox::outlineColourId, auxIndex >= 0 ? Palette::accent : Palette::meterYellow);
-        inputCombo.setTooltip (auxIndex >= 0 ? inputCombo.getText() : juce::String());   // the whole 'AUX1  name' when the box cuts it
-    }
-
+    selectSavedChannel (inputCombo, inputNames, c->inputFirst, c->stereo);   // its text: plain, or yellow for an input the device lacks
     stereoToggle.setToggleState (c->stereo, juce::dontSendNotification);
-    stereoToggle.setEnabled (c->aux.isNull());   // an aux decides mono / stereo for every mic it feeds
-    stereoToggle.setTooltip (c->aux.isNull() ? tr ("켜면 입력 두 개(왼쪽·오른쪽)를 한 채널로 씁니다")
-                                             : tr ("억스에서 받는 동안은 억스의 스테레오 설정을 따릅니다"));
 
     masterChip.setToggleState (c->output.master, juce::dontSendNotification);
     directChip.setToggleState (c->output.direct, juce::dontSendNotification);
@@ -324,12 +295,17 @@ void ChannelCard::refresh()
 
     rebuildChain();
     rebuildSends();
+    rebuildAuxSends();
     for (auto* child : getChildren())
         child->setAlpha (c->on || child == &micButton ? 1.0f : 0.62f);
 
     for (auto& send : sends)   // a send into an OFF FX reaches nothing for now: dimmed like an OFF mic
         if (const auto* f = session.findFx (send->fxId); f != nullptr && ! f->on)
             send->setAlpha (0.62f);
+
+    for (auto& chip : auxChips)   // the same for an OFF aux
+        if (const auto* a = session.findAux (chip->auxId); a != nullptr && ! a->on)
+            chip->setAlpha (0.62f);
 
     resized();
     repaint();
@@ -412,6 +388,53 @@ void ChannelCard::rebuildSends()
         row->resized();
 }
 
+void ChannelCard::rebuildAuxSends()
+{
+    const auto* c = channel();
+    const auto& session = document.getSession();
+
+    if (c == nullptr)
+        return;
+
+    // one chip per aux channel, in card order, reused by aux id: the chip clicked may be the one refreshed
+    std::vector<std::unique_ptr<AuxSendChip>> next;
+
+    for (size_t i = 0; i < session.auxes.size(); ++i)
+    {
+        const auto& a = session.auxes[i];
+        std::unique_ptr<AuxSendChip> chip;
+
+        for (auto& existing : auxChips)
+            if (existing != nullptr && existing->auxId == a.id)
+                chip = std::move (existing);
+
+        if (chip == nullptr)
+        {
+            chip = std::make_unique<AuxSendChip> (a.id);
+            chip->onClick = [this, raw = chip.get()]
+            {
+                if (! refreshing)   // the chip has already flipped: lit = send to that aux
+                    document.setChannelAuxSend (channelId, raw->auxId, raw->getToggleState());
+            };
+            addAndMakeVisible (*chip);
+        }
+
+        const auto badgeText = "AUX" + juce::String ((int) i + 1);
+        chip->setButtonText (badgeText);
+        chip->setTooltip (badgeText + "  " + a.name);   // the chip shows the badge; the aux card's name is here
+        chip->setToggleState (std::find (c->auxSends.begin(), c->auxSends.end(), a.id) != c->auxSends.end(),
+                              juce::dontSendNotification);
+        next.push_back (std::move (chip));
+    }
+
+    auxChips = std::move (next);   // the chips of removed auxes go with the old list
+}
+
+int ChannelCard::outputHeight() const
+{
+    return 26 + 34 + (auxChips.empty() ? 0 : 4 + 30) + 4 + 34;
+}
+
 int ChannelCard::sendNameWidth() const
 {
     // one width for every send row of the card, so the faders start in one column: the longest name, 56 to 140
@@ -430,17 +453,6 @@ void ChannelCard::commitInput()
 
     const auto* c = channel();
     const int sel = inputCombo.getSelectedId();
-
-    if (sel >= auxItemBase)
-    {
-        const auto& auxes = document.getSession().auxes;
-
-        if (sel - auxItemBase < (int) auxes.size())
-            document.setChannelAux (channelId, auxes[(size_t) (sel - auxItemBase)].id);
-
-        return;
-    }
-
     // no matching item (a mono input mid-toggle, a route the device no longer has): keep the channel's input rather than fall to input 1
     const int first = sel > 0 ? sel - 1 : (c != nullptr ? c->inputFirst : 0);
     document.setChannelInput (channelId, first, stereoToggle.getToggleState());
@@ -529,11 +541,11 @@ int ChannelCard::getPreferredHeight (int width) const
     const int sendRows = juce::jmax (1, (int) sends.size());
     const int fxH = 28 + sendRows * 38 - 8;
     const int chainH = chainHeightForWidth (width);
-    const int outH = 26 + 34 + 4 + 34;
+    const int outH = outputHeight();
 
     switch (layout)
     {
-        case CardLayout::wide:   return juce::jmax (132, juce::jmax (chainH, fxH)) + 24;
+        case CardLayout::wide:   return juce::jmax (132, juce::jmax (chainH, juce::jmax (fxH, outH))) + 24;
         case CardLayout::medium: return juce::jmax (132, chainH) + 16 + juce::jmax (fxH, outH) + 26;
         case CardLayout::narrow: return 114 + 96 + chainH + fxH + outH + 4 * 14 + 26;
     }
@@ -634,6 +646,21 @@ void ChannelCard::resized()
         directChip.setBounds (chipsRow.removeFromLeft (tight ? 80 : 84));
         chipsRow.removeFromLeft (6);
         directCombo.setBounds (chipsRow.withHeight (30).withY (chipsRow.getY() + 2));
+
+        if (! auxChips.empty())
+        {
+            // the auxes are more places this mic goes (before its pan): 마스터 off with an AUX lit is send-only.
+            // Badge-wide chips: four fit the wide column's 250 px.
+            r.removeFromTop (4);
+            auto auxRow = r.removeFromTop (30);
+
+            for (auto& chip : auxChips)
+            {
+                chip->setBounds (auxRow.removeFromLeft (54));
+                auxRow.removeFromLeft (6);
+            }
+        }
+
         r.removeFromTop (4);
         auto panRow = r.removeFromTop (34);
         panCaption.setBounds (panRow.removeFromLeft (34));
@@ -686,7 +713,7 @@ void ChannelCard::resized()
         area.removeFromTop (14);
         layoutFx (area.removeFromTop (28 + juce::jmax (1, (int) sends.size()) * 38 - 8));
         area.removeFromTop (14);
-        layoutOut (area, false);
+        layoutOut (area.removeFromTop (outputHeight()), false);
     }
 }
 

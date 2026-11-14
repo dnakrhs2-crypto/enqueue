@@ -309,7 +309,7 @@ public:
             }
         }
 
-        beginTest ("aux channels in the input box: picking one routes the mic, a device input takes it back, a deleted aux reads missing");
+        beginTest ("mic input stays a device input while sending to an aux; removing the aux only clears the send");
         {
             MixEngine auxEngine;
             MixDocument auxDocument (auxEngine);
@@ -319,46 +319,28 @@ public:
             auxCard.setLookAndFeel (&lookAndFeel);
             auxCard.setDeviceChannels ({ "1", "2", "3", "4" }, { "1", "2" });
             const auto aux = auxDocument.addAux();
-            auxDocument.renameAux (aux, "Input");
+            auxDocument.renameAux (aux, "Room");
+            auxDocument.setChannelAuxSend (mic, aux, true);
             auxCard.refresh();
             auto* box = childOfType<juce::ComboBox> (auxCard);
             auto* stereo = childOfType<juce::ToggleButton> (auxCard);
             expect (box != nullptr && stereo != nullptr);
             if (box != nullptr && stereo != nullptr)
             {
-                int auxItem = 0;
+                expectEquals (box->getNumItems(), 4);
                 for (int i = 0; i < box->getNumItems(); ++i)
-                    if (box->getItemText (i) == "AUX1  Input") auxItem = box->getItemId (i);
-                expect (auxItem > 0, "the aux is listed in the mic's input box under its card's badge");
-
-                box->setSelectedId (auxItem, juce::sendNotificationSync);
-                expect (auxDocument.getSession().channels[0].aux == aux);
-                auxCard.refresh();
-                expectEquals (box->getSelectedId(), auxItem);
-                expect (! stereo->isEnabled());
-                expect (box->isColourSpecified (juce::ComboBox::outlineColourId));
-                expectEquals (box->getTooltip(), juce::String ("AUX1  Input"));   // the whole name, however narrow the box
-
-                box->setSelectedId (2, juce::sendNotificationSync);   // device input 2
-                expect (auxDocument.getSession().channels[0].aux.isNull());
-                expectEquals (auxDocument.getSession().channels[0].inputFirst, 1);
-                auxCard.refresh();
+                    expect (! box->getItemText (i).contains ("AUX"));
                 expect (stereo->isEnabled());
-                expect (! box->isColourSpecified (juce::ComboBox::outlineColourId));
-                expect (box->getTooltip().isEmpty());
-                expect (box->findColour (juce::ComboBox::textColourId) == gocue::livemix::Palette::text);
-
-                expect (auxDocument.setChannelAux (mic, aux));
-                auxDocument.removeAux (aux);   // the mic still points at it: the box says so (yellow) instead of showing a device input
+                box->setSelectedId (2, juce::sendNotificationSync);
+                expectEquals (auxDocument.getSession().channels[0].inputFirst, 1);
+                expect (auxDocument.getSession().channels[0].auxSends == std::vector<juce::Uuid> { aux });
+                auxDocument.removeAux (aux);
                 auxCard.refresh();
-                expectEquals (box->getText(), ko ("억스 (없음)"));
-                expect (box->findColour (juce::ComboBox::textColourId) == gocue::livemix::Palette::meterYellow);
-
-                box->setSelectedId (3, juce::sendNotificationSync);   // a device input again: the plain colours come back
-                expect (auxDocument.getSession().channels[0].aux.isNull());
-                auxCard.refresh();
-                expect (box->findColour (juce::ComboBox::textColourId) == gocue::livemix::Palette::text);
+                expectEquals (box->getSelectedId(), 2);
+                expect (auxDocument.getSession().channels[0].auxSends.empty());
                 expect (! box->isColourSpecified (juce::ComboBox::outlineColourId));
+                box->setSelectedId (3, juce::sendNotificationSync);
+                auxCard.refresh();
 
                 // a device with fewer inputs: the saved input it lacks stays yellow (mono, and a pair missing its right
                 // input) and reads plain again once the device has it
@@ -372,6 +354,152 @@ public:
                 auxCard.refresh();
                 expect (box->findColour (juce::ComboBox::textColourId) == gocue::livemix::Palette::text);
                 auxCard.setDeviceChannels ({ "1", "2", "3", "4" }, { "1", "2" });
+            }
+            auxCard.setLookAndFeel (nullptr);
+        }
+
+        beginTest ("AUX chips under master / direct: one per aux, a click sends to it, master off keeps the sends, the input box lists devices only");
+        {
+            MixEngine auxEngine;
+            MixDocument auxDocument (auxEngine);
+            auxDocument.applyToEngine();
+            const auto mic = auxDocument.getSession().channels[0].id;
+            ChannelCard auxCard (auxDocument, mic);
+            auxCard.setLookAndFeel (&lookAndFeel);
+            auxCard.setDeviceChannels ({ "1", "2", "3", "4" }, { "1", "2" });
+            auxCard.refresh();
+
+            const auto auxChips = [&auxCard]
+            {
+                std::vector<juce::Button*> found;
+                for (auto* child : auxCard.getChildren())
+                    if (auto* b = dynamic_cast<juce::Button*> (child); b != nullptr && b->getButtonText().startsWith ("AUX"))
+                        found.push_back (b);
+                return found;
+            };
+            const auto click = [] (juce::Button* b)   // as a mouse click on a chip: it flips, then reports
+            {
+                b->setToggleState (! b->getToggleState(), juce::dontSendNotification);
+                b->onClick();
+            };
+            const auto sends = [&auxDocument] { return auxDocument.getSession().channels[0].auxSends; };
+
+            struct Size { CardLayout mode; int width; int grows; };
+            // the wide card keeps its height (its chain column is as tall as the output column with the row); the
+            // stacked layouts grow by the row
+            const Size sizes[] { { CardLayout::wide, 1400, 0 }, { CardLayout::medium, 960, 34 }, { CardLayout::narrow, 420, 34 } };
+            std::vector<int> before;
+            for (const auto& s : sizes)
+            {
+                auxCard.setLayout (s.mode);
+                before.push_back (auxCard.getPreferredHeight (s.width));
+            }
+
+            expect (auxChips().empty(), "no aux channel: no AUX row");
+
+            const auto aux1 = auxDocument.addAux();
+            const auto aux2 = auxDocument.addAux();
+            auxDocument.renameAux (aux1, "Vocal bus");
+            auxCard.refresh();
+            auto chips = auxChips();
+            expectEquals ((int) chips.size(), 2);
+
+            auto* box = childOfType<juce::ComboBox> (auxCard);
+            expect (box != nullptr);
+            if (box != nullptr)
+                for (int i = 0; i < box->getNumItems(); ++i)
+                    expect (! box->getItemText (i).startsWith ("AUX"), "the input box lists device inputs only");
+
+            if (chips.size() == 2)
+            {
+                expectEquals (chips[0]->getButtonText(), juce::String ("AUX1"));
+                expectEquals (chips[1]->getButtonText(), juce::String ("AUX2"));
+                expectEquals (chips[0]->getTooltip(), juce::String ("AUX1  Vocal bus"));   // the name the badge has no room for
+                expect (! chips[0]->getToggleState() && ! chips[1]->getToggleState());
+
+                auto* master = withText (auxCard, ko ("마스터"));
+                auto* direct = withText (auxCard, ko ("직접 출력"));
+                auto* pan = childOfType<PanSlider> (auxCard);
+                expect (master != nullptr && direct != nullptr && pan != nullptr);
+
+                for (size_t i = 0; i < std::size (sizes); ++i)
+                {
+                    const auto& s = sizes[i];
+                    auxCard.setLayout (s.mode);
+                    const int h = auxCard.getPreferredHeight (s.width);
+                    expectEquals (h, before[i] + s.grows);
+                    auxCard.setSize (s.width, h);
+
+                    if (master != nullptr && direct != nullptr && pan != nullptr)
+                    {
+                        for (auto* chip : chips)
+                        {
+                            expect (chip->getY() > master->getBottom() && chip->getBottom() < pan->getY(),
+                                    "the AUX row sits between master / direct and the pan");
+                            expectEquals (chip->getY(), chips[0]->getY());
+                            expect (auxCard.getLocalBounds().contains (chip->getBounds()));
+                            expect (chip->getX() >= master->getX());
+                        }
+                        expect (chips[1]->getX() > chips[0]->getRight());
+                    }
+                }
+
+                // four auxes fit the wide column's 250 px on one line
+                auxDocument.addAux();
+                auxDocument.addAux();
+                auxCard.refresh();
+                chips = auxChips();
+                expectEquals ((int) chips.size(), 4);
+                auxCard.setLayout (CardLayout::wide);
+                auxCard.setSize (1400, auxCard.getPreferredHeight (1400));
+                if (chips.size() == 4 && direct != nullptr)
+                {
+                    expectEquals (chips[3]->getY(), chips[0]->getY());
+                    expect (chips[3]->getRight() <= auxCard.getWidth() - 14);
+                    for (size_t i = 1; i < chips.size(); ++i)
+                        expect (chips[i]->getX() >= chips[i - 1]->getRight());
+                }
+
+                // a click sends to that aux and lights the chip; master off keeps it (send-only); a second click stops it
+                chips = auxChips();
+                click (chips[1]);
+                expect (sends() == std::vector<juce::Uuid> { aux2 });
+                auxCard.refresh();
+                chips = auxChips();
+                expect (chips[1]->getToggleState() && ! chips[0]->getToggleState());
+
+                auto output = auxDocument.getSession().channels[0].output;
+                output.master = false;
+                auxDocument.setChannelOutput (mic, output);
+                auxCard.refresh();
+                chips = auxChips();
+                expect (sends() == std::vector<juce::Uuid> { aux2 }, "master off leaves the sends: send-only");
+                expect (chips[1]->getToggleState());
+                if (master != nullptr)
+                    expect (! dynamic_cast<juce::Button*> (master)->getToggleState());
+
+                click (chips[0]);
+                expect (sends().size() == 2);
+                click (chips[1]);
+                expect (sends() == std::vector<juce::Uuid> { aux1 });
+
+                // an OFF aux dims its chip like an OFF FX dims its send
+                auxDocument.setAuxOn (aux1, false);
+                auxCard.refresh();
+                chips = auxChips();
+                expectLessThan (chips[0]->getAlpha(), 1.0f);
+                expectEquals (chips[1]->getAlpha(), 1.0f);
+
+                // a removed aux takes its chip and the send with it; the rest renumber like the aux cards' badges
+                auxDocument.removeAux (aux1);
+                auxCard.refresh();
+                chips = auxChips();
+                expectEquals ((int) chips.size(), 3);
+                expect (sends().empty());
+                if (! chips.empty())
+                    expectEquals (chips[0]->getButtonText(), juce::String ("AUX1"));
+                for (auto* chip : chips)
+                    expect (! chip->getToggleState());
             }
             auxCard.setLookAndFeel (nullptr);
         }

@@ -7,6 +7,7 @@
 #include "ui/FxDrawer.h"
 #include "ui/LiveMixLookAndFeel.h"
 #include "ui/SettingsDialog.h"
+#include "../livemix/src/ui/MainComponent.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
@@ -177,7 +178,14 @@ public:
             expectEquals (TrackHotkeys::idFor (Kind::mic, MixSession::maxChannels), 16);
             expectEquals (TrackHotkeys::idFor (Kind::fx, 1), 17);
             expectEquals (TrackHotkeys::idFor (Kind::fx, MixSession::maxFx), 20);
-            expectEquals (TrackHotkeys::lastId, 20);
+            expectEquals (TrackHotkeys::lastMicFxId, 20);
+            expectEquals (MainComponent::allMicsHotkeyId, 21);
+            expectEquals (MainComponent::allFxHotkeyId, 22);
+            expectEquals (MainComponent::firstPluginGroupWindowHotkeyId, 23);
+            expectEquals (MainComponent::firstMasterPluginGroupHotkeyId, 28);
+            expectEquals (TrackHotkeys::idFor (Kind::aux, 1), 33);
+            expectEquals (TrackHotkeys::idFor (Kind::aux, MixSession::maxAux), 36);
+            expectEquals (MainComponent::lastHotkeyId, 36);
 
             Kind kind = Kind::mic;
             int number = 0;
@@ -185,6 +193,11 @@ public:
             expect (TrackHotkeys::fromId (12, kind, number) && kind == Kind::mic && number == 4);
             expect (! TrackHotkeys::fromId (8, kind, number));    // plugin group 5
             expect (! TrackHotkeys::fromId (21, kind, number));
+            for (int id = 21; id <= 32; ++id)
+                expect (! TrackHotkeys::fromId (id, kind, number));
+            for (int n = 1; n <= MixSession::maxAux; ++n)
+                expect (TrackHotkeys::fromId (32 + n, kind, number) && kind == Kind::aux && number == n);
+            expect (! TrackHotkeys::fromId (37, kind, number));
         }
 
         beginTest ("a track hotkey switches the mic / FX at its number and names it; a number with no track does nothing");
@@ -207,6 +220,22 @@ public:
             expect (rig.doc.getSession().channels[0].on);
 
             // the key goes with the number: the second mic is number 1 once the first is removed
+            const auto aux = rig.doc.addAux();
+            rig.doc.renameAux (aux, "Hall");
+            rig.doc.setChannelAuxSend (rig.mic, aux, true);
+            expectEquals (TrackHotkeys::toggle (rig.doc, Kind::aux, 1), juce::String ("Hall OFF"));
+            expect (! rig.doc.getSession().findAux (aux)->on);
+            expectWithinAbsoluteError (rig.settle(), 0.5f, 1e-6f);
+            expectEquals (TrackHotkeys::toggle (rig.doc, Kind::aux, 1), juce::String ("Hall ON"));
+            expect (rig.doc.getSession().findAux (aux)->on);
+            expectWithinAbsoluteError (rig.settle(), 1.0f, 1e-6f);
+            expect (TrackHotkeys::toggle (rig.doc, Kind::aux, 0).isEmpty());
+            expect (TrackHotkeys::toggle (rig.doc, Kind::aux, 2).isEmpty());
+            const auto secondAux = rig.doc.addAux();
+            rig.doc.removeAux (aux);
+            TrackHotkeys::toggle (rig.doc, Kind::aux, 1);
+            expect (! rig.doc.getSession().findAux (secondAux)->on);
+
             const auto second = rig.doc.addChannel();
             rig.doc.removeChannel (rig.mic);
             expect (rig.doc.getSession().channels[0].id == second);
@@ -224,6 +253,13 @@ public:
                 TrackHotkeys::setKey (settings, Kind::mic, 3, "F12");
                 TrackHotkeys::setKey (settings, Kind::fx, 1, " ctrl + alt + R ");
                 TrackHotkeys::setKey (settings, Kind::fx, 2, "F11");
+                TrackHotkeys::setKey (settings, Kind::aux, 1, " F8 ");
+                TrackHotkeys::setKey (settings, Kind::aux, 4, "ctrl + shift + 4");
+                settings.setMicAllMuteHotkey ("F6");
+                settings.setFxAllMuteHotkey ("F7");
+                settings.setPluginGroupHotkey (1, "ctrl + 1");
+                settings.setPluginGroupWindowHotkey (1, "alt + 1");
+                settings.setMasterPluginGroupHotkey (1, "shift + 1");
                 settings.saveIfNeeded();
             }
 
@@ -231,26 +267,44 @@ public:
             expectEquals (TrackHotkeys::getKey (settings, Kind::mic, 1), juce::String ("F10"));
             expectEquals (TrackHotkeys::getKey (settings, Kind::fx, 1), juce::String ("ctrl + alt + R"));
             expect (TrackHotkeys::getKey (settings, Kind::mic, 2).isEmpty());
+            expectEquals (TrackHotkeys::getKey (settings, Kind::aux, 1), juce::String ("F8"));
+            expectEquals (TrackHotkeys::getKey (settings, Kind::aux, 4), juce::String ("ctrl + shift + 4"));
+            expect (TrackHotkeys::getKey (settings, Kind::aux, 2).isEmpty());
+            expectEquals (settings.getMicAllMuteHotkey(), juce::String ("F6"));
+            expectEquals (settings.getFxAllMuteHotkey(), juce::String ("F7"));
+            expectEquals (settings.getPluginGroupHotkey (1), juce::String ("ctrl + 1"));
+            expectEquals (settings.getPluginGroupWindowHotkey (1), juce::String ("alt + 1"));
+            expectEquals (settings.getMasterPluginGroupHotkey (1), juce::String ("shift + 1"));
+            {
+                juce::PropertiesFile::Options options;
+                juce::PropertiesFile stored (dir.getChildFile ("LiveMix.settings"), options);
+                expectEquals (stored.getValue ("micOnHotkey1"), juce::String ("F10"));
+                expectEquals (stored.getValue ("fxOnHotkey1"), juce::String ("ctrl + alt + R"));
+                expectEquals (stored.getValue ("auxOnHotkey1"), juce::String ("F8"));
+            }
 
             MixSession s;
             s.addChannel (ko ("메인 마이크"));
             s.addChannel();   // "마이크 2"
             s.addFx ("room");
+            s.addAux ("hall");
 
             const auto tracks = TrackHotkeys::tracks (s);
-            expectEquals ((int) tracks.size(), 3);
-            if (tracks.size() == 3)
+            expectEquals ((int) tracks.size(), 4);
+            if (tracks.size() == 4)
             {
                 expect (tracks[0].kind == Kind::mic && tracks[0].number == 1);
                 expectEquals (tracks[0].label, ko ("메인 마이크 ON/OFF"));
                 expectEquals (tracks[1].label, ko ("마이크 2 ON/OFF"));
                 expect (tracks[2].kind == Kind::fx && tracks[2].number == 1);
                 expectEquals (tracks[2].label, juce::String ("room ON/OFF"));
+                expect (tracks[3].kind == Kind::aux && tracks[3].number == 1);
+                expectEquals (tracks[3].label, juce::String ("hall ON/OFF"));
             }
 
             // every id once: a key for each number with a track, nothing for the rest (mic 3 and FX 2 have keys but no track)
             const auto regs = TrackHotkeys::registrations (s, settings);
-            expectEquals ((int) regs.size(), TrackHotkeys::lastId - TrackHotkeys::firstId + 1);
+            expectEquals ((int) regs.size(), MixSession::maxChannels + MixSession::maxFx + MixSession::maxAux);
             auto keyOf = [&regs] (int id)
             {
                 for (const auto& r : regs)
@@ -263,6 +317,14 @@ public:
             expectEquals (keyOf (TrackHotkeys::idFor (Kind::mic, 3)), juce::String());
             expectEquals (keyOf (TrackHotkeys::idFor (Kind::fx, 1)), juce::String ("ctrl + alt + R"));
             expectEquals (keyOf (TrackHotkeys::idFor (Kind::fx, 2)), juce::String());
+            expectEquals (keyOf (TrackHotkeys::idFor (Kind::aux, 1)), juce::String ("F8"));
+            expectEquals (keyOf (TrackHotkeys::idFor (Kind::aux, 4)), juce::String());
+            for (size_t i = 0; i < regs.size(); ++i)
+            {
+                expect (regs[i].id <= 20 || regs[i].id >= 33);
+                for (size_t j = 0; j < i; ++j)
+                    expect (regs[i].id != regs[j].id);
+            }
 
             for (const auto& r : regs)
                 if (r.id == TrackHotkeys::idFor (Kind::mic, 1))
@@ -271,8 +333,8 @@ public:
             // the settings also list a number the session lacks while it keeps a key (mic 3, FX 2): it can be seen and
             // cleared there, and its key is not handed to another row
             const auto rows = TrackHotkeys::settingsRows (s, settings);
-            expectEquals ((int) rows.size(), 5);
-            if (rows.size() == 5)
+            expectEquals ((int) rows.size(), 7);
+            if (rows.size() == 7)
             {
                 expect (rows[2].kind == Kind::mic && rows[2].number == 3 && ! rows[2].inSession);
                 expectEquals (rows[2].label, ko ("마이크 3 ON/OFF"));
@@ -280,6 +342,10 @@ public:
                 expect (rows[4].kind == Kind::fx && rows[4].number == 2 && ! rows[4].inSession);
                 expectEquals (rows[4].label, juce::String ("FX 2 ON/OFF"));
                 expect (rows[0].inSession && rows[1].inSession);
+                expect (rows[5].kind == Kind::aux && rows[5].number == 1 && rows[5].inSession);
+                expectEquals (rows[5].label, juce::String ("hall ON/OFF"));
+                expect (rows[6].kind == Kind::aux && rows[6].number == 4 && ! rows[6].inSession);
+                expectEquals (rows[6].label, trf ("억스 {0} ON/OFF", 4));
             }
 
             expect (dir.deleteRecursively());
@@ -412,6 +478,12 @@ public:
                     SettingsDialog::tracksChanged();
                     expect (labelWithText (*content, ko ("마이크 2 ON/OFF")) != nullptr);
                     expect (content->findChildWithID ("hotkey-mic-2") != nullptr);
+                    const auto aux = rig.doc.addAux();
+                    rig.doc.renameAux (aux, "Hall");
+                    TrackHotkeys::setKey (settings, Kind::aux, 1, "F8");
+                    SettingsDialog::tracksChanged();
+                    auto* auxKey = dynamic_cast<juce::Button*> (content->findChildWithID ("hotkey-aux-1"));
+                    expect (auxKey != nullptr && auxKey->getButtonText() == "F8");
 
                     // each kind under its mute switches: all mics, mic group, mics, all FX, FX group, FX (10/30)
                     auto y = [&content] (const juce::String& text) { auto* l = labelWithText (*content, text); return l != nullptr ? l->getY() : -1; };
@@ -434,6 +506,8 @@ public:
                     expect (y (ko ("마이크 2 ON/OFF")) < y (ko ("FX 뮤트그룹")));
                     expect (y (ko ("FX 뮤트그룹")) < y ("room ON/OFF"));
                     expect (y ("room ON/OFF") < y (ko ("창 숨기기/불러오기")));
+                    expect (y ("room ON/OFF") < y ("Hall ON/OFF"));
+                    expect (y ("Hall ON/OFF") < y (ko ("창 숨기기/불러오기")));
 
                     // the row follows the channel's name
                     rig.doc.renameChannel (rig.doc.getSession().channels[1].id, ko ("게스트 마이크"));

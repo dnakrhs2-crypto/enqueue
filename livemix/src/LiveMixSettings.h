@@ -104,6 +104,8 @@ public:
     void setMicOnHotkey (int number, const juce::String& description);
     juce::String getFxOnHotkey (int number) const;
     void setFxOnHotkey (int number, const juce::String& description);
+    juce::String getAuxOnHotkey (int number) const;
+    void setAuxOnHotkey (int number, const juce::String& description);
 
     /** The notice about a plugin with latency in a mic chain: closed once by the operator, never shown again. */
     bool getLatencyNoticeDismissed() const;

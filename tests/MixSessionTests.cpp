@@ -17,84 +17,112 @@ public:
 
     void runTest() override
     {
-        beginTest ("aux defaults, free names, limits and missing references");
+        beginTest ("aux defaults, free names, limits and removal of sends");
         {
             MixSession s;
             expectEquals (s.addAux(), 0);
             expectEquals (s.auxes[0].name, trf ("억스 {0}", 1));
-            expectEquals (s.auxes[0].inputFirst, 0);
-            expect (s.auxes[0].on && ! s.auxes[0].stereo);
+            expect (s.auxes[0].on && s.auxes[0].output.master && ! s.auxes[0].output.direct);
+            expectWithinAbsoluteError (s.auxes[0].pan, 0.0, 1e-9);
             s.addChannel();
-            s.channels[0].inputFirst = 3;
-            s.channels[0].stereo = true;
+            s.addChannel();
             expectEquals (s.addAux(), 1);
-            expectEquals (s.auxes[1].inputFirst, 3);
-            expect (s.auxes[1].stereo);
-            const auto removed = s.auxes[0].id;
-            s.channels[0].aux = removed;
-            s.removeAux (removed);
-            s.sanitise();
-            expect (s.findAux (removed) == nullptr && s.channels[0].aux == removed);
+            const auto removed = s.auxes[0].id, kept = s.auxes[1].id;
+            s.channels[0].auxSends = { removed, kept };
+            s.channels[1].auxSends = { removed };
+            s.removeAux (s.auxes[0].id);
+            expect (s.findAux (removed) == nullptr);
+            expect (s.channels[0].auxSends == std::vector<juce::Uuid> { kept });
+            expect (s.channels[1].auxSends.empty());
             expectEquals (s.addAux(), 1);
-            expectEquals (s.auxes[1].name, trf ("억스 {0}", 3));   // second place, but '억스 2' is still there
-            expectEquals (s.addAux ("Input"), 2);
-            expectEquals (s.auxes[2].name, juce::String ("Input"));
+            expectEquals (s.auxes[1].name, trf ("억스 {0}", 3));   // second place, but number 2 is still there
+            expectEquals (s.addAux ("Room"), 2);
+            expectEquals (s.auxes[2].name, juce::String ("Room"));
             expectEquals (s.addAux(), 3);
             expectEquals (s.addAux(), -1);
-            expectEquals ((int) s.channels.size(), 1);
 
-            MixSession renamed;   // the first aux renamed: the next one still reads like its badge (AUX2)
+            MixSession renamed;
             renamed.addAux();
-            renamed.auxes[0].name = "Input";
+            renamed.auxes[0].name = "Talk";
             expectEquals (renamed.addAux(), 1);
             expectEquals (renamed.auxes[1].name, trf ("억스 {0}", 2));
         }
 
-        beginTest ("aux JSON round trip keeps chains and synchronises legacy device inputs without changing v4");
+        beginTest ("aux JSON round trip keeps sends, chains, balance and outputs without changing v4");
         {
             MixSession s;
             s.addChannel();
             s.addChannel();
-            s.addAux ("Input");
+            s.addAux ("Room");
+            s.addAux ("Hall");
             auto& a = s.auxes[0];
             a.on = false;
-            a.inputFirst = 5;
-            a.stereo = true;
+            a.pan = -0.5;
+            a.output = { false, true, 6 };
             PluginSlotState slot;
             slot.name = "Aux plugin";
             slot.fileOrIdentifier = "test://aux";
             slot.stateBase64 = "AAEC";
             slot.bypassed = true;
             a.chain = { slot };
-            s.channels[0].aux = a.id;
+            s.channels[0].inputFirst = 5;
+            s.channels[0].stereo = true;
+            s.channels[0].auxSends = { a.id, s.auxes[1].id };
             s.sanitise();
             const auto json = juce::JSON::parse (s.toJson());
             expectEquals ((int) json["version"], 4);
             expectEquals ((int) json["channels"][0]["input"]["first"], 5);
             expect ((bool) json["channels"][0]["input"]["stereo"]);
-            expect (! json["channels"][1]["input"].hasProperty ("aux"));
+            expect (! json["channels"][0]["input"].hasProperty ("aux"));
+            expect (! json["auxes"][0].hasProperty ("input"));
+            expectEquals (json["channels"][0]["auxSends"].size(), 2);
             MixSession loaded;
             expect (MixSession::fromJson (s.toJson(), loaded).wasOk());
-            expectEquals ((int) loaded.auxes.size(), 1);
+            expectEquals ((int) loaded.auxes.size(), 2);
             const auto& back = loaded.auxes[0];
-            expect (back.id == a.id && loaded.channels[0].aux == a.id);
+            expect (back.id == a.id && loaded.channels[0].auxSends == s.channels[0].auxSends);
             expectEquals (back.name, a.name);
-            expect (! back.on && back.stereo);
-            expectEquals (back.inputFirst, 5);
+            expect (! back.on && ! back.output.master && back.output.direct);
+            expectEquals (back.output.directFirst, 6);
+            expectWithinAbsoluteError (back.pan, -0.5, 1e-9);
             expectEquals ((int) back.chain.size(), 1);
             expect (back.chain[0].slotId == slot.slotId && back.chain[0].bypassed);
             expectEquals (back.chain[0].stateBase64, slot.stateBase64);
             expectEquals (back.chain[0].fileOrIdentifier, slot.fileOrIdentifier);
-            auto older = json;
-            older.getDynamicObject()->removeProperty ("auxes");
-            older["channels"][0]["input"].getDynamicObject()->removeProperty ("aux");
-            expect (MixSession::fromJson (juce::JSON::toString (older), loaded).wasOk());
-            expect (loaded.auxes.empty() && loaded.channels[0].aux.isNull());
-            expectEquals (loaded.channels[0].inputFirst, 5);
-            expect (loaded.channels[0].stereo);
+            expect (loaded.channels[1].auxSends.empty());
         }
 
-        beginTest ("aux sanitise caps file counts and chains, repairs shared ids and retains missing sources");
+        beginTest ("0.24.0 aux input and mic input.aux are ignored; copied device input, aux name, switch and chain survive");
+        {
+            const juce::String legacy = R"json({
+                "app":"LiveMix","version":4,
+                "channels":[{"id":"11111111111111111111111111111111","name":"Mic",
+                    "input":{"first":5,"stereo":true,"aux":"22222222222222222222222222222222"}}],
+                "auxes":[{"id":"22222222222222222222222222222222","name":"Input","on":false,
+                    "input":{"first":1,"stereo":false},
+                    "chain":[{"name":"Aux plugin","fileOrIdentifier":"test://aux","state":"AAEC","bypassed":true}]}]
+            })json";
+            MixSession loaded;
+            expect (MixSession::fromJson (legacy, loaded).wasOk());
+            expectEquals (loaded.channels[0].inputFirst, 5);
+            expect (loaded.channels[0].stereo && loaded.channels[0].auxSends.empty());
+            expectEquals (loaded.auxes[0].name, juce::String ("Input"));
+            expect (! loaded.auxes[0].on);
+            expectEquals ((int) loaded.auxes[0].chain.size(), 1);
+            expectEquals (loaded.auxes[0].chain[0].name, juce::String ("Aux plugin"));
+            expectEquals (loaded.auxes[0].chain[0].stateBase64, juce::String ("AAEC"));
+            expect (loaded.auxes[0].chain[0].bypassed);
+            expect (loaded.auxes[0].output.master && ! loaded.auxes[0].output.direct);
+            expectWithinAbsoluteError (loaded.auxes[0].pan, 0.0, 1e-9);
+            loaded.sanitise();
+            expectEquals (loaded.channels[0].inputFirst, 5);
+            expect (loaded.channels[0].stereo && loaded.channels[0].auxSends.empty());
+            expect (MixSession::fromJson (R"({"app":"LiveMix","version":4,"channels":[{"input":{"first":3}}]})", loaded).wasOk());
+            expect (loaded.auxes.empty() && loaded.channels[0].auxSends.empty());
+            expectEquals (loaded.channels[0].inputFirst, 3);
+        }
+
+        beginTest ("aux sanitise caps counts and chains, repairs shared ids, clamps outputs and removes missing or duplicate sends");
         {
             MixSession s;
             s.addChannel();
@@ -104,23 +132,24 @@ public:
             s.auxes[0].id = s.channels[0].id;
             s.auxes[1].id = s.fx[0].id;
             s.auxes[2].id = s.auxes[3].id;
-            s.auxes[0].inputFirst = -10;
-            s.auxes[1].inputFirst = 100;
-            s.auxes[1].stereo = true;
-            s.auxes[2].inputFirst = 100;
+            s.auxes[0].pan = -10.0;
+            s.auxes[1].pan = 10.0;
+            s.auxes[0].output.directFirst = -10;
+            s.auxes[1].output.directFirst = 100;
             s.auxes[3].chain.resize (MixSession::maxChainSlots + 1);
             const auto missing = s.auxes.back().id;
-            s.channels[0].aux = missing;
+            s.channels[0].auxSends = { missing, juce::Uuid::null(), juce::Uuid(), s.auxes[2].id, s.auxes[2].id };
             MixSession loaded;
             juce::StringArray warnings;
             expect (MixSession::fromJson (s.toJson(), loaded, &warnings).wasOk());
             expectEquals ((int) loaded.auxes.size(), MixSession::maxAux);
             expectEquals (warnings.size(), 2);
             expectEquals ((int) loaded.auxes[3].chain.size(), MixSession::maxChainSlots);
-            expectEquals (loaded.auxes[0].inputFirst, 0);
-            expectEquals (loaded.auxes[1].inputFirst, MixSession::maxDeviceChannels - 2);
-            expectEquals (loaded.auxes[2].inputFirst, MixSession::maxDeviceChannels - 1);
-            expect (loaded.channels[0].aux == missing && loaded.findAux (missing) == nullptr);
+            expectWithinAbsoluteError (loaded.auxes[0].pan, -1.0, 1e-9);
+            expectWithinAbsoluteError (loaded.auxes[1].pan, 1.0, 1e-9);
+            expectEquals (loaded.auxes[0].output.directFirst, 0);
+            expectEquals (loaded.auxes[1].output.directFirst, MixSession::maxDeviceChannels - 2);
+            expect (loaded.channels[0].auxSends == std::vector<juce::Uuid> { loaded.auxes[2].id });
             for (size_t i = 0; i < loaded.auxes.size(); ++i)
             {
                 expect (! loaded.auxes[i].id.isNull());
@@ -129,13 +158,12 @@ public:
                     expect (loaded.auxes[i].id != loaded.auxes[j].id);
             }
             loaded.auxes[0].id = juce::Uuid::null();
-            loaded.channels[1].aux = loaded.auxes[1].id;
-            loaded.channels[1].inputFirst = 0;
-            loaded.channels[1].stereo = false;
+            loaded.auxes[1].pan = std::numeric_limits<double>::quiet_NaN();
+            loaded.auxes[2].pan = std::numeric_limits<double>::infinity();
             loaded.sanitise();
             expect (! loaded.auxes[0].id.isNull());
-            expectEquals (loaded.channels[1].inputFirst, MixSession::maxDeviceChannels - 2);
-            expect (loaded.channels[1].stereo);
+            expectWithinAbsoluteError (loaded.auxes[1].pan, 0.0, 1e-9);
+            expectWithinAbsoluteError (loaded.auxes[2].pan, 0.0, 1e-9);
         }
 
         beginTest ("bit depth choices survive v4 JSON and isolated last-device settings; invalid choices become automatic");

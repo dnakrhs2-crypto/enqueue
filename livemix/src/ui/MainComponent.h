@@ -87,11 +87,12 @@ public:
     /** A global hotkey went off (GlobalHotkeys' id). */
     void hotkeyPressed (int id);
 
-    static constexpr int allMicsHotkeyId = TrackHotkeys::lastId + 1;   // 마이크 전체 뮤트 (the top bar's 마이크 뮤트)
-    static constexpr int allFxHotkeyId = TrackHotkeys::lastId + 2;     // FX 전체 뮤트
+    static constexpr int allMicsHotkeyId = TrackHotkeys::lastMicFxId + 1;   // 마이크 전체 뮤트 (the top bar's 마이크 뮤트)
+    static constexpr int allFxHotkeyId = TrackHotkeys::lastMicFxId + 2;     // FX 전체 뮤트
     static constexpr int firstPluginGroupWindowHotkeyId = allFxHotkeyId + 1;
     static constexpr int firstMasterPluginGroupHotkeyId = firstPluginGroupWindowHotkeyId + MixSession::maxPluginGroups;
-    static constexpr int lastHotkeyId = firstMasterPluginGroupHotkeyId + MixSession::maxPluginGroups - 1;
+    static_assert (TrackHotkeys::firstAuxId == firstMasterPluginGroupHotkeyId + MixSession::maxPluginGroups);
+    static constexpr int lastHotkeyId = TrackHotkeys::lastId;
     /** The app owns the server. Detach stops it before this component's mute groups can be destroyed. */
     void attachControlServer (ControlServer*);
     void detachControlServer();
@@ -169,13 +170,13 @@ private:
     static constexpr int firstPluginGroupHotkeyId = 4;   // 1 the mic mute group, 2 the FX mute group, 3 the window
     static_assert (TrackHotkeys::firstId == firstPluginGroupHotkeyId + MixSession::maxPluginGroups,
                    "the mic / FX ON/OFF hotkeys come right after the plugin groups'");
-    /** How many mics and FX the session has: the ON/OFF keys registered are for these numbers. */
-    std::pair<int, int> trackCounts() const
+    /** How many mics, FX and auxes the session has: the ON/OFF keys registered are for these numbers. */
+    std::array<int, 3> trackCounts() const
     {
         const auto& session = document.getSession();
-        return { (int) session.channels.size(), (int) session.fx.size() };
+        return { (int) session.channels.size(), (int) session.fx.size(), (int) session.auxes.size() };
     }
-    std::pair<int, int> registeredTrackCounts { -1, -1 };
+    std::array<int, 3> registeredTrackCounts { -1, -1, -1 };
     void layoutFxDrawer();       // the drawer's size inside its viewport
     void muteGroupsChanged();    // the top bar's switches, cards, drawer
     void showPluginManager();

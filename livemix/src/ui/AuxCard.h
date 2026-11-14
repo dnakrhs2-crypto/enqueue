@@ -13,9 +13,10 @@
 namespace gocue::livemix
 {
 
-/** One aux channel: a send-only device input through its own VST3 chain and ON/OFF switch. It has no outputs or FX
-    sends: the mic channels that pick it as their input (the chips on the right, or their own input box) receive it.
-    The columns line up with the mic cards' (name, input, chain), so the two kinds read as one list. */
+/** One aux channel: the sum of the mic channels that send to it (the chips here, or the AUX chips on their cards)
+    through its own VST3 chain and ON/OFF switch, then pan, to the master and / or a device output pair. It has no
+    device input or FX sends. The columns line up with the mic cards' (name, meter, chain, routing, output), so the two
+    kinds read as one list. */
 class AuxCard : public juce::Component
 {
 public:
@@ -25,7 +26,8 @@ public:
     const juce::Uuid& getAuxId() const noexcept { return auxId; }
 
     void refresh();
-    void setDeviceChannels (const juce::StringArray& inputNames);
+    /** Device output names for the direct output pair picker (empty = numbers only). */
+    void setDeviceChannels (const juce::StringArray& outputNames);
     void setLayout (CardLayout layout);
     int getPreferredHeight (int width) const;
     void pushMeter (MixEngine::Meter meter, bool paint = true) { meter_.push (meter, paint); }
@@ -40,35 +42,38 @@ public:
     void paint (juce::Graphics& g) override;
 
 private:
-    struct ReceiverChip;
+    struct SenderChip;
 
     const MixAux* aux() const;
     int chainWidthForWidth (int width) const;
     int chainHeightForWidth (int width) const;
-    int receiversWidthForWidth (int width) const;
-    int receiversHeightForWidth (int width) const;
+    int sendersWidthForWidth (int width) const;
+    int sendersHeightForWidth (int width) const;
     void rebuildChain();
-    void rebuildReceivers();
-    void commitInput();
+    void rebuildSenders();
+    void commitOutput (bool pairSelected = false);
     void showMenu();
 
     MixDocument& document;
     juce::Uuid auxId;
     CardLayout layout = CardLayout::wide;
-    juce::StringArray inputNames;
+    juce::StringArray outputNames;
 
     juce::Label badge;
     NameLabel name;
     juce::TextButton menuButton { juce::String::fromUTF8 ("\xE2\x8B\xAF") };   // ···
     LampButton onButton;
-    juce::Label inputCaption, meterCaption, chainCaption, receiversCaption;
-    juce::ComboBox inputCombo;
-    juce::ToggleButton stereoToggle;
+    juce::Label meterCaption, chainCaption, sendersCaption, outputCaption, panCaption, panValue;
     MeterBar meter_;
     std::vector<std::unique_ptr<ChainChip>> chips;
     juce::TextButton openChainButton, addPluginButton;
-    std::vector<std::unique_ptr<ReceiverChip>> receivers;   // one per mic channel, in card order
+    std::vector<std::unique_ptr<SenderChip>> senders;   // one per mic channel, in card order
+    Chip masterChip, directChip;
+    juce::ComboBox directCombo;
+    PanSlider panSlider;
     static constexpr int chainFooter = 1 + 30;               // the chain actions under the chip rows
+    static constexpr int meterHeight = 18 + 40;              // '미터' and the meter
+    static constexpr int outputHeight = 26 + 34 + 4 + 34;    // caption, master / direct, pan - as on a mic card
     bool refreshing = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AuxCard)

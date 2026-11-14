@@ -450,14 +450,14 @@ struct Fixture
         document.setPluginGroupMember (model.channels[0].id, 1, mic.getSlot (2).state.slotId, true);
         document.setSend (model.channels[0].id, model.fx[0].id, 0.35, true);
         document.setSend (model.channels[1].id, model.fx[1].id, 0.5, false);
-        const auto auxId = document.addAux();   // mics 2 and 3 take it: their input boxes and the aux card show the routing
+        const auto auxId = document.addAux();   // mics 2 and 3 send to it: their AUX chips and the aux card's senders show it
         if (auto* auxChain = engine.getAuxChain (auxId))
         {
             add (*auxChain, "Demo gate", 106);
             if (auto* aux = model.findAux (auxId)) aux->chain = auxChain->getStates();
         }
-        document.setChannelAux (model.channels[1].id, auxId);
-        document.setChannelAux (model.channels[2].id, auxId);
+        document.setChannelAuxSend (model.channels[1].id, auxId, true);
+        document.setChannelAuxSend (model.channels[2].id, auxId, true);
 
         lm::ObsPluginActions obs;
         obs.roots = [root = scratch.directory]

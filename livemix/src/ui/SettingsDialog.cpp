@@ -969,7 +969,8 @@ namespace
                 r->track = t;
                 const auto kind = t.kind;
                 const int number = t.number;
-                r->button.setComponentID ((kind == TrackHotkeys::Kind::mic ? "hotkey-mic-" : "hotkey-fx-") + juce::String (number));
+                r->button.setComponentID ((kind == TrackHotkeys::Kind::mic ? "hotkey-mic-"
+                    : kind == TrackHotkeys::Kind::fx ? "hotkey-fx-" : "hotkey-aux-") + juce::String (number));
                 setUpRow (r->row, r->label, t.label, r->button, r->clear,
                           [&prefs, kind, number] { return TrackHotkeys::getKey (prefs, kind, number); },
                           [&prefs, kind, number] (const juce::String& d) { TrackHotkeys::setKey (prefs, kind, number, d); });
@@ -1002,6 +1003,7 @@ namespace
             order.push_back (fxAllRow);             // FX 전체 뮤트
             order.push_back (fixedRows[1].get());   // FX 뮤트그룹
             tracksOf (TrackHotkeys::Kind::fx);
+            tracksOf (TrackHotkeys::Kind::aux);
 
             for (size_t i = 2; i < fixedRows.size(); ++i)
                 if (fixedRows[i].get() != micAllRow && fixedRows[i].get() != fxAllRow)

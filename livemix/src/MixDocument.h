@@ -14,7 +14,7 @@ namespace gocue::livemix
 struct PluginSet;
 
 /** The open session: the model, its file, the dirty flag, and every edit (each one also reaches the engine live).
-    Structure changes (channels / auxes / FX added, removed, reordered, input sources changed, a file loaded) fire onStructureChanged; value changes
+    Structure changes (channels / auxes / FX added, removed, reordered, a file loaded) fire onStructureChanged; value changes
     fire onValueChanged. Both on the message thread. */
 class MixDocument
 {
@@ -50,8 +50,7 @@ public:
     juce::Uuid addChannel();
     void removeChannel (const juce::Uuid& id);
     juce::Uuid addAux();   // null at maxAux
-    void removeAux (const juce::Uuid& id);   // receivers keep the missing source and become silent
-    bool setChannelAux (const juce::Uuid& channelId, const juce::Uuid& auxId);   // null: device; unknown non-null id: false
+    void removeAux (const juce::Uuid& id);   // also clears mic sends to this aux
     juce::Uuid addFx();
     void removeFx (const juce::Uuid& id);
 
@@ -61,9 +60,11 @@ public:
     void setAllChannelsOn (bool on);
     void setChannelMuteGroup (const juce::Uuid& id, bool inGroup);   // the mark; MuteGroups applies the state
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
+    void setChannelAuxSend (const juce::Uuid& channelId, const juce::Uuid& auxId, bool send);
     void renameAux (const juce::Uuid& id, const juce::String& name);
     void setAuxOn (const juce::Uuid& id, bool on);
-    void setAuxInput (const juce::Uuid& id, int first, bool stereo);   // updates receivers' compatibility inputs, announces structure
+    void setAuxOutput (const juce::Uuid& id, const MixOutput& output);
+    void setAuxPan (const juce::Uuid& id, double pan);
     void setChannelOutput (const juce::Uuid& id, const MixOutput& output);
     void setChannelPan (const juce::Uuid& id, double pan);
     void setSend (const juce::Uuid& channelId, const juce::Uuid& fxId, double amount, bool pre);

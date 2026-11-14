@@ -17,7 +17,8 @@ namespace gocue::livemix
 enum class CardLayout { wide, medium, narrow };   // 5 columns / 2 tiers / 1 column
 
 /** One mic channel: name (double-click edits), mic ON/OFF, input, VST3 chain summary, sends (one row per FX),
-    outputs, pan, meter. Edits go through the document; the meter is pushed by the owner's timer. */
+    outputs (master, direct, and an AUX chip per aux channel it can feed), pan, meter. Edits go through the document;
+    the meter is pushed by the owner's timer. */
 class ChannelCard : public juce::Component
 {
 public:
@@ -53,14 +54,16 @@ public:
 
 private:
     struct SendRow;
+    struct AuxSendChip;
 
     int chainWidthForWidth (int width) const;
     int chainHeightForWidth (int width) const;
     void rebuildSends();
+    void rebuildAuxSends();
     void rebuildChain();
     void commitInput();
-    static constexpr int auxItemBase = 1001;   // input box ids: device inputs are first + 1 (1..64), auxes from here
     void commitOutput (bool pairSelected = false);
+    int outputHeight() const;   // the output column: caption, master / direct, the aux chips (when the session has auxes), pan
     void showMenu();
     const MixChannel* channel() const;
 
@@ -88,6 +91,7 @@ private:
     int sendNameWidth() const;   // the send rows' shared name width
     Chip masterChip, directChip, muteGroupChip { tr ("뮤트그룹") };
     juce::ComboBox directCombo;
+    std::vector<std::unique_ptr<AuxSendChip>> auxChips;   // under master / direct: one per aux channel, lit while this mic sends to it
     MeterBar meter_;
     bool refreshing = false;
     bool allMuted = false, groupOn = false;   // every mic muted / the mic mute group muted

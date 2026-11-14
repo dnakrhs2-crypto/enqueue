@@ -188,12 +188,6 @@ int MixSession::addAux (const juce::String& newName)
                 break;
         }
 
-    if (! channels.empty())
-    {
-        a.inputFirst = channels.front().inputFirst;
-        a.stereo = channels.front().stereo;
-    }
-
     auxes.push_back (std::move (a));
     return (int) auxes.size() - 1;
 }
@@ -220,7 +214,10 @@ void MixSession::removeChannel (const juce::Uuid& id)
 
 void MixSession::removeAux (const juce::Uuid& id)
 {
-    auxes.erase (std::remove_if (auxes.begin(), auxes.end(), [&] (const MixAux& a) { return a.id == id; }), auxes.end());
+    const auto removed = id;   // the caller may pass an id from inside auxes
+    auxes.erase (std::remove_if (auxes.begin(), auxes.end(), [&] (const MixAux& a) { return a.id == removed; }), auxes.end());
+    for (auto& c : channels)
+        c.auxSends.erase (std::remove (c.auxSends.begin(), c.auxSends.end(), removed), c.auxSends.end());
 }
 
 void MixSession::removeFx (const juce::Uuid& id)
@@ -349,17 +346,18 @@ void MixSession::sanitise()
         uniqueId (a.id);   // shared namespace with mic and FX ids
         if (a.name.isEmpty())
             a.name = trf ("억스 {0}", (int) i + 1);
-        a.inputFirst = juce::jlimit (0, maxDeviceChannels - (a.stereo ? 2 : 1), a.inputFirst);
+        a.pan = juce::jlimit (-1.0, 1.0, finiteOr (a.pan, 0.0));
+        clampOutput (a.output);
     }
 
     for (auto& c : channels)
-        if (! c.aux.isNull())
-            if (const auto* a = findAux (c.aux))
-            {
-                // Older readers ignore aux and receive the same device input directly.
-                c.inputFirst = a->inputFirst;
-                c.stereo = a->stereo;
-            }
+    {
+        std::vector<juce::Uuid> kept;
+        for (const auto& id : c.auxSends)
+            if (findAux (id) != nullptr && std::find (kept.begin(), kept.end(), id) == kept.end())
+                kept.push_back (id);
+        c.auxSends = std::move (kept);
+    }
 
     master.outputFirst = juce::jlimit (0, maxDeviceChannels - 2, master.outputFirst);
 
@@ -403,9 +401,11 @@ juce::String MixSession::toJson() const
         auto* input = new juce::DynamicObject();
         input->setProperty ("first", c.inputFirst);
         input->setProperty ("stereo", c.stereo);
-        if (! c.aux.isNull())
-            input->setProperty ("aux", idText (c.aux));
         obj->setProperty ("input", input);
+        juce::Array<juce::var> auxSends;
+        for (const auto& id : c.auxSends)
+            auxSends.add (idText (id));
+        obj->setProperty ("auxSends", auxSends);
         obj->setProperty ("chain", ProjectSerializer::pluginSlotsToVar (c.chain));
 
         juce::Array<juce::var> sends;
@@ -435,10 +435,8 @@ juce::String MixSession::toJson() const
         obj->setProperty ("id", idText (a.id));
         obj->setProperty ("name", a.name);
         obj->setProperty ("on", a.on);
-        auto* input = new juce::DynamicObject();
-        input->setProperty ("first", a.inputFirst);
-        input->setProperty ("stereo", a.stereo);
-        obj->setProperty ("input", input);
+        obj->setProperty ("pan", a.pan);
+        obj->setProperty ("output", outputToVar (a.output));
         obj->setProperty ("chain", ProjectSerializer::pluginSlotsToVar (a.chain));
         auxArray.add (obj);
     }
@@ -537,9 +535,9 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
             a.id = juce::Uuid (item.getProperty ("id", "").toString());
             a.name = item.getProperty ("name", "").toString();
             a.on = (bool) item.getProperty ("on", true);
-            const auto input = item.getProperty ("input", juce::var());
-            a.inputFirst = (int) input.getProperty ("first", 0);
-            a.stereo = (bool) input.getProperty ("stereo", false);
+            // 0.24.0's aux device input is intentionally ignored; without mic sends the bus is silent.
+            a.pan = (double) item.getProperty ("pan", 0.0);
+            a.output = outputFromVar (item.getProperty ("output", juce::var()), MixOutput());
             a.chain = ProjectSerializer::pluginSlotsFromVar (item.getProperty ("chain", juce::var()));
             s.auxes.push_back (std::move (a));
         }
@@ -592,8 +590,12 @@ juce::Result MixSession::fromJson (const juce::String& json, MixSession& out, ju
             {
                 c.inputFirst = (int) input.getProperty ("first", 0);
                 c.stereo = (bool) input.getProperty ("stereo", false);
-                c.aux = juce::Uuid (input.getProperty ("aux", "").toString());
+                // Ignore 0.24.0's input.aux and keep its copied device input, just like a 0.23.0 reader.
             }
+
+            if (const auto* sends = item.getProperty ("auxSends", juce::var()).getArray())
+                for (const auto& id : *sends)
+                    c.auxSends.emplace_back (id.toString());
 
             c.chain = ProjectSerializer::pluginSlotsFromVar (item.getProperty ("chain", juce::var()));
 

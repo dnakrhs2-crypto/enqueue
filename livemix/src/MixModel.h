@@ -44,7 +44,7 @@ struct MixChannel
     bool muteGroup = false;   // in the mic mute group: the group's hotkey mutes it (its own switch stays)
     int inputFirst = 0;    // 0-based device input; a stereo channel takes inputFirst and inputFirst + 1
     bool stereo = false;
-    juce::Uuid aux = juce::Uuid::null();   // null: device input; otherwise this aux's post-switch stereo tap
+    std::vector<juce::Uuid> auxSends;   // unity sends after the mic switch, before pan
     double pan = 0.0;      // -1..1: left / centre / right (stereo channels use balance)
     std::vector<PluginSlotState> chain;
     std::vector<MixSend> sends;   // one per FX channel after sanitise()
@@ -52,15 +52,15 @@ struct MixChannel
     std::vector<MixPluginGroup> pluginGroups;   // up to MixSession::maxPluginGroups, numbered 1.. on the card
 };
 
-/** A send-only device input through its own chain and ON/OFF switch, shared by mic channels. No outputs or FX sends. */
+/** The stereo sum of mic sends through its own chain, ON/OFF switch, balance and outputs. */
 struct MixAux
 {
     juce::Uuid id;
     juce::String name;
     bool on = true;
-    int inputFirst = 0;
-    bool stereo = false;
+    double pan = 0.0;   // -1..1, stereo balance
     std::vector<PluginSlotState> chain;
+    MixOutput output;
 };
 
 /** An FX channel (reverb, delay ...): the sum of the sends through a VST3 chain, then a return amount, to the outputs. */
@@ -133,7 +133,7 @@ struct MixSession
     int addAux (const juce::String& newName = {});
     int addFx (const juce::String& newName = {});
     void removeChannel (const juce::Uuid& id);
-    void removeAux (const juce::Uuid& id);   // keeps channel references: a missing aux is silent
+    void removeAux (const juce::Uuid& id);   // also removes every mic's send to it
     void removeFx (const juce::Uuid& id);
 
     /** The send of 'channel' to 'fx' (created when missing). */
