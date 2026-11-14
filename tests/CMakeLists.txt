@@ -71,6 +71,7 @@ target_sources(EnqueueTests PRIVATE
     ../src/ui/CueInspector.cpp
     ../src/ui/WaveformView.cpp
     ../src/ui/TimeLoopsPanel.cpp
+    ../src/ui/PlaybackFields.cpp
     ../src/ui/GainControl.cpp
     ../src/ui/AudioSettingsDialog.cpp
     ../src/ui/WorkspaceSettingsDialog.cpp
@@ -169,6 +170,7 @@ target_sources(EnqueueTests PRIVATE
     WaveHeightTests.cpp
     PlayTabGainTests.cpp
     PlayTabFadeInTests.cpp
+    BasicPlaybackFieldsTests.cpp
     GainUnitTests.cpp
     TabReorderTests.cpp
     ReopenLastProjectTests.cpp

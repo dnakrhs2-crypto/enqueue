@@ -3,6 +3,7 @@
 #include "app/ProjectDocument.h"
 #include "audio/AudioEngine.h"
 #include "ui/GainControl.h"
+#include "ui/PlaybackFields.h"
 #include "ui/WaveformView.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -39,47 +40,26 @@ public:
     void paint (juce::Graphics& g) override;
 
 private:
-    class CommitEditor final : public juce::TextEditor
-    {
-        void focusLost (FocusChangeType cause) override
-        {
-            // Commit before the click changes selection and refreshes these fields.
-            if (onFocusLost)
-                onFocusLost();
-
-            juce::TextEditor::focusLost (cause);
-        }
-    };
-
     const Cue* selected() const { return document.cues.getSelected(); }
     /** What a running instance is told after the edit: region (trim), rate, both, or nothing (next start only). */
-    enum class LiveApply { none, region, rate, regionAndRate, envelope, loop };
+    using LiveApply = PlaybackFields::LiveApply;
     void updateSelected (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey = {},
                          LiveApply apply = LiveApply::regionAndRate);
     void commitSlices (const std::vector<Slice>& slices, int firstCount, bool finished);
     void importSliceMarkers();
-    void pushLiveRegion();
     void commitTrim (double start, double end, bool finished);
     void commitEnvelope (const Envelope& envelope, bool finished);
-    void commitStart();
-    void commitEnd();
-    void commitPlayCount();
-    void commitRate();
     void commitGain();
-    void commitFadeIn();
-    void setupEditor (juce::TextEditor& editor, const juce::String& allowed, int maxLength);
     void setupToggle (juce::ToggleButton& toggle, const char* text);
-    void cancelEdit();
     void showContextMenu (juce::Point<int> screenPosition);
 
     ProjectDocument& document;
     AudioEngine& engine;
     WaveformView waveform;
 
-    juce::Label startLabel, endLabel, lengthLabel, countLabel, rateLabel, envelopeLabel, zoomLabel, sizeLabel, fadeInLabel;
-    /** fadeInEditor: the envelope's fade-in length typed as a time, in the 시작 / 끝 format. */
-    CommitEditor startEditor, endEditor, countEditor, rateEditor, fadeInEditor;
-    juce::ToggleButton infiniteToggle, envelopeToggle, linearToggle, lockToggle, pitchToggle;
+    PlaybackFields playback;
+    juce::Label envelopeLabel, zoomLabel, sizeLabel;
+    juce::ToggleButton envelopeToggle, linearToggle, lockToggle;
     juce::TextButton resetButton, zoomInButton, zoomOutButton, sizeUpButton, sizeDownButton;
     /** The cue's gain, the same value as the 기본 tab's slider: moving either moves the other, and this tab's wave
         follows at once (WaveformView draws with the cue's level). In dB or % as the gain button says. */
@@ -87,8 +67,6 @@ private:
     GainSlider gainSlider;
     bool refreshing = false;
     juce::uint32 lastLiveEnvelopePush = 0;   // commitEnvelope throttle
-    juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show (focus-lost commits go there)
-    bool cancellingEdit = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TimeLoopsPanel)
 };

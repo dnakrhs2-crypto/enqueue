@@ -15,7 +15,7 @@ namespace
 }
 
 TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::AudioThumbnailCache& cache)
-    : document (doc), engine (e), waveform (e.getFormatManager(), cache)
+    : document (doc), engine (e), waveform (e.getFormatManager(), cache), playback (doc, e)
 {
     auto setupLabel = [this] (juce::Label& label, const char* text)
     {
@@ -25,46 +25,20 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
         addAndMakeVisible (label);
     };
 
-    setupLabel (startLabel, "시작");
-    setupLabel (endLabel, "끝");
-    setupLabel (lengthLabel, "");
-    setupLabel (countLabel, "재생 횟수");
-    setupLabel (rateLabel, "속도");
     setupLabel (envelopeLabel, "페이드 엔벨로프");
     setupLabel (zoomLabel, "확대");
     setupLabel (sizeLabel, "크기");
-    setupLabel (fadeInLabel, "페이드 인");
 
     // the 기본 tab's gain control, on the same value (Cue::gainDb) and in the same unit (GainSlider / GainUnitButton)
     gainSlider.onValueChange = [this] { commitGain(); };
     addAndMakeVisible (gainSlider);
     addAndMakeVisible (gainUnitButton);
 
-    setupEditor (startEditor, "0123456789:.", 12);
-    startEditor.onReturnKey = [this] { commitStart(); startEditor.giveAwayKeyboardFocus(); };
-    startEditor.onFocusLost = [this] { commitStart(); };
-
-    setupEditor (endEditor, "0123456789:.", 12);
-    endEditor.onReturnKey = [this] { commitEnd(); endEditor.giveAwayKeyboardFocus(); };
-    endEditor.onFocusLost = [this] { commitEnd(); };
-
-    setupEditor (countEditor, "0123456789", 4);
-    countEditor.onReturnKey = [this] { commitPlayCount(); countEditor.giveAwayKeyboardFocus(); };
-    countEditor.onFocusLost = [this] { commitPlayCount(); };
-
-    setupEditor (rateEditor, "0123456789.", 6);
-    rateEditor.onReturnKey = [this] { commitRate(); rateEditor.giveAwayKeyboardFocus(); };
-    rateEditor.onFocusLost = [this] { commitRate(); };
-
-    setupEditor (fadeInEditor, "0123456789:.", 12);
-    fadeInEditor.onReturnKey = [this] { commitFadeIn(); fadeInEditor.giveAwayKeyboardFocus(); };
-    fadeInEditor.onFocusLost = [this] { commitFadeIn(); };
-
-    setupToggle (infiniteToggle, "무한 루프");
-    infiniteToggle.onClick = [this]
+    playback.addTo (*this);
+    playback.onCancelEdit = [this]
     {
-        const bool on = infiniteToggle.getToggleState();
-        updateSelected (on ? ko ("무한 루프 켜기") : ko ("무한 루프 끄기"), [on] (Cue& c) { c.audio.infiniteLoop = on; }, {}, LiveApply::loop);   // heard at once
+        if (onCancelEdit) onCancelEdit();
+        else giveAwayKeyboardFocus();
     };
 
     setupToggle (envelopeToggle, "사용");
@@ -107,14 +81,6 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
         updateSelected (ko ("엔벨로프 잠금"), [on] (Cue& c) { c.audio.envelope.setLockToTrim (on, c.regionLength()); }, {}, LiveApply::envelope);
     };
 
-    setupToggle (pitchToggle, "피치 유지");
-    pitchToggle.setTooltip (ko ("타임스트레치(Signalsmith Stretch): 속도를 바꿔도 음높이가 그대로 (0.25~4배 범위). 다음 재생부터 적용"));
-    pitchToggle.onClick = [this]
-    {
-        const bool on = pitchToggle.getToggleState();
-        updateSelected (ko ("피치 유지"), [on] (Cue& c) { c.audio.preservePitch = on; }, {}, LiveApply::none);   // next start
-    };
-
     auto setupButton = [this] (juce::TextButton& button, const char* text, std::function<void()> action)
     {
         button.setButtonText (ko (text));
@@ -151,16 +117,6 @@ TimeLoopsPanel::TimeLoopsPanel (ProjectDocument& doc, AudioEngine& e, juce::Audi
 
 TimeLoopsPanel::~TimeLoopsPanel() = default;
 
-void TimeLoopsPanel::setupEditor (juce::TextEditor& editor, const juce::String& allowed, int maxLength)
-{
-    editor.setInputRestrictions (maxLength, allowed);
-    editor.setFont (Palette::monoFont (Palette::fieldValueSize));
-    editor.setJustification (juce::Justification::centredRight);
-    editor.setSelectAllWhenFocused (true);
-    editor.onEscapeKey = [this] { cancelEdit(); };
-    addAndMakeVisible (editor);
-}
-
 void TimeLoopsPanel::setupToggle (juce::ToggleButton& toggle, const char* text)
 {
     toggle.setButtonText (ko (text));
@@ -170,100 +126,30 @@ void TimeLoopsPanel::setupToggle (juce::ToggleButton& toggle, const char* text)
     addAndMakeVisible (toggle);
 }
 
-void TimeLoopsPanel::cancelEdit()
-{
-    {
-        const juce::ScopedValueSetter<bool> guard (cancellingEdit, true);
-
-        if (onCancelEdit)
-            onCancelEdit();
-        else
-            giveAwayKeyboardFocus();
-    }
-
-    refresh();
-}
-
 //==============================================================================
 void TimeLoopsPanel::refresh()
 {
+    playback.refresh (true);   // show mode is inherited from this panel's enabled state
     const juce::ScopedValueSetter<bool> guard (refreshing, true);
     const auto* cue = selected();
     const bool enabled = cue != nullptr;
 
-    for (auto* c : { static_cast<juce::Component*> (&startEditor), static_cast<juce::Component*> (&endEditor),
-                     static_cast<juce::Component*> (&countEditor), static_cast<juce::Component*> (&rateEditor),
-                     static_cast<juce::Component*> (&infiniteToggle), static_cast<juce::Component*> (&envelopeToggle),
-                     static_cast<juce::Component*> (&linearToggle), static_cast<juce::Component*> (&lockToggle),
-                     static_cast<juce::Component*> (&resetButton), static_cast<juce::Component*> (&gainSlider),
-                     static_cast<juce::Component*> (&fadeInEditor) })
+    for (auto* c : std::initializer_list<juce::Component*> { &envelopeToggle, &linearToggle, &lockToggle, &resetButton, &gainSlider })
         c->setEnabled (enabled);
 
     waveform.setCue (cue);
-
     if (cue == nullptr)
     {
-        startEditor.setText ("", false);
-        endEditor.setText ("", false);
-        countEditor.setText ("", false);
-        rateEditor.setText ("", false);
-        fadeInEditor.setText ("", false);
-        lengthLabel.setText ("", juce::dontSendNotification);
         gainSlider.setValue (0.0, juce::dontSendNotification);
         return;
     }
 
-    {
-        bool editing = false;
-
-        for (auto* e : { &startEditor, &endEditor, &countEditor, &rateEditor, &fadeInEditor })
-            editing = editing || e->hasKeyboardFocus (true);
-
-        if (editing && ! shownId.isNull() && shownId != cue->id && document.cues.indexOf (shownId) >= 0)
-            return;   // keep showing the cue being edited until its commit lands
-
-        shownId = cue->id;
-    }
-
-    gainSlider.setValue (cue->gainDb, juce::dontSendNotification);   // a change made on the 기본 / 레벨 tab or by undo shows here too
-
-    if (! startEditor.hasKeyboardFocus (true))
-        startEditor.setText (formatTimeMs (cue->regionStart()), false);
-
-    if (! endEditor.hasKeyboardFocus (true))
-        endEditor.setText (formatTimeMs (cue->regionEnd()), false);
-
-    if (! countEditor.hasKeyboardFocus (true))
-        countEditor.setText (juce::String (cue->audio.playCount), false);
-
-    countEditor.setEnabled (! cue->audio.infiniteLoop);
-
-    if (! rateEditor.hasKeyboardFocus (true))
-        rateEditor.setText (juce::String (cue->audio.rate, 2), false);
-
-    if (! fadeInEditor.hasKeyboardFocus (true))
-        fadeInEditor.setText (formatTimeMs (cue->audio.envelope.fadeInSeconds (cue->regionLength())), false);
-
-    fadeInEditor.setEnabled (cue->regionLength() > 0.0);
-
-    infiniteToggle.setToggleState (cue->audio.infiniteLoop, juce::dontSendNotification);
+    gainSlider.setValue (cue->gainDb, juce::dontSendNotification);
     envelopeToggle.setToggleState (cue->audio.envelope.enabled, juce::dontSendNotification);
     linearToggle.setToggleState (cue->audio.envelope.linear, juce::dontSendNotification);
     lockToggle.setToggleState (cue->audio.envelope.lockToTrim, juce::dontSendNotification);
-    pitchToggle.setToggleState (cue->audio.preservePitch, juce::dontSendNotification);
     linearToggle.setEnabled (cue->audio.envelope.enabled);
     lockToggle.setEnabled (cue->audio.envelope.enabled);
-
-    juce::String length;
-    length << ko ("구간 ") << formatTimeMs (cue->regionLength());
-    const double effective = cue->effectiveLength();
-
-    if (effective < 0.0)
-        length << (cue->audio.infiniteLoop ? ko ("  · 무한 반복") : ko ("  · 무한 슬라이스"));
-    else if (! juce::approximatelyEqual (effective, cue->regionLength()))
-        length << ko ("  · 전체 ") << formatTimeMs (effective);   // slices / play count / rate change the total
-
-    lengthLabel.setText (length, juce::dontSendNotification);
 }
 
 void TimeLoopsPanel::bindGainUnit (juce::Value& percent)
@@ -283,46 +169,8 @@ void TimeLoopsPanel::setPlayback (const AudioEngine::PlayingCue* playing)
 //==============================================================================
 void TimeLoopsPanel::updateSelected (const juce::String& name, const std::function<void (Cue&)>& mutator, const juce::String& coalesceKey, LiveApply apply)
 {
-    if (refreshing || cancellingEdit)
-        return;
-
-    const int index = shownId.isNull() ? document.cues.getSelectedIndex() : document.cues.indexOf (shownId);
-
-    if (! document.cues.isValidIndex (index))
-        return;
-
-    document.perform (name, [this, index, mutator] { document.cues.update (index, mutator); }, { coalesceKey, false });
-
-    // only what the edit changed reaches a running instance: a trim seeks, a rate change does not, and
-    // next-start properties (pitch mode, envelope shape) leave it alone
-    // the edited cue (a focus-lost commit may land after the selection moved on), never the selection
-    if (const auto* cue = document.cues.isValidIndex (index) ? &document.cues.get (index) : nullptr;
-        cue != nullptr && apply != LiveApply::none && engine.isPlaying (cue->id))
-    {
-        if (apply == LiveApply::region || apply == LiveApply::regionAndRate)
-            engine.setLiveRegion (cue->id, cue->audio.startSeconds, cue->audio.endSeconds);
-
-        if (apply == LiveApply::rate || apply == LiveApply::regionAndRate)
-            engine.setLiveRate (cue->id, cue->audio.rate);
-
-        if (apply == LiveApply::envelope)
-            engine.setLiveEnvelope (cue->id, cue->audio.envelope);   // the fade points / toggles are heard at once
-
-        if (apply == LiveApply::loop)
-            engine.setLivePlayCount (cue->id, cue->audio.playCount, cue->audio.infiniteLoop);   // the loop follows the toggle at once
-    }
-
-    if (const auto* selected = document.cues.getSelected(); selected != nullptr && selected->id != shownId)
-        refresh();
-}
-
-void TimeLoopsPanel::pushLiveRegion()
-{
-    if (const auto* cue = selected(); cue != nullptr && engine.isPlaying (cue->id))
-    {
-        engine.setLiveRegion (cue->id, cue->audio.startSeconds, cue->audio.endSeconds);
-        engine.setLiveRate (cue->id, cue->audio.rate);
-    }
+    if (! refreshing)
+        playback.updateShown (name, mutator, coalesceKey, apply);
 }
 
 void TimeLoopsPanel::commitTrim (double start, double end, bool finished)
@@ -415,158 +263,23 @@ void TimeLoopsPanel::commitEnvelope (const Envelope& envelope, bool finished)
                     pushLive ? LiveApply::envelope : LiveApply::none);
 }
 
-void TimeLoopsPanel::commitStart()
-{
-    const auto* cue = selected();
-
-    if (refreshing || cancellingEdit || cue == nullptr)
-        return;
-
-    const double value = parseTimeText (startEditor.getText());
-    const auto currentText = formatTimeMs (cue->regionStart());
-
-    if (value < 0.0 || formatTimeMs (value) == currentText)
-    {
-        startEditor.setText (currentText, false);
-        return;
-    }
-
-    const double end = cue->regionEnd();
-    const double start = juce::jlimit (0.0, juce::jmax (0.0, end - WaveformView::minRegionSeconds), value);
-    startEditor.setText (formatTimeMs (start), false);
-
-    if (formatTimeMs (start) == currentText)
-        return;
-
-    updateSelected (ko ("시작 시간"), [start] (Cue& c) { c.audio.startSeconds = start; }, {}, LiveApply::region);
-}
-
-void TimeLoopsPanel::commitEnd()
-{
-    const auto* cue = selected();
-
-    if (refreshing || cancellingEdit || cue == nullptr)
-        return;
-
-    const double value = parseTimeText (endEditor.getText());
-    const auto currentText = formatTimeMs (cue->regionEnd());
-
-    if (value < 0.0 || formatTimeMs (value) == currentText)
-    {
-        endEditor.setText (currentText, false);
-        return;
-    }
-
-    const double length = cue->durationSeconds;
-    double end = juce::jmax (cue->regionStart() + WaveformView::minRegionSeconds, value);
-
-    if (length > 0.0 && end >= length - 1e-6)
-        end = -1.0;
-
-    const auto text = formatTimeMs (end < 0.0 ? length : end);
-    endEditor.setText (text, false);
-
-    if (text == currentText)
-        return;
-
-    updateSelected (ko ("끝 시간"), [end] (Cue& c) { c.audio.endSeconds = end; }, {}, LiveApply::region);
-}
-
-void TimeLoopsPanel::commitPlayCount()
-{
-    const auto* cue = selected();
-
-    if (refreshing || cancellingEdit || cue == nullptr)
-        return;
-
-    const int value = juce::jlimit (1, AudioCueData::maxPlayCount, countEditor.getText().getIntValue());
-
-    if (value == cue->audio.playCount || countEditor.getText().trim().isEmpty())
-    {
-        countEditor.setText (juce::String (cue->audio.playCount), false);
-        return;
-    }
-
-    updateSelected (ko ("재생 횟수"), [value] (Cue& c) { c.audio.playCount = value; }, {}, LiveApply::loop);
-}
-
-void TimeLoopsPanel::commitRate()
-{
-    const auto* cue = selected();
-
-    if (refreshing || cancellingEdit || cue == nullptr)
-        return;
-
-    const auto text = rateEditor.getText().trim();
-    const double value = juce::jlimit (AudioCueData::minRate, AudioCueData::maxRate, text.getDoubleValue());
-    const auto currentText = juce::String (cue->audio.rate, 2);
-
-    if (text.isEmpty() || juce::String (value, 2) == currentText)
-    {
-        rateEditor.setText (currentText, false);
-        return;
-    }
-
-    rateEditor.setText (juce::String (value, 2), false);
-    updateSelected (ko ("속도"), [value] (Cue& c) { c.audio.rate = value; }, {}, LiveApply::rate);
-}
-
 void TimeLoopsPanel::commitGain()
 {
-    if (refreshing || cancellingEdit)
+    if (refreshing || document.isReplacingModel() || ! isEnabled())
         return;
 
-    // the cue the fields show, like every other edit here (updateSelected writes to the same one)
-    const int index = shownId.isNull() ? document.cues.getSelectedIndex() : document.cues.indexOf (shownId);
+    const auto* cue = playback.shownCue();
+    if (cue == nullptr) return;
 
-    if (! document.cues.isValidIndex (index))
-        return;
-
-    const auto& cue = document.cues.get (index);
     const double value = gainSlider.getValue();
 
-    if (juce::approximatelyEqual (cue.gainDb, value))
+    if (juce::approximatelyEqual (cue->gainDb, value))
         return;
 
     // the 기본 tab's edit: the same undo name and key, so a drag on either slider is one undo step
-    const auto id = cue.id;
+    const auto id = cue->id;
     updateSelected (ko ("게인 변경"), [value] (Cue& c) { c.gainDb = value; }, "gain:" + id.toString(), LiveApply::none);
     engine.setLiveGainDb (id, value);   // a running instance follows at once
-}
-
-void TimeLoopsPanel::commitFadeIn()
-{
-    if (refreshing || cancellingEdit || selected() == nullptr)
-        return;
-
-    // Use the cue being edited, as updateSelected does when focus leaves after a selection change.
-    const int index = shownId.isNull() ? document.cues.getSelectedIndex() : document.cues.indexOf (shownId);
-
-    if (! document.cues.isValidIndex (index))
-        return;
-
-    const auto& cue = document.cues.get (index);
-    const double length = cue.regionLength();
-    const auto currentText = formatTimeMs (cue.audio.envelope.fadeInSeconds (length));
-    const double value = parseTimeText (fadeInEditor.getText());
-
-    if (value < 0.0 || length <= 0.0 || formatTimeMs (value) == currentText)
-    {
-        fadeInEditor.setText (currentText, false);
-        return;
-    }
-
-    const double seconds = juce::jlimit (0.0, length, value);
-    const auto text = formatTimeMs (seconds);
-    fadeInEditor.setText (text, false);
-
-    if (text == currentText)   // merely leaving a rounded display must not reshape the envelope or add undo
-        return;
-
-    updateSelected (ko ("페이드 인 시간"), [seconds] (Cue& c)
-    {
-        c.audio.envelope.setFadeInSeconds (seconds, c.regionLength());
-    }, {}, LiveApply::envelope);
 }
 
 //==============================================================================
@@ -640,23 +353,23 @@ void TimeLoopsPanel::resized()
     auto area = clusters.cue;
     auto nextRow = [&] { auto r = area.removeFromTop (30); area.removeFromTop (8); return r; };
     auto row = nextRow();
-    startLabel.setBounds (row.removeFromLeft (64));
-    startEditor.setBounds (row.removeFromLeft (84));
+    playback.startLabel.setBounds (row.removeFromLeft (64));
+    playback.startEditor.setBounds (row.removeFromLeft (84));
     row.removeFromLeft (8);
-    endLabel.setBounds (row.removeFromLeft (24));
-    endEditor.setBounds (row.removeFromLeft (84));
+    playback.endLabel.setBounds (row.removeFromLeft (24));
+    playback.endEditor.setBounds (row.removeFromLeft (84));
     row.removeFromLeft (8);
-    lengthLabel.setBounds (row.removeFromLeft (190));
+    playback.lengthLabel.setBounds (row.removeFromLeft (190));
     row = nextRow();
-    countLabel.setBounds (row.removeFromLeft (64));
-    countEditor.setBounds (row.removeFromLeft (52));
+    playback.countLabel.setBounds (row.removeFromLeft (64));
+    playback.countEditor.setBounds (row.removeFromLeft (52));
     row.removeFromLeft (6);
-    infiniteToggle.setBounds (row.removeFromLeft (84));
+    playback.infiniteToggle.setBounds (row.removeFromLeft (84));
     row.removeFromLeft (8);
-    rateLabel.setBounds (row.removeFromLeft (34));
-    rateEditor.setBounds (row.removeFromLeft (56));
+    playback.rateLabel.setBounds (row.removeFromLeft (34));
+    playback.rateEditor.setBounds (row.removeFromLeft (56));
     row.removeFromLeft (6);
-    pitchToggle.setBounds (row.removeFromLeft (84));
+    playback.pitchToggle.setBounds (row.removeFromLeft (84));
 
     // the envelope on one row, each toggle as wide as its text; under it the gain, where the 기본 tab has it
     // (the last row of this 400px column, the same slider length), right over the wave it reshapes
@@ -678,10 +391,10 @@ void TimeLoopsPanel::resized()
     resetButton.setBounds (row.removeFromLeft (60));
     // the 시작 / 끝 field size, at the end of the reset row: the same row as the envelope it shapes, so the wave
     // keeps its height (a third row in the playback column would flatten it at the default window height)
-    fadeInEditor.setBounds (row.removeFromRight (84));
+    playback.fadeInEditor.setBounds (row.removeFromRight (84));
     row.removeFromRight (6);
-    fadeInLabel.setBounds (row.removeFromRight (textWidth (fadeInLabel.getFont(), fadeInLabel.getText())
-                                                + fadeInLabel.getBorderSize().getLeftAndRight()));
+    playback.fadeInLabel.setBounds (row.removeFromRight (textWidth (playback.fadeInLabel.getFont(), playback.fadeInLabel.getText())
+                                                + playback.fadeInLabel.getBorderSize().getLeftAndRight()));
     row = nextRow();
     sizeLabel.setBounds (row.removeFromLeft (34));
     sizeUpButton.setBounds (row.removeFromLeft (28));

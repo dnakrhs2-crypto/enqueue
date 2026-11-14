@@ -159,10 +159,37 @@ public:
         checkLabel (*basic, ko ("파일"), { 12, 84, 36, 30 });
         checkLabel (*basic, ko ("프리웨이트"), { 675, 8, 64, 30 });
         checkLabel (*basic, ko ("포스트웨이트"), { 881, 8, 104, 30 });
-        checkLabel (*basic, ko ("메모"), { 12, 122, 36, 30 });
+        checkLabel (*basic, ko ("시작"), { 12, 122, 36, 30 });
+        checkLabel (*basic, ko ("끝"), { 140, 122, 24, 30 });
+        checkLabel (*basic, ko ("재생 횟수"), { 675, 122, 64, 30 });
+        checkLabel (*basic, ko ("속도"), { 889, 122, 34, 30 });
+        checkButton (*basic, ko ("무한 루프"), { 797, 122, 84, 30 });
+        checkButton (*basic, ko ("피치 유지"), { 985, 122, 84, 30 });
+        const std::pair<int, juce::Rectangle<int>> playInputs[] {
+            { 3, { 48, 122, 84, 30 } }, { 4, { 164, 122, 84, 30 } }, { 5, { 558, 122, 84, 30 } },
+            { 10, { 739, 122, 52, 30 } }, { 11, { 923, 122, 56, 30 } }
+        };
+        for (const auto& input : playInputs)
+        {
+            auto* editor = child<juce::TextEditor> (*basic, [&input] (const auto& e) { return e.getExplicitFocusOrder() == input.first; });
+            expect (editor != nullptr);
+            if (editor != nullptr) rect (*editor, input.second);
+        }
+        auto* fadeIn = label (*basic, ko ("페이드 인"));
+        expect (fadeIn != nullptr);
+        if (fadeIn != nullptr)
+        {
+            expectEquals (fadeIn->getRight(), 552);
+            expectEquals (fadeIn->getY(), 122);
+            expectEquals (fadeIn->getHeight(), 30);
+        }
+        checkLabel (*basic, ko ("메모"), { 1108, 122, 36, 30 });
         auto* memo = child<juce::TextEditor> (*basic, [] (const auto& e) { return e.isMultiLine(); });
         expect (memo != nullptr);
-        if (memo != nullptr) rect (*memo, { 48, 122, 1348, 62 });
+        if (memo != nullptr) rect (*memo, { 1144, 122, 252, 62 });
+        for (auto* c : basic->getChildren())
+            if (c->isVisible() && ! c->getBounds().isEmpty())
+                expect (page->getViewArea().contains (c->getBounds()), "every basic field fits the default 192px page");
         auto* cueMidi = child<CueMidiPanel> (*basic);
         expect (cueMidi != nullptr);
         if (cueMidi != nullptr) rect (*cueMidi, { 1108, 48, 288, 26 });
@@ -276,7 +303,7 @@ public:
             main.setSize (860, 640);
             auto* notice = child<juce::Label> (*basic, [] (const auto& l) { return l.getText().contains (ko ("단축키와 충돌")); });
             expect (notice != nullptr && notice->getHeight() == 22);
-            expectEquals (basic->getHeight(), 296);
+            expectEquals (basic->getHeight(), 342);
             expect (memo->getHeight() >= 30);
             noOverlap (*basic);
             noOverlap (*cueMidi);

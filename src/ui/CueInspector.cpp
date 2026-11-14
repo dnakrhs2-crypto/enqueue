@@ -17,6 +17,7 @@
 #include "ui/GainControl.h"
 #include "ui/UiUtils.h"
 #include "ui/InspectorLayout.h"
+#include "ui/PlaybackFields.h"
 
 namespace gocue
 {
@@ -144,7 +145,7 @@ public:
     }
 
     BasicsPanel (ProjectDocument& doc, AudioEngine& e, AppSettings& s)
-        : document (doc), cues (doc.cues), engine (e), settings (s)
+        : document (doc), cues (doc.cues), engine (e), settings (s), playback (doc, e)
     {
         for (auto* l : { &numberLabel, &nameLabel, &colourLabel, &fileLabel, &preLabel, &postLabel, &continueLabel,
                          &fadeOutLabel, &notesLabel })
@@ -307,9 +308,16 @@ public:
         notesEditor.onEscapeKey = [this] { cancelEdit(); };
         addAndMakeVisible (notesEditor);
 
+        // the 재생 tab's 시작 / 끝 / 재생 횟수 / 속도 / 페이드 인 here too (gom 2026-11-14, a user's request): an audio cue
+        // shows them in a fourth row and the memo moves to the right column. Same look as the 재생 tab's fields.
+        playback.addTo (*this);
+        playback.onCancelEdit = [this] { cancelEdit(); };
+
+        // Tab goes down each column in turn, as the eye reads them
         int focusOrder = 1;
-        for (auto* field : std::initializer_list<juce::Component*> { &numberEditor, &nameEditor, &preEditor, &postEditor,
-                                                                   &fadeOutEditor, &gainSlider, &notesEditor })
+        for (auto* field : std::initializer_list<juce::Component*> { &numberEditor, &nameEditor, &playback.startEditor, &playback.endEditor,
+                                                                   &playback.fadeInEditor, &preEditor, &postEditor, &fadeOutEditor,
+                                                                   &gainSlider, &playback.countEditor, &playback.rateEditor, &notesEditor })
             field->setExplicitFocusOrder (focusOrder++);
         juce::Desktop::getInstance().addFocusChangeListener (this);
     }
@@ -379,6 +387,7 @@ public:
             commitWait (false);
             commitStopFade();
             commitNotes();
+            playback.commitPending();
         }
 
         const juce::ScopedValueSetter<bool> guard (refreshing, true);
@@ -393,6 +402,11 @@ public:
             c->setEnabled (enabled);
 
         gainUnitButton.setEnabled (editable);   // this PC's unit: show mode locks it (as on the 재생 tab), no cue is fine
+
+        playback.refresh (editable);
+        // Audio cues and the empty selection use the fourth row; other cue types keep the full-width memo.
+        for (auto* c : playFields())
+            c->setVisible (cue == nullptr || cue->isAudio());
 
         if (cue == nullptr)
         {
@@ -466,6 +480,8 @@ public:
         for (auto* c : std::initializer_list<juce::Component*> { &fileLabel, &filePathLabel, &browseButton, &autoLoadToggle })
             c->setVisible (audio);
 
+        resized();
+
         for (auto* c : std::initializer_list<juce::Component*> { &fadeOutLabel, &fadeOutEditor, &gainUnitButton, &gainSlider })
             c->setVisible (sound);
 
@@ -483,11 +499,19 @@ public:
 
     void resized() override
     {
-        const InspectorClusters clusters (getWidth(), 3);
+        // an audio cue adds the 재생 fields as a fourth row; the memo then sits in the right column under the flags,
+        // so the default inspector height still shows every field and two or three memo lines without scrolling
+        const bool playRow = hasPlayRow();
+        const InspectorClusters clusters (getWidth(), playRow ? 4 : 3);
         const int conflictHeight = hotkeyConflict.getText().isEmpty() ? 0 : 22;
-        const int minimumHeight = juce::jmax (Palette::inspectorBasicHeight, clusters.bottom + conflictHeight + 30 + 8);
+        const int minimumHeight = juce::jmax (Palette::inspectorBasicHeight,
+                                              clusters.bottom + conflictHeight + (playRow ? 0 : 30) + 8);   // memo >= one field high
         if (auto* page = findParentComponentOfClass<InspectorPage>())
             page->setMinimumHeight (minimumHeight);
+        const auto labelWidth = [] (const juce::Label& l)
+        {
+            return (int) std::ceil (juce::GlyphArrangement::getStringWidth (l.getFont(), l.getText())) + l.getBorderSize().getLeftAndRight();
+        };
 
         auto area = clusters.cue;
         auto nextRow = [&] { auto r = area.removeFromTop (30); area.removeFromTop (8); return r; };
@@ -508,6 +532,25 @@ public:
         filePathLabel.setBounds (row);
         dropArea = filePathLabel.getBounds();
 
+        if (playRow)
+        {
+            // the 재생 tab's field sizes; 페이드 인 on the right edge (under 찾아보기 / 색), the region length between.
+            // Fits the narrowest unstacked cue column (402 px) with the length label squeezed out.
+            row = nextRow();
+            playback.startLabel.setBounds (row.removeFromLeft (36));
+            playback.startEditor.setBounds (row.removeFromLeft (84));
+            row.removeFromLeft (8);
+            playback.endLabel.setBounds (row.removeFromLeft (24));
+            playback.endEditor.setBounds (row.removeFromLeft (84));
+            row.removeFromLeft (12);
+            playback.fadeInEditor.setBounds (row.removeFromRight (84));
+            row.removeFromRight (6);
+            playback.fadeInLabel.setBounds (row.removeFromRight (labelWidth (playback.fadeInLabel)));
+            row.removeFromRight (8);
+            // the region length only when it fits on one line (a squeezed label wraps into two); the 재생 tab always has it
+            playback.lengthLabel.setBounds (row.getWidth() >= labelWidth (playback.lengthLabel) ? row : juce::Rectangle<int>());
+        }
+
         area = clusters.playback;
         row = nextRow();
         preLabel.setBounds (row.removeFromLeft (64));
@@ -523,6 +566,21 @@ public:
         gainUnitButton.setBounds (row.removeFromLeft (64));
         gainSlider.setBounds (row);
 
+        if (playRow)
+        {
+            // the 재생 tab's second row as it is (394 of this column's 400 px), labels on this column's 64 px grid
+            row = nextRow();
+            playback.countLabel.setBounds (row.removeFromLeft (64));
+            playback.countEditor.setBounds (row.removeFromLeft (52));
+            row.removeFromLeft (6);
+            playback.infiniteToggle.setBounds (row.removeFromLeft (84));
+            row.removeFromLeft (8);
+            playback.rateLabel.setBounds (row.removeFromLeft (34));
+            playback.rateEditor.setBounds (row.removeFromLeft (56));
+            row.removeFromLeft (6);
+            playback.pitchToggle.setBounds (row.removeFromLeft (84));
+        }
+
         area = clusters.trigger;
         row = nextRow();
         hotkeyButton.setBounds (row.removeFromLeft (190));
@@ -536,16 +594,47 @@ public:
         autoLoadToggle.setBounds (row.removeFromLeft (88));
 
         area = getLocalBounds().reduced (12, 8).withTop (clusters.bottom);
-        hotkeyConflict.setBounds (area.removeFromTop (conflictHeight));
-        notesLabel.setBounds (area.removeFromLeft (36).withHeight (Palette::fieldHeight));
-        notesEditor.setBounds (area);
+
+        if (playRow)
+        {
+            // the hotkey conflict note under the left columns, clear of the memo; the memo from the right column's fourth
+            // row to the bottom (a stacked narrow inspector lets it run to the right edge)
+            hotkeyConflict.setBounds (area.removeFromTop (conflictHeight).withRight (clusters.rule2.getX() - 16));
+            auto memo = memoArea (clusters);
+            notesLabel.setBounds (memo.removeFromLeft (36).withHeight (Palette::fieldHeight));
+            notesEditor.setBounds (memo);
+        }
+        else
+        {
+            hotkeyConflict.setBounds (area.removeFromTop (conflictHeight));
+            notesLabel.setBounds (area.removeFromLeft (36).withHeight (Palette::fieldHeight));
+            notesEditor.setBounds (area);
+        }
     }
+
+    bool hasPlayRow() const { return playback.startEditor.isVisible(); }
+
+    juce::Rectangle<int> memoArea (const InspectorClusters& clusters) const
+    {
+        auto memo = clusters.trigger.withTop (clusters.trigger.getY() + 3 * 38).withBottom (getHeight() - 8);
+        return clusters.wrapped ? memo.withRight (getWidth() - 12) : memo;
+    }
+
+    std::array<juce::Component*, 13> playFields() { return playback.fields(); }
 
     void paint (juce::Graphics& g) override
     {
         g.fillAll (Palette::panel);
 
-        InspectorClusters (getWidth(), 3).paint (g);
+        const InspectorClusters clusters (getWidth(), hasPlayRow() ? 4 : 3);
+        clusters.paint (g);
+
+        if (hasPlayRow())
+        {
+            // the right column goes on down with the memo: so does its rule
+            g.setColour (Palette::outline);
+            g.fillRect (clusters.rule2.withBottom (getHeight() - 8));
+        }
 
         if (dragOver)
         {
@@ -925,6 +1014,8 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> dropArea;
     juce::Uuid shownId = juce::Uuid::null();   // the cue the fields show
+
+    PlaybackFields playback;
 
     const Cue* shownCue() const { return shownId.isNull() ? cues.getSelected() : cues.findById (shownId); }
     bool refreshing = false;

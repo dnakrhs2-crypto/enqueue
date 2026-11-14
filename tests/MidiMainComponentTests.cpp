@@ -86,6 +86,7 @@ public:
                     juce::Label* notice = nullptr;
                     for (auto* child : page->getChildren())
                     {
+                        if (! child->isVisible()) continue;   // playback fields are hidden on this memo cue
                         if (auto* editor = dynamic_cast<juce::TextEditor*> (child); editor != nullptr && editor->isMultiLine()) memo = editor;
                         if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr
                             && (label->getText().isEmpty() || label->getText().contains (ko ("단축키와 충돌")))) notice = label;
@@ -100,6 +101,7 @@ public:
                     expect (memo != nullptr);
                     for (auto* child : page->getChildren())
                     {
+                        if (! child->isVisible()) continue;
                         if (child == notice && ! conflict) continue;
                         const auto bounds = child->getBounds();
                         expect (page->getLocalBounds().contains (bounds), "control outside page: " + bounds.toString());
@@ -108,7 +110,7 @@ public:
                         for (auto* other : page->getChildren())
                         {
                             if (other == child) break;
-                            if (! other->getBounds().isEmpty())
+                            if (other->isVisible() && ! other->getBounds().isEmpty())
                                 expect (! bounds.intersects (other->getBounds()), "overlapping controls: " + bounds.toString() + " / " + other->getBounds().toString());
                         }
                     }
