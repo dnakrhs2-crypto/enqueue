@@ -244,12 +244,18 @@ class LegacyRegressionTests(unittest.TestCase):
                 self.assertRegex(release.read_version(), r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
     def test_legacy_build_commands_stay_identical(self):
+        # LiveMix also builds the probe of its web join gate (cf228f4e); the gate joins the production room server, and the
+        # idle wait / heavy slot can hold a run for minutes, so all three are stubbed. FULL_GATE pinned: a main() run
+        # earlier in this process leaves the module flag as its args set it.
+        targets = {"enqueue": ["Enqueue"], "livemix": ["LiveMix", "LiveMixCollabProbe"]}
         for key in ("enqueue", "livemix"):
-            with mock.patch.object(release, "APP", release.APPS[key]), mock.patch.object(release, "run") as run:
+            with mock.patch.object(release, "APP", release.APPS[key]), mock.patch.object(release, "run") as run, \
+                    mock.patch.object(release, "FULL_GATE", True), mock.patch.object(release, "web_join_gate"), \
+                    mock.patch.object(release, "wait_for_gate_idle"), mock.patch.object(release, "heavy_slot"):
                 release.build("local", False)
                 self.assertEqual(run.call_args_list, [
                     mock.call(["cmake", "--preset", "local"]),
-                    mock.call(["cmake", "--build", "--preset", "local-release", "--target", release.APPS[key]["target"],
+                    mock.call(["cmake", "--build", "--preset", "local-release", "--target", *targets[key],
                                "EnqueueTests", "--", "-m", "-v:m", "-nologo"]),
                     # only the app's own suites since 5ec12fe (Recorder's ctest entries need RecorderTests.exe)
                     mock.call(["ctest", "--preset", "local-release", "-R", release.APPS[key]["ctest_filter"]])])
@@ -306,6 +312,10 @@ class LegacyRegressionTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(release, "release_state",
                                                       return_value=(False, {installer.name, "appcast.xml"})))
                 other = stack.enter_context(mock.patch.object(release, "check_other_work"))   # OtherWorkTests cover it
+                # release checks added after this test (10/6 idle wait and heavy slot, 10/27 web join, 10/28 backup account,
+                # 11/11 G plugins) have their own tests; the web join one would reach the production room server
+                for check in ("wait_for_gate_idle", "heavy_slot", "web_join_gate", "check_backup_account", "check_gplugins"):
+                    stack.enter_context(mock.patch.object(release, check))
                 stack.enter_context(mock.patch.dict(os.environ, {"GITHUB_REF_NAME": "", "GOCUE_GITHUB_REPO": ""}))
                 stack.enter_context(mock.patch.object(sys, "argv", ["release.py", "--app", key, "--publish", "--skip-site",
                     "--key", str(keyfile), "--tools-dir", str(root)]))
