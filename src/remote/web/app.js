@@ -495,9 +495,12 @@
     } else {
       $("cart-grid").style.setProperty("--cols", tab.cols);
       $("cart-grid").style.setProperty("--rows", tab.rows);
+      // as the PC cart: cues past the rows x cols grid continue below in rows of the same height
+      const totalRows = Math.max(tab.rows, Math.ceil((cues.reduce((last, cue) => Math.max(last, cue.slot), -1) + 1) / tab.cols));
+      $("cart-grid").style.setProperty("--total-rows", totalRows);
       const slots = new Map(cues.map(cue => [cue.slot, cue])); // PC CueCartView slots are zero based.
       const fragment = document.createDocumentFragment();
-      for (let slot = 0; slot < tab.cols * tab.rows; slot++) {
+      for (let slot = 0; slot < tab.cols * totalRows; slot++) {
         const cue = slots.get(slot);
         const node = element("div", "cart-cell");
         node.dataset.slot = slot;

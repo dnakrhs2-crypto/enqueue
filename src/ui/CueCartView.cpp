@@ -7,27 +7,146 @@
 namespace gocue
 {
 
+namespace
+{
+    constexpr int cellGap = 6;   // around and between the buttons
+}
+
 CueCartView::CueCartView (CueList& c, juce::AudioFormatManager& f) : cues (c), formats (f)
 {
     setWantsKeyboardFocus (true);
+    scrollBar.setAutoHide (false);   // shown exactly when the cues need more rows than the grid
+    scrollBar.setSingleStepSize (14.0 * Palette::rowHeights[1] / 10.0);   // a wheel over the bar moves as over the buttons
+    scrollBar.addListener (this);
+    addChildComponent (scrollBar);
     cues.addListener (this);
 }
 
 CueCartView::~CueCartView()
 {
     cues.removeListener (this);
+    scrollBar.removeListener (this);
 }
 
 void CueCartView::setGrid (int newRows, int newCols)
 {
-    if (rows != juce::jlimit (1, 15, newRows) || cols != juce::jlimit (1, 15, newCols))
+    const bool changed = rows != juce::jlimit (1, 15, newRows) || cols != juce::jlimit (1, 15, newCols);
+
+    if (changed)
     {
         pressedCueId = juce::Uuid::null();
         pressedSlot = -1;
     }
     rows = juce::jlimit (1, 15, newRows);
     cols = juce::jlimit (1, 15, newCols);
+    updateScrollRange();
+
+    if (changed)
+        scrollToShow (cues.getSelectedIndex());   // another cart's grid (a tab switch) or a new size: its selected cue in view
+
     repaint();
+}
+
+void CueCartView::resized()
+{
+    updateScrollRange();
+}
+
+void CueCartView::cueListStructureChanged()
+{
+    if (cues.findById (pressedCueId) == nullptr)
+    {
+        pressedCueId = juce::Uuid::null();
+        pressedSlot = -1;
+    }
+    updateScrollRange();
+
+    if (! clicking)
+        scrollToShow (cues.getSelectedIndex());   // as the cue list: an added cue below the view comes into it
+
+    repaint();
+}
+
+void CueCartView::cueSelectionChanged (int)
+{
+    if (! clicking)
+        scrollToShow (cues.getSelectedIndex());   // as the cue list: the selected cue comes into view
+
+    repaint();
+}
+
+int CueCartView::totalRows() const
+{
+    return juce::jmax (rows, (cues.size() + cols - 1) / cols);
+}
+
+int CueCartView::cellHeight() const
+{
+    // the grid's rows fill the view as before; the rows beyond them have the same height
+    return (getHeight() - 2 * cellGap - cellGap * (rows - 1)) / rows;
+}
+
+juce::Rectangle<int> CueCartView::gridArea() const
+{
+    auto area = getLocalBounds().reduced (cellGap);
+
+    if (scrollBar.isVisible())
+        area.removeFromRight (scrollBar.getWidth());   // the buttons end a gap before the bar
+
+    return area;
+}
+
+void CueCartView::updateScrollRange()
+{
+    const int cellH = cellHeight();
+    const int content = cellGap + totalRows() * (cellH + cellGap);
+    const bool scrolls = cellH > 0 && content > getHeight();
+
+    scrollBar.setBounds (getLocalBounds().removeFromRight (Palette::scrollBarWidth));
+    scrollBar.setRangeLimits (0.0, (double) juce::jmax (content, getHeight()), juce::dontSendNotification);
+    scrollBar.setCurrentRange (scrolls ? scrollBar.getCurrentRangeStart() : 0.0, (double) getHeight(), juce::dontSendNotification);
+    scrollBar.setVisible (scrolls);
+}
+
+int CueCartView::getScrollPosition() const
+{
+    return scrollBar.isVisible() ? juce::roundToInt (scrollBar.getCurrentRangeStart()) : 0;
+}
+
+void CueCartView::setScrollPosition (int pixels)
+{
+    if (! scrollBar.isVisible())
+        return;
+
+    scrollBar.setCurrentRangeStart ((double) pixels, juce::dontSendNotification);   // clamped by the bar
+    repaint();
+}
+
+void CueCartView::scrollToShow (int slot)
+{
+    if (! scrollBar.isVisible() || ! cues.isValidIndex (slot))
+        return;
+
+    const auto cell = cellBounds (slot);
+
+    if (cell.getY() < cellGap)
+        setScrollPosition (getScrollPosition() + cell.getY() - cellGap);
+    else if (cell.getBottom() > getHeight() - cellGap)
+        setScrollPosition (getScrollPosition() + cell.getBottom() - (getHeight() - cellGap));
+}
+
+void CueCartView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (! scrollBar.isVisible() || juce::approximatelyEqual (wheel.deltaY, 0.0f))
+    {
+        juce::Component::mouseWheelMove (e, wheel);   // nothing to scroll: the parent may use it
+        return;
+    }
+
+    // the cue list's wheel step: juce::Viewport moves 14 x its single step (a list row) per unit of wheel
+    const float distance = wheel.deltaY * 14.0f * (float) Palette::rowHeights[1];
+    setScrollPosition (getScrollPosition() - juce::roundToInt (distance < 0.0f ? juce::jmin (distance, -1.0f)
+                                                                                : juce::jmax (distance, 1.0f)));
 }
 
 void CueCartView::setPlayingCues (std::vector<AudioEngine::PlayingCue> newPlaying)
@@ -58,17 +177,19 @@ const AudioEngine::PlayingCue* CueCartView::findPlaying (const juce::Uuid& id) c
 
 juce::Rectangle<int> CueCartView::cellBounds (int slot) const
 {
-    const int gap = 6;
-    const auto area = getLocalBounds().reduced (gap);
-    const int cellW = (area.getWidth() - gap * (cols - 1)) / cols;
-    const int cellH = (area.getHeight() - gap * (rows - 1)) / rows;
+    const auto area = gridArea();
+    const int cellW = (area.getWidth() - cellGap * (cols - 1)) / cols;
+    const int cellH = cellHeight();
     const int r = slot / cols, c = slot % cols;
-    return { area.getX() + c * (cellW + gap), area.getY() + r * (cellH + gap), cellW, cellH };
+    return { area.getX() + c * (cellW + cellGap), area.getY() + r * (cellH + cellGap) - getScrollPosition(), cellW, cellH };
 }
 
 int CueCartView::slotAt (juce::Point<int> p) const
 {
-    for (int slot = 0; slot < rows * cols; ++slot)
+    if (! getLocalBounds().contains (p))   // a release below the view is not on the hidden part of a button
+        return -1;
+
+    for (int slot = 0; slot < totalRows() * cols; ++slot)
         if (cellBounds (slot).contains (p))
             return slot;
 
@@ -78,11 +199,15 @@ int CueCartView::slotAt (juce::Point<int> p) const
 void CueCartView::paint (juce::Graphics& g)
 {
     g.fillAll (Palette::background);
-    const int slots = rows * cols;
+    const int slots = totalRows() * cols;
 
     for (int slot = 0; slot < slots; ++slot)
     {
         const auto r = cellBounds (slot);
+
+        if (! r.intersects (getLocalBounds()))
+            continue;   // scrolled out of view
+
         const bool hasCue = cues.isValidIndex (slot);
 
         if (! hasCue)
@@ -167,7 +292,10 @@ void CueCartView::mouseDown (const juce::MouseEvent& e)
     // Selection listeners can reorder or remove rows. Keep the pressed cue's
     // identity across that notification.
     const auto id = cues.get (slot).id;
-    cues.setSelectedIndex (slot);   // the inspector follows the button
+    {
+        const juce::ScopedValueSetter<bool> pressing (clicking, true);   // the button stays where it was pressed
+        cues.setSelectedIndex (slot);   // the inspector follows the button
+    }
 
     if (cues.findById (id) == nullptr)
         return;

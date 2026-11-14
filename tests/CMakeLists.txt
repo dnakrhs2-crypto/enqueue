@@ -171,6 +171,7 @@ target_sources(EnqueueTests PRIVATE
     PlayTabGainTests.cpp
     PlayTabFadeInTests.cpp
     BasicPlaybackFieldsTests.cpp
+    CartScrollTests.cpp
     GainUnitTests.cpp
     TabReorderTests.cpp
     ReopenLastProjectTests.cpp
