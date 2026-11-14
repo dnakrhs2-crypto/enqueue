@@ -17,6 +17,16 @@
 <main class="wrap">
   <h1 style="font-size:28px;margin-top:12px">바뀐 점</h1>
   <p class="meta" style="margin-top:6px">버전별 변경 사항. 최신 버전이 맨 위입니다.</p>
+  <article class="notes"><h2>LiveMix 0.24.1</h2>
+<ul>
+  <li><b>억스 채널 방향을 바꿨습니다.</b> 이제 마이크 채널이 억스로 보냅니다. 마이크 카드 ‘출력’ 칸의 AUX1~4 칩을 켜면 그 마이크 소리가 억스로 들어가고, ‘마스터’를 끄면 억스로만 보냅니다(send only). 억스 카드의 ‘연결된 마이크 채널’ 칩으로도 같은 연결을 켜고 끌 수 있습니다.</li>
+  <li><b>억스 채널.</b> 보내온 마이크 채널들을 모아 자기 VST3 체인과 ON/OFF를 거쳐, 팬을 지나 마스터(또는 직접 출력)로 나갑니다. 마이크 채널을 끄거나 뮤트하면 억스로도 가지 않습니다. 설정의 핫키에서 억스마다 ON/OFF 핫키를 정할 수 있습니다. 억스에는 장치 입력이 없습니다.</li>
+  <li><b>억스 출력 모노·스테레오.</b> 억스 카드 ‘출력’ 옆에서 고릅니다. 모노는 좌우를 합쳐 직접 출력을 장치 출력 1개로, 스테레오는 1-2 같은 한 쌍으로 내보냅니다. 0.24.0에서 만든 억스는 스테레오입니다.</li>
+  <li><b>0.24.0에서 만든 억스.</b> 이름과 체인은 그대로 남고, 억스를 입력으로 받던 마이크 채널은 원래 장치 입력으로 돌아갑니다. 억스로 보낼 마이크는 칩으로 다시 켜 주세요.</li>
+  <li><b>Stream Deck ‘억스 ON/OFF’ 키.</b> Stream Deck 플러그인 1.7.0의 새 키로 억스 채널 하나를 켜고 끕니다(억스 카드의 억스 ON/OFF와 같음). 다중 동작에도 넣을 수 있고, 이 키만 LiveMix 0.24.1 이상이 필요합니다.</li>
+  <li><b>English.</b> Aux channels now work the other way round: mic channels send to them. Turn on the AUX1–4 chips in a mic card's Output column to send that mic to an aux, and turn Master off to send it only to the aux. The aux card's ‘Connected mic channels’ chips switch the same sends. An aux sums the mics sending to it through its own VST3 chain and ON/OFF, then its pan, to the master or a direct output; a mic that is off or muted sends nothing. Each aux can have an ON/OFF hotkey in Settings. An aux output is mono or stereo, chosen next to its Output caption: mono sums left and right and sends its direct output to one device output, stereo uses a pair such as 1-2. Auxes made in 0.24.0 keep their name and chain, and the mic channels that took one go back to their device input; they open as stereo. The new ‘Aux On/Off’ key in Stream Deck plugin 1.7.0 switches one aux (LiveMix 0.24.1+).</li>
+  <li><b>日本語.</b> AUXチャンネルの向きを変えました。マイクチャンネルからAUXへ送ります。マイクカードの「出力」欄のAUX1〜4チップをオンにするとそのマイクの音がAUXへ送られ、「マスター」をオフにするとAUXにだけ送ります(センドオンリー)。AUXカードの「接続されたマイクチャンネル」チップでも同じ送りを切り替えられます。AUXは送られてきたマイクをまとめて自分のVST3チェーンとON/OFFを通し、パンを経てマスター(またはダイレクト出力)へ出します。オフやミュート中のマイクは送られません。設定のホットキーでAUXごとにON/OFFホットキーを設定できます。AUXの出力は「出力」の横でモノかステレオを選べます。モノは左右をまとめてダイレクト出力をデバイス出力1つへ、ステレオは1-2のようなペアへ出します。0.24.0で作ったAUXは名前とチェーンが残り、AUXを入力にしていたマイクチャンネルは元のデバイス入力に戻ります(AUXはステレオで開きます)。Stream Deck プラグイン 1.7.0 の新しい「Aux On/Off」キーでAUXを1つずつ切り替えられます(LiveMix 0.24.1以上)。</li>
+</ul></article>
   <article class="notes"><h2>LiveMix 0.24.0</h2>
 <ul>
   <li><b>억스 채널.</b> 카드 목록 아래 ‘+ 억스 채널 추가’로 억스 채널을 만들 수 있습니다(최대 4개). 억스 채널은 장치 입력 하나를 받아 자기 VST3 체인을 거친 뒤, 마스터로는 나가지 않고 그 억스를 입력으로 고른 마이크 채널들에 똑같이 들어갑니다. 공통 처리는 억스에 한 번만 걸어 두고, 마이크 채널마다 다른 체인·ON/OFF·핫키로 나눠 쓸 수 있습니다. 마이크 채널의 입력 상자에서 억스를 고르거나, 억스 카드의 ‘받는 마이크 채널’을 눌러 연결합니다. 억스를 끄면 받는 마이크 채널이 모두 조용해지고, 억스를 지우면 받던 마이크 채널은 같은 장치 입력을 직접 받습니다.</li>
