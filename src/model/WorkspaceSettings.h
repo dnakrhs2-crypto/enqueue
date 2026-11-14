@@ -26,6 +26,7 @@ struct WorkspaceSettings
     double numberIncrement = 1.0;
     bool autoLoadNewCues = false;
     bool lockPlayheadToSelection = true;
+    bool goKeepsStandby = false;           // GO leaves the playhead on the fired cue instead of advancing
     bool startOnOpen = false;
     juce::String startOnOpenCue;
     bool startOnClose = false;

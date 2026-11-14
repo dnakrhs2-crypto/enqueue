@@ -83,6 +83,7 @@ public:
     MidiGoTests() : UnitTest ("MIDI GO hold and controller boundaries", "Enqueue") {}
     void runTest() override
     {
+        testStandby();
         testAliases();
         testProjectRelease();
         testMappingCarryOver();
@@ -95,6 +96,25 @@ public:
         testCaptureRelease();
     }
 private:
+    void testStandby()
+    {
+        beginTest ("MIDI GO follows both project standby modes");
+        for (const bool keep : { false, true })
+        {
+            ControllerHarness h;
+            h.configureProject();   // a second cue makes playhead advancement observable
+            h.document.settings.goKeepsStandby = keep;
+            const auto first = h.document.cues.get (0).id;
+            expect (h.service->setMidiTriggers ("transport.go", { note() }).wasOk());
+            h.tap();
+            expect (h.goTarget.results == std::vector { CueController::GoResult::started });
+            expect (h.controller.isCueActive (first));
+            expectEquals (h.document.cues.getPlayheadIndex(), keep ? 0 : 1);
+            expectEquals (h.document.cues.getSelectedIndex(), keep ? 0 : 1);
+            expectEquals (h.goTarget.releases, 1);
+        }
+    }
+
     void testFirstNotes()
     {
         for (const auto* boundary : { "connect", "reconnect", "project replace", "new project", "input loss" })

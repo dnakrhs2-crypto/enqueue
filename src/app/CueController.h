@@ -39,7 +39,8 @@ public:
     };
 
     /** Space: resumes paused cues if there are any; otherwise fires the playhead cue (and the sequence it
-        heads) and moves the playhead past the sequence. 'audition' (Alt+Space) plays the way the workspace
+        heads) and moves the playhead past the sequence unless goKeepsStandby is set. Goto cues still move
+        the playhead explicitly. 'audition' (Alt+Space) plays the way the workspace
         audition setting says: unchanged / no output / an alternate patch.
         'pauseWhenPlaying' (설정 > 스페이스바 재생/일시정지, a plain Space only): with nothing paused, the cues that
         play are paused instead of firing anything - the same double-GO / key-up / panic gates come first. */

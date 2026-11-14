@@ -649,6 +649,7 @@ namespace
         obj->setProperty ("numberIncrement", s.numberIncrement);
         obj->setProperty ("autoLoadNewCues", s.autoLoadNewCues);
         obj->setProperty ("lockPlayheadToSelection", s.lockPlayheadToSelection);
+        obj->setProperty ("goKeepsStandby", s.goKeepsStandby);
         obj->setProperty ("startOnOpen", s.startOnOpen);
         obj->setProperty ("startOnOpenCue", s.startOnOpenCue);
         obj->setProperty ("startOnClose", s.startOnClose);
@@ -707,6 +708,7 @@ namespace
         s.numberIncrement         = (double) v.getProperty ("numberIncrement", s.numberIncrement);
         s.autoLoadNewCues         = (bool) v.getProperty ("autoLoadNewCues", s.autoLoadNewCues);
         s.lockPlayheadToSelection = (bool) v.getProperty ("lockPlayheadToSelection", s.lockPlayheadToSelection);
+        s.goKeepsStandby          = (bool) v.getProperty ("goKeepsStandby", s.goKeepsStandby);
         s.startOnOpen             = (bool) v.getProperty ("startOnOpen", s.startOnOpen);
         s.startOnOpenCue          = v.getProperty ("startOnOpenCue", s.startOnOpenCue).toString();
         s.startOnClose            = (bool) v.getProperty ("startOnClose", s.startOnClose);

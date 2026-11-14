@@ -1834,7 +1834,8 @@ CueController::GoResult CueController::go (bool audition, double observedSeconds
         && ! (engine.isAuditioning (copy.id) && ! isAuditionRequested (audition)))
     {
         const auto result = trigger (copy, audition);
-        document.cues.advancePlayhead();
+        if (! settings.goKeepsStandby)
+            document.cues.advancePlayhead();
         return result;
     }
 
@@ -1858,14 +1859,16 @@ CueController::GoResult CueController::go (bool audition, double observedSeconds
     {
         // the first cue could not be started (missing file, fade / devamp target not playing ...): trigger() already
         // reported it, and that message must stay visible instead of a "GO:" line
-        document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
+        if (! settings.goKeepsStandby)
+            document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
         return GoResult::failed;
     }
 
     if (anyStarted || ! copy.armed)
         status ((isAuditionRequested (audition) ? ko ("오디션 GO: ") : ko ("GO: ")) + cueLabel (index, copy));
 
-    document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
+    if (! settings.goKeepsStandby)
+        document.cues.setPlayheadIndex (juce::jmin (after, document.cues.size() - 1));
     return GoResult::started;
 }
 
