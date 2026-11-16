@@ -309,8 +309,16 @@ private:
         auto s = room (false); panel.setSnapshot (s);
         capture (panel, "collab-host-waiting");
         const auto clipboard = juce::SystemClipboard::getTextFromClipboard();
-        control<juce::TextButton> (panel, "copy-invite").onClick();
-        expectEquals (juce::SystemClipboard::getTextFromClipboard(), s.webInviteUrl);
+        // A read straight after a copy comes back empty on this PC (the clipboard is busy for a moment after each
+        // change; 2026-11-17: 59 of 60 reads at once, none failed 2 ms later): copy, wait, read; copy again if needed.
+        juce::String copied;
+        for (int attempt = 0; attempt < 20 && copied != s.webInviteUrl; ++attempt)
+        {
+            control<juce::TextButton> (panel, "copy-invite").onClick();
+            juce::Thread::sleep (25);
+            copied = juce::SystemClipboard::getTextFromClipboard();
+        }
+        expectEquals (copied, s.webInviteUrl);
         juce::SystemClipboard::copyTextToClipboard (clipboard);
         expect (control<juce::Label> (panel, "invite-url").getText().endsWith (ko ("…")));
         // Like the approved mock: the field shows the address without its scheme; the copy above is the full URL.
