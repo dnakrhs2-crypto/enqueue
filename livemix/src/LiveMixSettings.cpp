@@ -28,6 +28,8 @@ namespace Keys
     constexpr const char* startWithWindows = "startWithWindows";
     constexpr const char* skipPluginsWhenOff = "skipPluginsWhenOff";
     constexpr const char* sendTransportToPlugins = "sendTransportToPlugins";
+    constexpr const char* monitorOffButton = "monitorOffButton";
+    constexpr const char* monitorOff = "monitorOff";
     constexpr const char* externalControlEnabled = "externalControlEnabled";
     constexpr const char* collabNick = "collabNick";
     constexpr const char* collabPort = "collabPort";
@@ -174,6 +176,10 @@ bool LiveMixSettings::getSkipPluginsWhenOff() const { return settings->getBoolVa
 void LiveMixSettings::setSkipPluginsWhenOff (bool on) { settings->setValue (Keys::skipPluginsWhenOff, on); }
 bool LiveMixSettings::getSendTransport() const { return settings->getBoolValue (Keys::sendTransportToPlugins, true); }
 void LiveMixSettings::setSendTransport (bool on) { settings->setValue (Keys::sendTransportToPlugins, on); }
+bool LiveMixSettings::getMonitorOffButton() const { return settings->getBoolValue (Keys::monitorOffButton, false); }
+void LiveMixSettings::setMonitorOffButton (bool on) { settings->setValue (Keys::monitorOffButton, on); }
+bool LiveMixSettings::getMonitorOff() const { return settings->getBoolValue (Keys::monitorOff, false); }
+void LiveMixSettings::setMonitorOff (bool on) { settings->setValue (Keys::monitorOff, on); }
 
 bool LiveMixSettings::getExternalControlEnabled() const { return settings->getBoolValue (Keys::externalControlEnabled, false); }
 void LiveMixSettings::setExternalControlEnabled (bool on) { settings->setValue (Keys::externalControlEnabled, on); }

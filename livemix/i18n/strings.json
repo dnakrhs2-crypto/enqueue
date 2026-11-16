@@ -4600,5 +4600,29 @@
     "en": "ASIO sends to {0}",
     "ja": "ASIOでは{0}に出力します",
     "where": "livemix/src/ui/Widgets.h"
+  },
+  {
+    "ko": "모니터링 끄기",
+    "en": "Monitoring off",
+    "ja": "モニタリングオフ",
+    "where": "livemix/src/ui/TopBar.cpp"
+  },
+  {
+    "ko": "모니터링 끄기 버튼 (OBS로는 소리 계속)",
+    "en": "Monitoring off button (OBS keeps the sound)",
+    "ja": "モニタリングオフボタン (OBSには音を送り続ける)",
+    "where": "livemix/src/ui/SettingsDialog.cpp"
+  },
+  {
+    "ko": "모니터링 꺼짐 (OBS로는 소리 계속)",
+    "en": "Monitoring off (OBS keeps the sound)",
+    "ja": "モニタリングオフ (OBSには音を送り続ける)",
+    "where": "livemix/src/ui/MainComponent.cpp"
+  },
+  {
+    "ko": "모니터링 켜짐",
+    "en": "Monitoring on",
+    "ja": "モニタリングオン",
+    "where": "livemix/src/ui/MainComponent.cpp"
   }
 ]

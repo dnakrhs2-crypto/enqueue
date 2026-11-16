@@ -24,12 +24,14 @@ namespace SettingsDialog
         'onOpenFailed': an open from here failed and the device that ran is back (or none runs) - the app shows what
         runs, and the session keeps asking for its own device.
         'onRestart': another language was picked and its restart agreed to - the app quits its usual way and starts
-        again. */
+        again.
+        'onMonitorButtonChanged': the '모니터링 끄기' tick changed (saved already; unticked also saved the monitor back
+        on) - the app shows or hides the top bar's switch and applies the monitor state. */
     void show (MixEngine& engine, LiveMixSettings& settings, juce::Component* centreAround, std::function<void()> onDeviceChanged,
                std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture,
                std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled,
                AcceptedFormatsQuery acceptedFormats = {}, std::function<void()> onOpenFailed = {}, TrackList tracks = {},
-               std::function<void()> onRestart = {});
+               std::function<void()> onRestart = {}, std::function<void()> onMonitorButtonChanged = {});
     void closeIfOpen();
     /** The session's mics / FX changed (added, removed, renamed, another session): an open settings window redraws
         its ON/OFF hotkey rows. */

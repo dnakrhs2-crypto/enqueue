@@ -83,6 +83,12 @@ TopBar::TopBar (MixDocument& doc) : document (doc)
     fxMuteButton.setButtonText (tr ("FX 뮤트"));
     fxMuteButton.setComponentID ("fx-mute-group");
     fxMuteButton.onClick = [this] { if (onFxMuteGroup) onFxMuteGroup(); };
+    // the monitor silent, OBS and the partners still fed: the same switch (red while it is in effect), offered only
+    // when the settings turn it on
+    monitorButton.setButtonText (tr ("모니터링 끄기"));
+    monitorButton.setComponentID ("monitor-off");
+    monitorButton.onClick = [this] { if (onMonitorOff) onMonitorOff(); };
+    addChildComponent (monitorButton);
     addAndMakeVisible (dspLabel);
     addAndMakeVisible (dspMeter);
 
@@ -187,13 +193,32 @@ void TopBar::setMuteState (bool allMics, bool micGroup, bool allFx, bool fxGroup
     fxMuteButton.setPartial (fxGroup);
 }
 
-TopBar::Mode TopBar::modeFor (int width) const noexcept
+void TopBar::setMonitorState (bool shown, bool off)
 {
-    // Keep room for measured status text, a 120 px device, a 160 px session and the two mute switches.
-    return width >= 1220 ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
+    monitorButton.setToggleState (shown && off, juce::dontSendNotification);   // pressing: only the colour changes
+    if (monitorButton.isVisible() == shown)
+        return;
+    monitorButton.setVisible (shown);
+    resized();
 }
 
-int TopBar::preferredHeight (int width) const noexcept
+int TopBar::monitorReserve() const
+{
+    if (! monitorButton.isVisible())
+        return 0;
+    auto& button = const_cast<MuteSwitch&> (monitorButton);   // the look-and-feel's font call takes a non-const button
+    return juce::GlyphArrangement::getStringWidthInt (getLookAndFeel().getTextButtonFont (button, 34), button.getButtonText()) + 24 + 8;
+}
+
+TopBar::Mode TopBar::modeFor (int width) const
+{
+    // Keep room for measured status text, a 120 px device, a 160 px session and the two mute switches - and the monitor
+    // switch while it is offered: the one-row bar does not pay for it with the status (two rows come sooner instead,
+    // where the switches share the status row as before).
+    return width >= 1220 + monitorReserve() ? Mode::wide : width >= 700 ? Mode::compact : Mode::narrow;
+}
+
+int TopBar::preferredHeight (int width) const
 {
     switch (modeFor (width))
     {
@@ -239,8 +264,11 @@ void TopBar::resized()
         const auto font = getLookAndFeel().getTextButtonFont (button, h);
         return juce::GlyphArrangement::getStringWidthInt (font, button.getButtonText()) + (mode == Mode::narrow ? 12 : 24);
     };
+    // 모니터링 끄기 (when the settings offer it) goes with them, after FX 뮤트 - mic, FX, monitor: the signal's order
+    const bool monitorShown = monitorButton.isVisible();
     const int micMuteWidth = muteWidth (micMuteButton), fxMuteWidth = muteWidth (fxMuteButton);
-    const int muteReservation = muteWithButtons ? 0 : micMuteWidth + fxMuteWidth + 2 * gap;
+    const int monitorWidth = monitorShown ? muteWidth (monitorButton) : 0;
+    const int muteReservation = muteWithButtons ? 0 : micMuteWidth + fxMuteWidth + 2 * gap + (monitorShown ? monitorWidth + gap : 0);
     const int fxWidth = buttonWidth (fxButton, 100), pluginsWidth = buttonWidth (pluginsButton, 120);
     auto& buttonRow = mode == Mode::narrow ? row2 : row1;
     pluginsButton.setBounds (buttonRow.removeFromRight (pluginsWidth));
@@ -249,6 +277,11 @@ void TopBar::resized()
     buttonRow.removeFromRight (gap);
     if (muteWithButtons)
     {
+        if (monitorShown)
+        {
+            monitorButton.setBounds (buttonRow.removeFromRight (monitorWidth));
+            buttonRow.removeFromRight (gap);
+        }
         fxMuteButton.setBounds (buttonRow.removeFromRight (fxMuteWidth));
         buttonRow.removeFromRight (gap);
         micMuteButton.setBounds (buttonRow.removeFromRight (micMuteWidth));
@@ -321,6 +354,11 @@ void TopBar::resized()
 
     if (! muteWithButtons)
     {
+        if (monitorShown)
+        {
+            monitorButton.setBounds (statusRow.removeFromRight (monitorWidth));
+            statusRow.removeFromRight (gap);
+        }
         fxMuteButton.setBounds (statusRow.removeFromRight (fxMuteWidth));
         statusRow.removeFromRight (gap);
         micMuteButton.setBounds (statusRow.removeFromRight (micMuteWidth));

@@ -51,6 +51,13 @@ public:
     void setSkipPluginsWhenOff (bool on);
     bool getSendTransport() const;
     void setSendTransport (bool on);
+    /** The top bar's '모니터링 끄기' switch is offered (off unless the operator turned it on in the settings). */
+    bool getMonitorOffButton() const;
+    void setMonitorOffButton (bool on);
+    /** The monitor (the main output pair) is silent while OBS and the collab partners still get the master. In effect
+        only while getMonitorOffButton() is on: a switch nobody can see never keeps the monitor silent. */
+    bool getMonitorOff() const;
+    void setMonitorOff (bool on);
 
     /** Local Stream Deck / external control is opt-in. Only this preference is persisted. */
     bool getExternalControlEnabled() const;

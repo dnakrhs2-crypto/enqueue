@@ -141,6 +141,9 @@ public:
     void setAllFxMuted (bool muted) noexcept { allFxMuted.store (muted, std::memory_order_relaxed); }
     bool areAllChannelsMuted() const noexcept { return allChannelsMuted.load (std::memory_order_relaxed); }
     bool areAllFxMuted() const noexcept { return allFxMuted.load (std::memory_order_relaxed); }
+    /** Only the master's contribution to the device output; OBS, collab and recording keep the master bus. */
+    void setMonitorMuted (bool muted) noexcept { monitorMuted.store (muted, std::memory_order_relaxed); }
+    bool isMonitorMuted() const noexcept { return monitorMuted.load (std::memory_order_relaxed); }
     void setChannelInput (const juce::Uuid& id, int first, bool stereo);
     void setChannelAuxSend (const juce::Uuid& channelId, const juce::Uuid& auxId, bool send);
     void setAuxOn (const juce::Uuid& id, bool on);
@@ -327,6 +330,9 @@ private:
     std::atomic<bool> deviceRunning { false };
     std::atomic<bool> skipChainWhenOff { true };
     std::atomic<bool> allChannelsMuted { false }, allFxMuted { false };   // the top bar's 마이크 뮤트 / FX 뮤트
+    std::atomic<bool> monitorMuted { false };
+    float monitorGain = 1.0f, monitorTarget = 1.0f;   // audio thread: only the master's contribution to the output
+    int monitorRampRemaining = 0;
     std::atomic<int> numDeviceInputs { 0 }, numDeviceOutputs { 0 };
     std::atomic<double> dspLoad { 0.0 };
     std::atomic<double> inputLatencyMs { 0.0 }, outputLatencyMs { 0.0 };

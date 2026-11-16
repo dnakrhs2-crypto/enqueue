@@ -9,8 +9,9 @@ namespace gocue::livemix
 {
 
 /** The bar under the menu bar: logo, session name and state, audio device, rate / buffer / latency, CPU load, and the
-    buttons: 마이크 뮤트 / FX 뮤트 (every mic / every FX; lit red while muted), FX 채널, 플러그인 관리. The session,
-    backup, settings, 합방 and help live in the menu bar. */
+    buttons: 마이크 뮤트 / FX 뮤트 (every mic / every FX; lit red while muted), 모니터링 끄기 (when the settings offer
+    it; lit red while the monitor is silent), FX 채널, 플러그인 관리. The session, backup, settings, 합방 and help live
+    in the menu bar. */
 class TopBar : public juce::Component
 {
 public:
@@ -19,8 +20,8 @@ public:
     /** One row in a wide window; two below 1220 px; three below 700 px (the device and buttons share a row,
         leaving the status its own row) - the portrait mode of a tall, narrow window. */
     enum class Mode { wide, compact, narrow };
-    Mode modeFor (int width) const noexcept;
-    int preferredHeight (int width) const noexcept;
+    Mode modeFor (int width) const;
+    int preferredHeight (int width) const;
 
     void refresh();                                   // session name / dirty flag / device
     void setDevices (const juce::StringArray& deviceNames, const juce::String& current, const juce::String& typeName);
@@ -34,6 +35,11 @@ public:
     void setMuteState (bool allMics, bool micGroup, bool allFx, bool fxGroup);
     /** Every mic / every FX muted (no group): setMuteState without the groups. */
     void setMuteGroups (bool micMuted, bool fxMuted) { setMuteState (micMuted, false, fxMuted, false); }
+    /** '모니터링 끄기': there only while the settings offer it ('shown'), filled red while the monitor is silent ('off').
+        Showing or hiding it may change modeFor() (the one-row bar keeps its room), so the window lays out again then;
+        pressing it only changes its colour. */
+    void setMonitorState (bool shown, bool off);
+    bool isMonitorSwitchShown() const noexcept { return monitorButton.isVisible(); }
 
     std::function<void (const juce::String& deviceName)> onDeviceChosen;
     std::function<void (const juce::String& deviceName)> onDeviceRepicked;   // the device already selected, picked again
@@ -42,6 +48,7 @@ public:
     std::function<void()> onPluginManager;
     std::function<void()> onMicMuteGroup;   // '마이크 뮤트': every mic muted / released, as its hotkey does
     std::function<void()> onFxMuteGroup;    // 'FX 뮤트': every FX
+    std::function<void()> onMonitorOff;     // '모니터링 끄기' pressed: the app switches the monitor, then setMonitorState()
 
     void resized() override;
     void paint (juce::Graphics& g) override;
@@ -58,7 +65,8 @@ private:
     RepickComboBox deviceCombo;
     DspMeter dspMeter;
     juce::TextButton fxButton, pluginsButton;
-    MuteSwitch micMuteButton, fxMuteButton;
+    MuteSwitch micMuteButton, fxMuteButton, monitorButton;
+    int monitorReserve() const;   // the switch and its gap while shown, 0 hidden
     juce::String fullStatusText, shortStatusText, minimalStatusText;
     bool refreshing = false;
     bool waitingDevices = false;   // setDevices() skipped in the middle of a pick from the device list

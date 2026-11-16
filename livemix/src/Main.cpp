@@ -213,6 +213,7 @@ public:
         engine = std::make_unique<MixEngine> (juce::SystemStats::getEnvironmentVariable ("LIVEMIX_OBS_RING", {}));
         collabSession = std::make_unique<collab::CollabSession> (*engine, *settings);
         engine->setSkipChainWhenOff (settings->getSkipPluginsWhenOff());
+        engine->setMonitorMuted (settings->getMonitorOffButton() && settings->getMonitorOff());
         engine->setSendTransport (settings->getSendTransport());
         engine->getPluginHost().setVst2Enabled (settings->getVst2Enabled());          // before the session's chains come back
         engine->getPluginHost().setDisabledPlugins (settings->getDisabledPlugins());

@@ -323,7 +323,8 @@ inline juce::Rectangle<int> placeWithFrame (juce::Point<int> size, juce::Point<i
 }
 
 /** 마이크 뮤트 / FX 뮤트 (the top bar): filled red while all of its kind is muted (the toggle state), a red edge and
-    red text while only its mute group is (partial, the way a muted mic's lamp shows its group), plain otherwise. */
+    red text while only its mute group is (partial, the way a muted mic's lamp shows its group), plain otherwise.
+    모니터링 끄기 is one too: filled red while the monitor is silent (never partial). */
 class MuteSwitch : public juce::TextButton
 {
 public:

@@ -121,6 +121,16 @@ MainComponent::MainComponent (MixDocument& doc, LiveMixSettings& s, ObsPluginAct
     topBar.onPluginManager = [this] { showPluginManager(); };
     topBar.onMicMuteGroup = [this] { toggleMuteAll (MuteGroups::Group::mic); };
     topBar.onFxMuteGroup = [this] { toggleMuteAll (MuteGroups::Group::fx); };
+    topBar.setMonitorState (settings.getMonitorOffButton(), settings.getMonitorOff());
+    topBar.onMonitorOff = [this]
+    {
+        const bool off = ! settings.getMonitorOff();
+        settings.setMonitorOff (off);
+        settings.saveIfNeeded();
+        engine.setMonitorMuted (off);
+        topBar.setMonitorState (settings.getMonitorOffButton(), off);
+        showStatus (off ? tr ("모니터링 꺼짐 (OBS로는 소리 계속)") : tr ("모니터링 켜짐"));
+    };
 
     statusLeft.setFont (bodyFont (12.5f));
     statusLeft.setColour (juce::Label::textColourId, Palette::dimText);
@@ -2234,7 +2244,20 @@ void MainComponent::showSettingsDialog()
                               return safe != nullptr ? TrackHotkeys::settingsRows (safe->document.getSession(), safe->settings)
                                                      : std::vector<TrackHotkeys::Track>();
                           },
-                          [safe] { if (safe != nullptr && safe->onRestartApp) safe->onRestartApp(); });
+                          [safe] { if (safe != nullptr && safe->onRestartApp) safe->onRestartApp(); },
+                          [safe]
+                          {
+                              if (safe == nullptr) return;
+                              safe->settings.saveIfNeeded();
+                              const bool shown = safe->settings.getMonitorOffButton();
+                              const bool off = shown && safe->settings.getMonitorOff();
+                              const bool wasOff = safe->engine.isMonitorMuted();
+                              safe->engine.setMonitorMuted (off);
+                              safe->topBar.setMonitorState (shown, off);
+                              if (! shown && wasOff)
+                                  safe->showStatus (tr ("모니터링 켜짐"));
+                              safe->resized();
+                          });
 }
 
 } // namespace gocue::livemix

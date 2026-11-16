@@ -591,6 +591,8 @@ void MixEngine::prepare (double newSampleRate, int newBlockSize)
     preBuf.setSize (2, newBlockSize, false, true, true);
     masterBus.setSize (2, newBlockSize, false, true, true);
     monitorStage.setSize (2, newBlockSize, false, true, true);
+    monitorGain = monitorTarget = isMonitorMuted() ? 0.0f : 1.0f;
+    monitorRampRemaining = 0;
 
     for (auto& b : fxBus)
         b.setSize (2, newBlockSize, false, true, true);
@@ -977,7 +979,39 @@ void MixEngine::renderBlock (const float* const* inputs, int numInputs, float* c
         loudness.process (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         obsSender.write (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
         collab.pushLocal (masterBus.getReadPointer (0), masterBus.getReadPointer (1), n);
-        addToOutputs (routedOutputs, routedCount, outputFirst (master.outputFirst.load (std::memory_order_relaxed)), masterBus, routedOffset, n);
+        const float monitorWanted = isMonitorMuted() ? 0.0f : 1.0f;
+        if (monitorWanted != monitorTarget)
+        {
+            monitorTarget = monitorWanted;
+            monitorRampRemaining = juce::jmax (1, (int) std::ceil (onOffRampSeconds * sr * std::abs (monitorTarget - monitorGain)));
+        }
+        const float monitorStart = monitorGain;
+        const int mainFirst = outputFirst (master.outputFirst.load (std::memory_order_relaxed));
+        if (monitorStart == 1.0f && monitorTarget == 1.0f)
+            addToOutputs (routedOutputs, routedCount, mainFirst, masterBus, routedOffset, n);
+        else if (monitorStart != monitorTarget)
+        {
+            // Finish within 5 ms even when one prepared chunk is longer than the ramp. Never scale masterBus:
+            // finishOutput still records it, then adds the remote voices to this same output pair.
+            const int rampSamples = juce::jmin (n, monitorRampRemaining);
+            const float monitorEnd = rampSamples == monitorRampRemaining ? monitorTarget
+                : rampEnd (monitorStart, monitorTarget, rampStepPerSample * (float) rampSamples);
+            const float step = (monitorEnd - monitorStart) / (float) rampSamples;
+            for (int side = 0; side < 2; ++side)
+            {
+                const int index = mainFirst + side;
+                if (index < 0 || index >= routedCount || routedOutputs[index] == nullptr)
+                    continue;
+                auto* dest = routedOutputs[index] + routedOffset;
+                const auto* source = masterBus.getReadPointer (side);
+                for (int sample = 0; sample < rampSamples; ++sample)
+                    dest[sample] += source[sample] * (monitorStart + step * (float) sample);
+                if (n > rampSamples && monitorEnd == 1.0f)
+                    juce::FloatVectorOperations::add (dest + rampSamples, source + rampSamples, n - rampSamples);
+            }
+            monitorGain = monitorEnd;
+            monitorRampRemaining -= rampSamples;
+        }
         finishOutput (outputs, numOutputs, offset, n, split ? monitorStage.getArrayOfWritePointers() : nullptr, monitorOutput,
                       { masterBus.getReadPointer (0), masterBus.getReadPointer (1) });
     }

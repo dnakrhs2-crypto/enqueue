@@ -578,6 +578,14 @@ void captureMain (Capture& shots, Fixture& f)
     shots.take (*f.main, "main_all_muted");
     f.main->toggleMuteAll (lm::MuteGroups::Group::mic);
     f.main->toggleMuteAll (lm::MuteGroups::Group::fx);
+    // 모니터링 끄기 offered (the settings' tick) and pressed: the switch after FX 뮤트, red, at every width's rows - the
+    // bar may take another row with it, so the window lays out again for each shot
+    const auto relayout = [&f] (juce::Point<int> size) { f.main->setSize (size.x, size.y); f.main->resized(); };
+    top->setMonitorState (true, true);
+    for (const auto size : { juce::Point<int> (1440, 900), { 1220, 800 }, { 1000, 760 }, { 760, 900 }, { 460, 1000 } })
+    { relayout (size); shots.take (*f.main, "main_monitor_off"); }
+    top->setMonitorState (false, false);
+    relayout ({ 1440, 900 });
 
     const auto notes = sourceKeys (sourceBlock ("livemix/src/Main.cpp", "main.setStartupNote (tr (", "Updater::Callbacks callbacks;"));
     shots.test.expectEquals (notes.size(), 2);

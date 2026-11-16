@@ -51,11 +51,13 @@ namespace
         SettingsContent (MixEngine& e, LiveMixSettings& s, std::function<void()> deviceChanged, std::function<void()> hotkeysChanged,
                          std::function<void (bool)> hotkeyCapture, std::function<ControlServer::Status()> controlStatus,
                          std::function<void (bool)> controlEnabled, SettingsDialog::AcceptedFormatsQuery acceptedFormats,
-                         std::function<void()> openFailed, SettingsDialog::TrackList tracks, std::function<void()> restart)
+                         std::function<void()> openFailed, SettingsDialog::TrackList tracks, std::function<void()> restart,
+                         std::function<void()> monitorButtonChanged)
             : engine (e), settings (s), onDeviceChanged (std::move (deviceChanged)), onOpenFailed (std::move (openFailed)),
               onHotkeysChanged (std::move (hotkeysChanged)), onHotkeyCapture (std::move (hotkeyCapture)),
               getControlStatus (std::move (controlStatus)), onControlEnabled (std::move (controlEnabled)),
-              getAcceptedFormats (std::move (acceptedFormats)), getTracks (std::move (tracks)), onRestart (std::move (restart))
+              getAcceptedFormats (std::move (acceptedFormats)), getTracks (std::move (tracks)), onRestart (std::move (restart)),
+              onMonitorButtonChanged (std::move (monitorButtonChanged))
         {
             // first, as in OBS: found without reading the language the app runs in (each name in its own language)
             styleCaption (languageCaption, tr ("언어 (Language)"));
@@ -194,6 +196,14 @@ namespace
             {
                 settings.setSendTransport (on);
                 engine.setSendTransport (on);
+            });
+            monitorOffButton.setComponentID ("monitor-off-button");
+            toggle (monitorOffButton, tr ("모니터링 끄기 버튼 (OBS로는 소리 계속)"), settings.getMonitorOffButton(), [this] (bool on)
+            {
+                settings.setMonitorOffButton (on);
+                if (! on)
+                    settings.setMonitorOff (false);   // the switch goes away: the monitor comes back, never silent unseen
+                if (onMonitorButtonChanged) onMonitorButtonChanged();
             });
 
             styleCaption (hotkeyCaption, tr ("전역 핫키"));
@@ -664,7 +674,7 @@ namespace
                 reasonHeight += row->reason->heightForWidth (560 - 40);
             // every hotkey row is 36 (30 + 6): the fixed ones (the mute switches, the window, the plugin groups) and
             // the session's mics / FX - counted, so a new row cannot squeeze the last note (온라인 백업) again
-            setSize (560, 740 + 28 - 160 + (int) (fixedRows.size() + trackRows.size()) * 36 + deviceHeight + reasonHeight
+            setSize (560, 740 + 28 + 28 - 160 + (int) (fixedRows.size() + trackRows.size()) * 36 + deviceHeight + reasonHeight
                               + hotkeyNoteHeight() - 90 + languageHeight);
         }
 
@@ -751,6 +761,7 @@ namespace
             startWithWindows.setBounds (area.removeFromTop (28));
             skipWhenOff.setBounds (area.removeFromTop (28));
             sendTransport.setBounds (area.removeFromTop (28));
+            monitorOffButton.setBounds (area.removeFromTop (28));
             area.removeFromTop (16);
             hotkeyCaption.setBounds (area.removeFromTop (20));
             hotkeyNote.setBounds (area.removeFromTop (hotkeyNoteHeight()));
@@ -825,6 +836,7 @@ namespace
         SettingsDialog::AcceptedFormatsQuery getAcceptedFormats;
         SettingsDialog::TrackList getTracks;
         std::function<void()> onRestart;
+        std::function<void()> onMonitorButtonChanged;
         static constexpr int languageHeight = 20 + 30 + 16;   // its caption and list, then a section's gap
         juce::StringArray types, names, outputNames;
         juce::String shownType;
@@ -1031,7 +1043,7 @@ namespace
         RepickComboBox typeCombo, deviceCombo, outputCombo, rateCombo, bufferCombo, bitDepthCombo;
         juce::ComboBox languageCombo;
         juce::TextButton panelButton, soundSettingsButton;
-        juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, sendTransport, externalControl;
+        juce::ToggleButton minimiseToTray, closeAsk, closeToTray, startWithWindows, skipWhenOff, sendTransport, monitorOffButton, externalControl;
         bool refreshing = false;
         int syncedChoiceId = 0;   // the bit-depth choice the combo was last synced to from the running device
     };
@@ -1090,7 +1102,7 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
                            std::function<void()> onHotkeysChanged, std::function<void (bool capturing)> onHotkeyCapture,
                            std::function<ControlServer::Status()> controlStatus, std::function<void (bool)> controlEnabled,
                            AcceptedFormatsQuery acceptedFormats, std::function<void()> onOpenFailed, TrackList tracks,
-                           std::function<void()> onRestart)
+                           std::function<void()> onRestart, std::function<void()> onMonitorButtonChanged)
 {
     if (openDialog != nullptr)
     {
@@ -1100,7 +1112,8 @@ void SettingsDialog::show (MixEngine& engine, LiveMixSettings& settings, juce::C
 
     auto* content = new SettingsContent (engine, settings, std::move (onDeviceChanged), std::move (onHotkeysChanged), std::move (onHotkeyCapture),
                                          std::move (controlStatus), std::move (controlEnabled), std::move (acceptedFormats),
-                                         std::move (onOpenFailed), std::move (tracks), std::move (onRestart));
+                                         std::move (onOpenFailed), std::move (tracks), std::move (onRestart),
+                                         std::move (onMonitorButtonChanged));
     auto* scroller = new juce::Viewport();
     scroller->setViewedComponent (content, true);
     scroller->setScrollBarsShown (true, true);   // sideways only when a narrow display squeezed the window under the content's width
