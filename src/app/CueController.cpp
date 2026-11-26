@@ -2180,7 +2180,7 @@ void CueController::panicAll (bool hardStop)
         const double seconds = document.settings.panicSeconds;
         engine.fadeOutAndStopAll ((int) std::lround (seconds * 1000.0));
         panicLatchUntil = now + seconds + 0.25;   // the fade, then the gate's 200 ms close: nothing starts until both are over
-        status (ko ("전체 페이드 정지 (") + WorkspaceSettings::secondsText (seconds) + ko ("초)"));
+        status (ko ("전체 페이드 정지 (") + WorkspaceSettings::panicSecondsLabel (seconds) + ")");
     }
 
 }

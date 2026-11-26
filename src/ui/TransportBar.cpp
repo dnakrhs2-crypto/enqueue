@@ -485,7 +485,7 @@ void TransportBar::timerCallback()
 void TransportBar::setPanicSeconds (double seconds)
 {
     panicSeconds = seconds;
-    panicButton.detail = secondsLabel (seconds);
+    panicButton.detail = WorkspaceSettings::panicSecondsLabel (seconds);   // 0 = "0초 (컷)", as in the gear menu
     panicButton.setTooltip (ko ("전체 페이드 정지 (") + ShortcutDisplay::currentInputs (shortcuts, CommandIDs::panicAll) + ") " + panicButton.detail);
     panicButton.repaint();
 }

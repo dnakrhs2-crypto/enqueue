@@ -221,6 +221,28 @@ public:
             document.setSettings (settings);
         }
 
+        beginTest ("Esc with the panic time at 0 (컷) stops every cue at once, and says so");
+        {
+            auto settings = document.settings;
+            settings.panicSeconds = 0.0;
+            document.setSettings (settings);
+            document.cues.setSelectedIndex (0);
+            now = 43.0;   // past the last panic's latch and its double-press window
+            controller.go();
+            controller.goKeyReleased();
+            render (engine, scheduler, now, out, 2);
+            expectEquals (engine.getNumPlaying(), 1);
+
+            now = 44.0;   // one press, not a double press
+            controller.panicAll();
+            expectEquals (statuses[statuses.size() - 1], juce::String::fromUTF8 ("전체 페이드 정지 (0초 (컷))"));
+            render (engine, scheduler, now, out, 2);   // the 5 ms declick, then nothing: no fade to wait for
+            expectEquals (engine.getNumPlaying(), 0);
+
+            settings.panicSeconds = 2.0;
+            document.setSettings (settings);
+        }
+
         beginTest ("second-trigger rules: ignore, restart, devamp, hard stop");
         {
             Cue loop;

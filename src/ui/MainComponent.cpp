@@ -414,16 +414,18 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
     const double panicNow = document.settings.panicSeconds;
     const double fadeNow = document.settings.fadeOutSeconds;
     const std::array<double, 6> presets { 0.5, 1.0, 2.0, 3.0, 5.0, 10.0 };
+    const std::array<double, 7> panicPresets { 0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0 };   // 0 = no fade, cut (gom 2026-11-26)
     auto secondsText = [] (double s) { return secondsLabel (s); };   // "1초", "0.5초", "0.25초" - the same text as the buttons and the status line
+    auto panicText = [] (double s) { return WorkspaceSettings::panicSecondsLabel (s); };   // the same, and 0 = "0초 (컷)"
 
     juce::PopupMenu panic;
     panic.addSectionHeader (ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::panicAll) + ko (": 재생 중인 모든 큐가 페이드아웃되는 시간"));
 
-    for (size_t i = 0; i < presets.size(); ++i)
-        panic.addItem ((int) i + 1, secondsText (presets[i]), true, std::abs (panicNow - presets[i]) < 0.001);
+    for (size_t i = 0; i < panicPresets.size(); ++i)
+        panic.addItem ((int) i + 1, panicText (panicPresets[i]), true, std::abs (panicNow - panicPresets[i]) < 0.001);
 
     panic.addSeparator();
-    panic.addItem (100, ko ("직접 입력... (지금 ") + secondsText (panicNow) + ")");
+    panic.addItem (100, ko ("직접 입력... (지금 ") + panicText (panicNow) + ")");
 
     juce::PopupMenu fade;
     fade.addSectionHeader (ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::fadeOutSelected) + ko (": 대상 큐(선택 큐, 재생 중이 아니면 최근 재생 큐)가 페이드아웃되는 시간"));
@@ -436,19 +438,19 @@ void MainComponent::showPanicSecondsMenu (juce::Point<int> screenPosition)
     fade.addItem (301, ko ("직접 입력... (지금 ") + (fadeNow > 0.0 ? secondsText (fadeNow) : ko ("큐별")) + ")");
 
     juce::PopupMenu menu;
-    menu.addSubMenu (ko ("전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::panicAll) + ko (") · ") + secondsText (panicNow), panic);
+    menu.addSubMenu (ko ("전체 페이드 정지 (") + ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::panicAll) + ko (") · ") + panicText (panicNow), panic);
     menu.addSubMenu (ko ("페이드아웃 (") + ShortcutDisplay::currentKeys (shortcuts.get(), CommandIDs::fadeOutSelected) + ko (") · ") + (fadeNow > 0.0 ? secondsText (fadeNow) : ko ("큐별")), fade);
 
     juce::Component::SafePointer<MainComponent> safeThis (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPosition.x, screenPosition.y, 1, 1 }),
-                        [safeThis, presets, panicNow, fadeNow] (int result)
+                        [safeThis, presets, panicPresets, panicNow, fadeNow] (int result)
     {
         if (safeThis == nullptr || result == 0)
             return;
 
-        if (result >= 1 && result <= (int) presets.size())
+        if (result >= 1 && result <= (int) panicPresets.size())
         {
-            safeThis->applyPanicSeconds (presets[(size_t) result - 1]);
+            safeThis->applyPanicSeconds (panicPresets[(size_t) result - 1]);
             return;
         }
 
@@ -507,7 +509,7 @@ void MainComponent::applyPanicSeconds (double seconds)
     document.setSettings (updated);
     const double applied = document.settings.panicSeconds;   // as kept (sanitised)
     transport.setPanicSeconds (applied);
-    transport.showStatus (ko ("전체 페이드 정지 시간: ") + secondsLabel (applied), false);
+    transport.showStatus (ko ("전체 페이드 정지 시간: ") + WorkspaceSettings::panicSecondsLabel (applied), false);
 }
 
 void MainComponent::applyFadeOutSeconds (double seconds)

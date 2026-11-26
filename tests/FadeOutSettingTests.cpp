@@ -196,6 +196,20 @@ public:
                 expectEquals (plainSeconds (typed (text)), juce::String (text), juce::String ("'") + text + "' must read back as typed");
         }
 
+        beginTest ("the 전체 페이드 정지 time reads 0초 (컷) at 0, and as a time otherwise");
+        {
+            expectEquals (WorkspaceSettings::panicSecondsLabel (0.0), ko ("0초 (컷)"));
+            expectEquals (WorkspaceSettings::panicSecondsLabel (0.5), ko ("0.5초"));
+            expectEquals (WorkspaceSettings::panicSecondsLabel (1.0), ko ("1초"));
+            expectEquals (WorkspaceSettings::panicSecondsLabel (0.01), ko ("0.01초"));   // the smallest fade is a fade, not a cut
+            expectEquals (WorkspaceSettings::panicSecondsLabel (12.25), secondsLabel (12.25));
+
+            WorkspaceSettings s;   // 0 typed or picked stays 0 (the cut), never a 0.01 s fade
+            s.panicSeconds = 0.0;
+            s.sanitise();
+            expectEquals (WorkspaceSettings::panicSecondsLabel (s.panicSeconds), ko ("0초 (컷)"));
+        }
+
         dir.deleteRecursively();
     }
 };

@@ -73,6 +73,14 @@ struct WorkspaceSettings
         return text;
     }
 
+    /** The 전체 페이드 정지 time as it is shown everywhere (the gear menu, its button, both status lines): "1초", "0.5초" -
+        and 0, no fade at all (the cues are cut), "0초 (컷)" (gom 2026-11-26). */
+    static juce::String panicSecondsLabel (double seconds)
+    {
+        return seconds > 0.0 ? secondsText (seconds) + juce::String::fromUTF8 ("초")
+                             : juce::String::fromUTF8 ("0초 (컷)");
+    }
+
     void sanitise() noexcept
     {
         auto fix = [] (double& v, double lo, double hi, double fallback)
