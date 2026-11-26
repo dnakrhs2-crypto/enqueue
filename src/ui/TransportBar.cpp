@@ -56,13 +56,28 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
     const auto colour = findColour (juce::TextButton::textColourOffId);
     drawSurface (g, getLocalBounds(), findColour (juce::TextButton::buttonColourId), colour, over, down);
     const auto font = Palette::font (Palette::bodySize, true);
+    const auto detailFont = Palette::font (Palette::fileSize, true);
+    const int inner = getWidth() - 12;
     const int captionWidth = juce::GlyphArrangement::getStringWidthInt (font, getButtonText());
     const int keySpace = key.isEmpty() ? 0 : juce::jmin (keyWidth (key), getWidth() / 3);
-    const int detailWidth = detail.isEmpty() ? 0 : juce::jmin (juce::GlyphArrangement::getStringWidthInt (
-        Palette::font (Palette::fileSize, true), detail), getWidth() / 4);
+    const int detailFull = detail.isEmpty() ? 0 : juce::GlyphArrangement::getStringWidthInt (detailFont, detail);
+    const int detailWidth = juce::jmin (detailFull, getWidth() / 4);
     const int suffixWidth = (keySpace > 0 ? 10 + keySpace : 0) + (detailWidth > 0 ? 4 + detailWidth : 0);
     const int totalWidth = Palette::statusIconSize + 8 + captionWidth + suffixWidth;
-    auto line = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 12, totalWidth), 22);
+    // one line, unless it would cut the caption (전체 페이드 정지 beside 0초 (컷), gom 2026-11-26) on a button tall
+    // enough for two: then the caption keeps the first line and the key and the value go under it
+    const bool twoLines = totalWidth > inner && suffixWidth > 0 && getHeight() >= 22 + 4 + 18 + 8;
+    juce::Rectangle<int> line, suffix;
+    if (twoLines)
+    {
+        auto block = getLocalBounds().withSizeKeepingCentre (inner, 22 + 4 + 18);
+        line = block.removeFromTop (22).withSizeKeepingCentre (juce::jmin (inner, Palette::statusIconSize + 8 + captionWidth), 22);
+        block.removeFromTop (4);
+        const int secondWidth = keySpace + (detailFull > 0 ? (keySpace > 0 ? 6 : 0) + detailFull : 0);
+        suffix = block.withSizeKeepingCentre (juce::jmin (inner, secondWidth), 18);
+    }
+    else
+        line = getLocalBounds().withSizeKeepingCentre (juce::jmin (inner, totalWidth), 22);
     const auto iconArea = line.removeFromLeft (Palette::statusIconSize).toFloat();
     const auto c = iconArea.getCentre();
     juce::Path path;
@@ -86,20 +101,21 @@ void TransportBar::TransportButton::paintButton (juce::Graphics& g, bool over, b
         path.addRectangle (c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f);
     g.fillPath (path);
     line.removeFromLeft (8);
-    auto suffix = line.removeFromRight (suffixWidth);
+    if (! twoLines)
+        suffix = line.removeFromRight (suffixWidth);
     g.setColour (colour);
     g.setFont (font);
     g.drawText (getButtonText(), line, juce::Justification::centred, true);
     if (keySpace > 0)
     {
-        suffix.removeFromLeft (10);
+        suffix.removeFromLeft (twoLines ? 0 : 10);
         drawKey (g, suffix.removeFromLeft (keySpace).withSizeKeepingCentre (keySpace, 15), colour, key);
     }
     if (detailWidth > 0)
     {
-        suffix.removeFromLeft (4);
+        suffix.removeFromLeft (twoLines ? (keySpace > 0 ? 6 : 0) : 4);
         g.setColour (colour);
-        g.setFont (Palette::font (Palette::fileSize, true));
+        g.setFont (detailFont);
         g.drawText (detail, suffix, juce::Justification::centredLeft, true);
     }
 }
