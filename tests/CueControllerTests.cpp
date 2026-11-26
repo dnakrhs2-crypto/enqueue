@@ -239,7 +239,9 @@ public:
             render (engine, scheduler, now, out, 2);   // the 5 ms declick, then nothing: no fade to wait for
             expectEquals (engine.getNumPlaying(), 0);
 
-            now += 0.3;   // past this panic's latch (the gate's 200 ms close): the next test starts with nothing held back
+            // the gate's 200 ms close and the chain reset after it run on rendered audio: the next test starts with
+            // nothing held back (a hard stop, as in the test before, closes in 5 ms)
+            render (engine, scheduler, now, out, 30);
             expect (! controller.isPanicLatched());
             settings.panicSeconds = 2.0;
             document.setSettings (settings);
